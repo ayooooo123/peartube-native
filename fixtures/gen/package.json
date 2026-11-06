@@ -1,0 +1,15 @@
+{
+  "name": "peartube-native-fixtures",
+  "private": true,
+  "type": "module",
+  "description": "Generates fixtures/js-reference.json from the PearTube app's own protocol and mnemonic logic.",
+  "scripts": {
+    "gen": "node gen.mjs"
+  },
+  "dependencies": {
+    "b4a": "^1.8.0",
+    "hypercore": "11.40.3",
+    "hypercore-crypto": "3.7.0",
+    "sodium-native": "5.1.0"
+  }
+}

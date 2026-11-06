@@ -1,0 +1,21 @@
+[package]
+name = "peartube-native"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.90"
+license = "MIT OR Apache-2.0"
+description = "PearTube native backend: channel protocol and mnemonic identity"
+keywords = ["peartube", "hypercore", "p2p", "protocol"]
+categories = ["cryptography", "network-programming"]
+
+[lib]
+name = "peartube_native"
+
+[dependencies]
+compact-encoding-rs = { path = "../compact-encoding-rs" }
+hypercore-rs = { path = "../hypercore-rs" }
+rand = "0.8"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+sha2 = "0.10"
+xsalsa20poly1305 = "0.9"

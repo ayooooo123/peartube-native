@@ -1,0 +1,3195 @@
+{
+  "meta": {
+    "source": "fixtures/gen (copied from the PearTube app)",
+    "node": "v24.18.0",
+    "hypercore": "11.40.3",
+    "hypercoreCrypto": "3.7.0",
+    "sodiumNative": "5.1.0"
+  },
+  "identities": [
+    {
+      "i": 0,
+      "words": 12,
+      "mnemonic": "extend carry rebuild prepare wagon chaos rubber student chat mercy universe home",
+      "genesisPublicKey": "fead14718e75aab41c293e354a44b2861a99534e135739647e9fbeecb610653e",
+      "genesisSecretKey": "6a9d5f413288f7e59142ebb285948fb8296c5f50ef88ab10b61aa254b56747c9fead14718e75aab41c293e354a44b2861a99534e135739647e9fbeecb610653e",
+      "channelKey": "11860142d2d339439b2aaf41216592812b7a0947850d105dcffb73a1acf53061",
+      "ownerPublicKey": "93f90e7c06c72f419cbb871f96ea1430db7970d32cfaa3d59721ecc124b018b3",
+      "vaultKey": "7439e2acf894e9406319b92aec58def70e714676c42a8a4c77c90d974275b330"
+    },
+    {
+      "i": 1,
+      "words": 12,
+      "mnemonic": "morning wrong normal visual soup indicate climb this cereal quantum morning debris",
+      "genesisPublicKey": "a9c191be5df3ee2381591a2b3950fbafcbfdd23c180c7fc8cf339c55b9097178",
+      "genesisSecretKey": "7b65d4ba1feb7f58a9caa5dd039a749188211527fa5832240b43a3bd9da94b93a9c191be5df3ee2381591a2b3950fbafcbfdd23c180c7fc8cf339c55b9097178",
+      "channelKey": "6b57547dd7d2d209097f9a510a708aec11ba972fb009367d07642882cf485466",
+      "ownerPublicKey": "c59402099b808531a29dfe54f0fd48814012d4995f595fb7056062f566a97702",
+      "vaultKey": "b41dfe7b272690cdb8f294b6028ebf85dc512b81836471cd1ae8a6a01911a80d"
+    },
+    {
+      "i": 2,
+      "words": 12,
+      "mnemonic": "girl real wild profit lizard sing ginger estate proof eight scrub machine",
+      "genesisPublicKey": "55d26d456c2fb8204d450ee48ee2bd2e36ee9867f777a352fea4dbf01f478ae0",
+      "genesisSecretKey": "c38c83a5299eb7eaddd906a281906b6035208b118fd9d5f96f9a42122363e90655d26d456c2fb8204d450ee48ee2bd2e36ee9867f777a352fea4dbf01f478ae0",
+      "channelKey": "d9f6c7370c767b42836a31102f8ff759c610e39bbe8e0215349194d314353afe",
+      "ownerPublicKey": "8c78ca576e56a895e88b023c2a2ea5288c423fc0ec0ade14bb2380c710ce187a",
+      "vaultKey": "4a37f29ffa6fed29977f8b73febb25e860cf8aa853dd2b5c7fc7d4ab240267f1"
+    },
+    {
+      "i": 3,
+      "words": 12,
+      "mnemonic": "coral jar outdoor shrimp cart congress forward syrup extend under bless athlete",
+      "genesisPublicKey": "6b9519728e253bfca3b85cd557e5fd406a2885db54c74adeb07322e5a79f14dd",
+      "genesisSecretKey": "f222264d12ba05a390cfb483f818723e2c1b80f4ccfb56194137cd40c65191816b9519728e253bfca3b85cd557e5fd406a2885db54c74adeb07322e5a79f14dd",
+      "channelKey": "14931ebe9083d3a360beb7da33439e4c011e9eb844ff978caa3536671dba919f",
+      "ownerPublicKey": "c323f5124207dc13647a45ad1a000626da9e9b962e4962082c28b212e3097f61",
+      "vaultKey": "2d12514bd5ce9f58a3489c4a5efac06d343f09f71ffd791d33760aa88fa928c3"
+    },
+    {
+      "i": 4,
+      "words": 12,
+      "mnemonic": "illness use catch other smart year glass dice fancy write monkey lend",
+      "genesisPublicKey": "5b42c1515a500f049ebbf3e2d64ae4932535df7d75fbd7d342d5da003bd65b5a",
+      "genesisSecretKey": "51ac3fb4f97f2cc41d222e4c66c535275a75e8fdbae41ffdfda99dbd2c8af9215b42c1515a500f049ebbf3e2d64ae4932535df7d75fbd7d342d5da003bd65b5a",
+      "channelKey": "2bd339c18e344caa67a2110e03d50ce9a8a1b02a992e4e8bad43e412c01f76c5",
+      "ownerPublicKey": "172626f50cce3cd6da3b6cde4cd139f4bfc74e5cdeb4cebb09bb4f4c83f230b7",
+      "vaultKey": "65c58a1f7d48ffe7c460d05f85fbd2de481420612d0e31e3fa7f64c959096707"
+    },
+    {
+      "i": 5,
+      "words": 12,
+      "mnemonic": "face olive renew judge choice long donate earn like glove piece dish",
+      "genesisPublicKey": "f8fdbf087ca30cd9302c29aecd7eba9726309ac55454ede959af0333fbdbc858",
+      "genesisSecretKey": "fe488efc29acb56cfb04910325039a715dfe7c685406dc1cb657a5494b64b490f8fdbf087ca30cd9302c29aecd7eba9726309ac55454ede959af0333fbdbc858",
+      "channelKey": "a01902ce404a30f1df3497b46be5043a63b6cc6252a11891826179f1f33ac3ba",
+      "ownerPublicKey": "0e6aaa5d224d66ea564472ca3d144d57810035e7cb37a8d1185a0091f38844ed",
+      "vaultKey": "16bd21c5954a5440c3bca053c6cc58e6088d8c0cd31032ff20aaea6b7a6d9878"
+    },
+    {
+      "i": 6,
+      "words": 12,
+      "mnemonic": "swing message divorce seed way galaxy bitter then ripple casual nothing burden",
+      "genesisPublicKey": "d32525279bf72f0372fd01780c3f56a40b10e4fc87a95df06d62c06b99093850",
+      "genesisSecretKey": "30becc8a0d5a85dd8c0b004b5779dd9b37adf450bfe9a426a2be3666250321c7d32525279bf72f0372fd01780c3f56a40b10e4fc87a95df06d62c06b99093850",
+      "channelKey": "20dca7e295905d43fb25d65d6a233db9ac5dab839dd270cb2de90da767cd02d7",
+      "ownerPublicKey": "4a0fb110a9dba807912c2d493902ee3feaf8b58bb8786f51f031c26a83bbd303",
+      "vaultKey": "f3053d35eda6f82cf23fdc8190723af8adf933fe40a97b5618e2343d6d1817f6"
+    },
+    {
+      "i": 7,
+      "words": 12,
+      "mnemonic": "loan aunt pet finish naive choose glory finish claw gun bounce announce",
+      "genesisPublicKey": "b8903fb8d43e9db17500e2163312742911ffcd413660d74cf73d994d2e222203",
+      "genesisSecretKey": "be38855d36f74e8d147aa0e0a8dc34c00fd8d5fa02a9460948ba71c9518bd192b8903fb8d43e9db17500e2163312742911ffcd413660d74cf73d994d2e222203",
+      "channelKey": "7e5110841cb54df1d5992551eb68903359a0e1f54112cc2bac5f0ff71b718da1",
+      "ownerPublicKey": "054b7b2b6170dccf70751e65fc88cc61e8bd5b0150072a819ac8c8e5b192c8c7",
+      "vaultKey": "be82aa0fea26194d74ee1f612541808cab0c99276c6f8ddcec40cd80bfa4d788"
+    },
+    {
+      "i": 8,
+      "words": 12,
+      "mnemonic": "debate rescue purpose click scheme limit glow unique join enable pony rival",
+      "genesisPublicKey": "a4a1f6b5a5124af172ef43e43875b4214542c23249d5c53e3f2d353437710c64",
+      "genesisSecretKey": "6c4b04404d4ec46ae67cb5b91872f41a02d558536d2309f900cc63032b049e66a4a1f6b5a5124af172ef43e43875b4214542c23249d5c53e3f2d353437710c64",
+      "channelKey": "0af567f04eca7ffe5a6bedebd8b069ed55e639f30fae65959a68fcc5cfc62e61",
+      "ownerPublicKey": "885102c3bf7336a94afe47eb72556a21a032261615b7a13348b62e85bd7d2926",
+      "vaultKey": "505206264f4ec6740d86cec83639590a5f92c146f70082c26e44e2e705d47d9f"
+    },
+    {
+      "i": 9,
+      "words": 12,
+      "mnemonic": "shop rice lounge adapt blame kitten october treat tube lecture canvas rack",
+      "genesisPublicKey": "a5827609e621accd8bcf8a7dfd52323a1fca987202cf4745a83f84674a78d12d",
+      "genesisSecretKey": "538dd16bb01eea5fd01759d613b27c0af7b6b2bfb10ae55818e3d3adb9c5fba7a5827609e621accd8bcf8a7dfd52323a1fca987202cf4745a83f84674a78d12d",
+      "channelKey": "f451fb26f42b5f052c3f741a2ade8eab50fc61278550a7e7f1fdc141069c6b7c",
+      "ownerPublicKey": "822eb03d6ca4ddca79b75a915f5d1310a946ed801d9df080ff01d56d3b47b36f",
+      "vaultKey": "1d57f2be973fab71532de0da34fd84ea44015afce37a9689b48b5af93a5d01ac"
+    },
+    {
+      "i": 10,
+      "words": 24,
+      "mnemonic": "poem turkey afford torch flat library utility obvious annual position stem zero donor claw poem alter entry battle doll skull behave air come sorry",
+      "genesisPublicKey": "8b90e792f36a5d9e27bc05b94709dc1952d569f62139085bbbc3b9a5b08a41ab",
+      "genesisSecretKey": "a6218ea5c34b4c86e946f075555167cd238b99d0e0b277a45834a65f49f0d25e8b90e792f36a5d9e27bc05b94709dc1952d569f62139085bbbc3b9a5b08a41ab",
+      "channelKey": "e3b8a271b2706d0a50a10acfe95c381c24a4f88a1facfbb78004a866bf0b140f",
+      "ownerPublicKey": "087236dbc964e6e0518f0c2953d8fdbf3767b939b1029c41045138ccfbb50d00",
+      "vaultKey": "6d8ed3d2be7bd1e0883936e805a9475a79f3492df8f778126de0e0beca2842ac"
+    },
+    {
+      "i": 11,
+      "words": 24,
+      "mnemonic": "census genre rent elevator hour error puzzle melt pudding stick already online canyon pelican glance mix general title tower crane scheme version rescue fall",
+      "genesisPublicKey": "6a1d19906d105f63794efa82b9b8ef97f18aaee72379982310e5fe39a87ca81c",
+      "genesisSecretKey": "fcc4611364e17d850b96509470333c1be9ff124d6a8cecd73386f6664543b7e36a1d19906d105f63794efa82b9b8ef97f18aaee72379982310e5fe39a87ca81c",
+      "channelKey": "f4911c804a0a6db86e347ad090fd6523d7976121fe264ddf3cc00f5b3a7e5803",
+      "ownerPublicKey": "dd679012570cd8dbfc27e4df1a16d1fa8b1a187bcc8c2893af2d8bf473ab8286",
+      "vaultKey": "0c316899e7c5e49a78870db0922addaf545779c736b6f7af11b0e20794ff45a0"
+    },
+    {
+      "i": 12,
+      "words": 24,
+      "mnemonic": "minute cupboard horn rabbit sun pistol include demand hire birth bar erosion squeeze stem royal rough wish drill muffin renew usual loan coach bone",
+      "genesisPublicKey": "1fa5732d3cca7eb0d92ff3e764ed6efa30e3ae966cc81d06e53dde39983632ef",
+      "genesisSecretKey": "e6a4a6177709582ea05138bb6d4751771de3d376d875c4fa99fa7c2deec91cd91fa5732d3cca7eb0d92ff3e764ed6efa30e3ae966cc81d06e53dde39983632ef",
+      "channelKey": "60e89ef5f40e5083022b84c63337da031e52662a3ef2c913df932c9d9cc8c748",
+      "ownerPublicKey": "c970e52d0906c3470696e3fb371563127d0e4162bec6ee2f07cb6fa2b7f50d89",
+      "vaultKey": "a1991733733cbdd0857615b42b0298cfc7c3f74ec1c92b4db3a71bf80cee8c41"
+    },
+    {
+      "i": 13,
+      "words": 24,
+      "mnemonic": "brave pluck knock width climb goddess now denial enroll tourist harsh harsh immense palace better indoor scorpion faith accident enrich sing mixed among awkward",
+      "genesisPublicKey": "88c5c6d30c7ce009ab50b7033cddc2a4c7ab56131f13d60d59f4164b68763197",
+      "genesisSecretKey": "6438b65b3f5b6b641a251e4b3c55fc9775f35e13c12451c767fb2acc57b3280088c5c6d30c7ce009ab50b7033cddc2a4c7ab56131f13d60d59f4164b68763197",
+      "channelKey": "f16738583006f225ec25c2b791cdba8154c6d988d31ce723adba819de5117fc3",
+      "ownerPublicKey": "5a357374bc87fb3bf4b08f0ff3139e8f64c758c9a885eaea239ebae345f10b0f",
+      "vaultKey": "e1d2dc97a45727637464787b98d14ae4875b8b82b9515ab04508bdcd2124afcd"
+    },
+    {
+      "i": 14,
+      "words": 24,
+      "mnemonic": "produce minor laptop onion box treat ozone remove until misery verb old collect crater gold poet daring defense swarm canvas taste time believe mother",
+      "genesisPublicKey": "6dc02ce00c2a4fec592671019143c42cc491af49193fb09671eee5f29765a7ed",
+      "genesisSecretKey": "233e32ef4bb82d6239d4616495b45ce0cc883d2114cf531c97f1ff0f1a397fee6dc02ce00c2a4fec592671019143c42cc491af49193fb09671eee5f29765a7ed",
+      "channelKey": "56f26bb64d5d67507231a315d3ec7f7fc128918f6db62bff3c59f269dd8a6176",
+      "ownerPublicKey": "dca7622d31854dfe1d2fa3d799f7214e49e82c88d7523ce52f65a9d0a0bbfa08",
+      "vaultKey": "c16f5a90a36713e5279f85002e65886d079ee1a5da4f67cf178e19c3a076219d"
+    },
+    {
+      "i": 15,
+      "words": 24,
+      "mnemonic": "young search outer nature ketchup tent walk era cupboard desert label timber blanket salmon obscure visual output success market access circle thrive hip trophy",
+      "genesisPublicKey": "9d83c1fca0e8cf7e46912a80fc8d3756a15719e4401c513e2d8080bac94e3d6a",
+      "genesisSecretKey": "1b6bf6768be9e69b2321a2720bb08f624b6341d59b96a30dd8223d633cf872099d83c1fca0e8cf7e46912a80fc8d3756a15719e4401c513e2d8080bac94e3d6a",
+      "channelKey": "8b8925ee986d58a33b845b12e28521fa36ad12a39d628d192b4091dc648f12de",
+      "ownerPublicKey": "cf7d709b4890de2f469c99f7660ca1e728ffd601bc13272b7d38addc40dbdbf7",
+      "vaultKey": "0a0c9f17522e0c044844bcce20ff30655cecc3fc61120b99655fc0ffcc6ab6f4"
+    },
+    {
+      "i": 16,
+      "words": 24,
+      "mnemonic": "yellow digital bike tag clutch market adapt wrap pride ranch vibrant occur picture gown ethics pipe school question ticket notice degree junior wait public",
+      "genesisPublicKey": "cb202d04d0f09802413b76cd524c95b7779976d24b2a20ee970df5093c1b1f9d",
+      "genesisSecretKey": "7f7b4f209a83fafab59ca530d79f73eac211e9582f4ae2bdef493702e911281ccb202d04d0f09802413b76cd524c95b7779976d24b2a20ee970df5093c1b1f9d",
+      "channelKey": "a2ec2f97c805b0923d9c4a85d849aa26efadd25c5ea687504a488e0f296a8f90",
+      "ownerPublicKey": "fba99be0bc64eb0f0d067e474ee827d0badde0da41aeaea5975f53b8b33e034f",
+      "vaultKey": "74c0067d7e39d053ae30d928db92e4ef83d55e4e3b1eeb69595672d437d674c1"
+    },
+    {
+      "i": 17,
+      "words": 24,
+      "mnemonic": "ceiling train knock usual crane thank draw buyer grid fire flock visa just holiday extra coach sight crowd recycle upon other junk gun suit",
+      "genesisPublicKey": "2872f23cde1d95666398f82162900367a3aeef5de5fe1ef8e782e37be6741900",
+      "genesisSecretKey": "5786a881f147cdb20b95556a765106887bd8d98877a68d12cecc57199fe140412872f23cde1d95666398f82162900367a3aeef5de5fe1ef8e782e37be6741900",
+      "channelKey": "f57f80896b9146bc285da955e845f70caba1e23e82636071b2a2f1a7452a4c6d",
+      "ownerPublicKey": "c6156a9ffae0d40334237deaeba6c0565387903872b766ab3ff90be871681fda",
+      "vaultKey": "29837999afddbbff458fec8e1a48d6d44dd742d2dd0701fe26e7797f583bec07"
+    },
+    {
+      "i": 18,
+      "words": 24,
+      "mnemonic": "play main venue inner volcano nurse magic tattoo bomb wagon unlock cargo frost hurry critic erupt chuckle kitchen addict priority kit blue wire warfare",
+      "genesisPublicKey": "c7e3e8d9ed8c3783d61471ace3e2d9d88fce8c51623f6ed1fcbb85301e56bfd6",
+      "genesisSecretKey": "992525a59518a1a0727f3503d2b04cafc003ad20385695b8178f37d2630f6d5cc7e3e8d9ed8c3783d61471ace3e2d9d88fce8c51623f6ed1fcbb85301e56bfd6",
+      "channelKey": "b7161156cbf4b1cabbc4ad85c58557109a05260f1c97b82e1c9e6cd374193225",
+      "ownerPublicKey": "5593f868e37aaaab4fa2151ced04a2ac99ea30347287a1bffd80d07cb23ec2f7",
+      "vaultKey": "03fa09eb3830652c29652ca58c58a6498f50987773a026beaf19cf2f3d31dc10"
+    },
+    {
+      "i": 19,
+      "words": 24,
+      "mnemonic": "shoe latin absent erase share change monster hollow boat lunar reunion current deny dirt emotion east harvest prize patient cradle scene able bird comfort",
+      "genesisPublicKey": "20bafaf5fc2cc87109af54987fed9470248603875709032f4309ac16e32c2384",
+      "genesisSecretKey": "0b094b539b0e87183c15e54926463bccd584075cff1ab65b4d2c9df1672ed33a20bafaf5fc2cc87109af54987fed9470248603875709032f4309ac16e32c2384",
+      "channelKey": "13176ebea6b7caee3332743f618a3f091d736fb12cfcd5a10f7df9eea77d3087",
+      "ownerPublicKey": "a0fb59323349e5fc4f5cf8a31c1b319024832dbd05333d86f3ff8bf158f98eb4",
+      "vaultKey": "2e7b7d2dd2ba5fd432b60f573f7d592e6ca5ef64cb854bc5fe25d896764f9365"
+    }
+  ],
+  "claims": [
+    {
+      "identity": 0,
+      "channel": "11860142d2d339439b2aaf41216592812b7a0947850d105dcffb73a1acf53061",
+      "writer": "93f90e7c06c72f419cbb871f96ea1430db7970d32cfaa3d59721ecc124b018b3",
+      "owner": "93f90e7c06c72f419cbb871f96ea1430db7970d32cfaa3d59721ecc124b018b3",
+      "sig": "4d094dfd373116e592dff1a88babb8961f058247b3218eaa7ffafb1841add08cf45f59f4ba814be7efba5f388b76fd7cc51d0f5605a9c21150b73564e1f72203",
+      "valid": true
+    },
+    {
+      "identity": 0,
+      "channel": "7ae095da5db67ff07f1bd9a03632fd85b30eaf94e7fb516a4c41f96209507c9f",
+      "writer": "7ec126cefa075c168c1359139242479e697570c1c0b38dad57fe858398441613",
+      "owner": "93f90e7c06c72f419cbb871f96ea1430db7970d32cfaa3d59721ecc124b018b3",
+      "sig": "23dc9ba43bff8ab7dbdf06c56b232a7f45e744b553adc10c0dc85c1a1d0299cb55ddc5e8406bd9ecad8371f90d1aa79ed72b9a52ab24776429f11c405852990c",
+      "valid": true
+    },
+    {
+      "identity": 1,
+      "channel": "6b57547dd7d2d209097f9a510a708aec11ba972fb009367d07642882cf485466",
+      "writer": "c59402099b808531a29dfe54f0fd48814012d4995f595fb7056062f566a97702",
+      "owner": "c59402099b808531a29dfe54f0fd48814012d4995f595fb7056062f566a97702",
+      "sig": "a46bc9ce695c10f873473739974de03898364672cb5a41fdc2464f472e31da14f0f8f8de8d969d87913ea0a5d146436403957838187206e5b043652ec6ad9e05",
+      "valid": true
+    },
+    {
+      "identity": 1,
+      "channel": "e7eb5b6772bd87306ee2688527debd85acbb6510af6bb1c993618bb2e2dde221",
+      "writer": "8cf4c231a987f87f3af1f7de540f8c66640aae56e572a1eff58d9e99896b053a",
+      "owner": "c59402099b808531a29dfe54f0fd48814012d4995f595fb7056062f566a97702",
+      "sig": "3f86d4eaab299890d393f5132f158bb9c08fec955f8aa0c2bec63387053423fb3afa13a22b6625e83a05a58f3e68ac9e917a6c2b16e2ab08f49f83db4d6c5a04",
+      "valid": true
+    },
+    {
+      "identity": 2,
+      "channel": "d9f6c7370c767b42836a31102f8ff759c610e39bbe8e0215349194d314353afe",
+      "writer": "8c78ca576e56a895e88b023c2a2ea5288c423fc0ec0ade14bb2380c710ce187a",
+      "owner": "8c78ca576e56a895e88b023c2a2ea5288c423fc0ec0ade14bb2380c710ce187a",
+      "sig": "c54c0042a6344642a4e3c62ec150fe348453bbeaf2717e65fd389a72e471f109b0885b28fec958e6b746eb2c70713ac44af7397a7bc6f216d2f53d794b28ec05",
+      "valid": true
+    },
+    {
+      "identity": 2,
+      "channel": "d134a843a3525d80433485f3fdd802669ce801ea0dae1a1ff8bf9644fc6c0abb",
+      "writer": "58e09cb4f9ff2539fd5aa3e988b4ab9479aa504b8f7e5375df8cff087681b62f",
+      "owner": "8c78ca576e56a895e88b023c2a2ea5288c423fc0ec0ade14bb2380c710ce187a",
+      "sig": "9cc3aced160e335f710890a185d7b9483b2a230a2212924abcbb3880ecc5e35db71769a5608fb5aabe27f4d07f8589905e9d6d2e108ab3d0f5a59837f8fb1201",
+      "valid": true
+    },
+    {
+      "identity": 3,
+      "channel": "14931ebe9083d3a360beb7da33439e4c011e9eb844ff978caa3536671dba919f",
+      "writer": "c323f5124207dc13647a45ad1a000626da9e9b962e4962082c28b212e3097f61",
+      "owner": "c323f5124207dc13647a45ad1a000626da9e9b962e4962082c28b212e3097f61",
+      "sig": "89973fd78ca2d7ee4b090afd93c4814edbd1ad4b332593236686deedc6a6f081187fa66008c21d7fd0761652a2a13492c5e0ee867dbaf513b5002001238d5406",
+      "valid": true
+    },
+    {
+      "identity": 3,
+      "channel": "57cdd4cca7c6c691672af517b1e79420ed13ddc4834197109ef476c93ce96d35",
+      "writer": "79c609ceb0201a8fcdfd6b3cd22c328065052089afa27acb962c018c035ac1f9",
+      "owner": "c323f5124207dc13647a45ad1a000626da9e9b962e4962082c28b212e3097f61",
+      "sig": "fbf275e85154b4f783529e30746ab6e3cb746731085cf367fe55434f46573ad8454c2a7da4475a378164519aff443efc61cabb4d6ebcd72cf21d474440e70e06",
+      "valid": true
+    },
+    {
+      "identity": 4,
+      "channel": "2bd339c18e344caa67a2110e03d50ce9a8a1b02a992e4e8bad43e412c01f76c5",
+      "writer": "172626f50cce3cd6da3b6cde4cd139f4bfc74e5cdeb4cebb09bb4f4c83f230b7",
+      "owner": "172626f50cce3cd6da3b6cde4cd139f4bfc74e5cdeb4cebb09bb4f4c83f230b7",
+      "sig": "96f95072d074c46cb01f063201750533fd64a91c41c5b438351da23b30274e66a27f341a46b04ec1e8758454961e165c5df50065ba05dab3c44246c9faff4f02",
+      "valid": true
+    },
+    {
+      "identity": 4,
+      "channel": "5af407bd31a0d5369611d24f400c56dea7c3ac59034c33acd94b04226afa3a30",
+      "writer": "4f0b58f50f79621e8b68cc82f0d688b4691ba75acbb14770d3be42f64fb6d484",
+      "owner": "172626f50cce3cd6da3b6cde4cd139f4bfc74e5cdeb4cebb09bb4f4c83f230b7",
+      "sig": "6de0613399dd848964fa77755a66f72101e1f47e93eb278a22847249771a4ec4874811979a5feae10d54cee43c710b664db7e301cdd8d907702fde4cb6bb930c",
+      "valid": true
+    },
+    {
+      "identity": 5,
+      "channel": "a01902ce404a30f1df3497b46be5043a63b6cc6252a11891826179f1f33ac3ba",
+      "writer": "0e6aaa5d224d66ea564472ca3d144d57810035e7cb37a8d1185a0091f38844ed",
+      "owner": "0e6aaa5d224d66ea564472ca3d144d57810035e7cb37a8d1185a0091f38844ed",
+      "sig": "9df78983b31ab30aa632188731d4d618578bca9d28846f81b2744205e6454115f91bb894b1a11d473c7d1052ba5c09c60540596b171dbd536a30bd7d17d90c07",
+      "valid": true
+    },
+    {
+      "identity": 5,
+      "channel": "a6eac3f533540dde258945cbb5afc865d8a1fae1fbfe02f6f3d2b08178edc726",
+      "writer": "ca38d19f765818593515286477be159ebbafc2496b340d810a47219ac597cc2c",
+      "owner": "0e6aaa5d224d66ea564472ca3d144d57810035e7cb37a8d1185a0091f38844ed",
+      "sig": "13c63b98cdb83c2a2d20e5be3da71b4386ceb0f52b6f0c04501a916f18f7c60b9b4ba18bb784c4398549af19b4380ed7ff5eabe6d1550107e4980dc494d71601",
+      "valid": true
+    },
+    {
+      "identity": 6,
+      "channel": "20dca7e295905d43fb25d65d6a233db9ac5dab839dd270cb2de90da767cd02d7",
+      "writer": "4a0fb110a9dba807912c2d493902ee3feaf8b58bb8786f51f031c26a83bbd303",
+      "owner": "4a0fb110a9dba807912c2d493902ee3feaf8b58bb8786f51f031c26a83bbd303",
+      "sig": "be39d59577b5a893b80c428211ccf373142a84991eeb18da9df865b3a506144063b546556f4db2c140606a9d6737b6244c0d0105ebdd596cbce3609b28578906",
+      "valid": true
+    },
+    {
+      "identity": 6,
+      "channel": "07aac62d7b9dffe948d895af90cb20fef15d2da62138e65dcd94a80fa255fa21",
+      "writer": "ca45b0d938052f972fa34671e837b4f08b724a4e931ac854cc52253014843c43",
+      "owner": "4a0fb110a9dba807912c2d493902ee3feaf8b58bb8786f51f031c26a83bbd303",
+      "sig": "2b3d47f808b059eedf6ed02a22f03f205371be21e8fa321d3a26aad923bd16ccd2e0c86ab7b2e468137abefaed809390ef3b7fa319091a883fe2faf47fa4750c",
+      "valid": true
+    },
+    {
+      "identity": 7,
+      "channel": "7e5110841cb54df1d5992551eb68903359a0e1f54112cc2bac5f0ff71b718da1",
+      "writer": "054b7b2b6170dccf70751e65fc88cc61e8bd5b0150072a819ac8c8e5b192c8c7",
+      "owner": "054b7b2b6170dccf70751e65fc88cc61e8bd5b0150072a819ac8c8e5b192c8c7",
+      "sig": "9fd147ad31b5ec0c46e3949c34f1e568ef1968c3c389276701422d5d0c12e56758aeb3540bfd80a72f24fbada846ab2d80c266aef8b4b1db20e7d1763e860b0d",
+      "valid": true
+    },
+    {
+      "identity": 7,
+      "channel": "539f05989ee5c93232c852414ea5fde6c2ea2b19ec5d49f2dc36aeb82d77f0e5",
+      "writer": "824012bf865d0c3c7f6afbd946b67c7f8eb3bbe5ab556466a580220d9c2566dd",
+      "owner": "054b7b2b6170dccf70751e65fc88cc61e8bd5b0150072a819ac8c8e5b192c8c7",
+      "sig": "10970f1b560224a20e912c63cdac59b0ab2386eab99f0ae90f8c2cc50d963d1901f9f826f05bd81d31f459ef8b6237049ea4062393d2a73920f34d1610edd00d",
+      "valid": true
+    },
+    {
+      "identity": 8,
+      "channel": "0af567f04eca7ffe5a6bedebd8b069ed55e639f30fae65959a68fcc5cfc62e61",
+      "writer": "885102c3bf7336a94afe47eb72556a21a032261615b7a13348b62e85bd7d2926",
+      "owner": "885102c3bf7336a94afe47eb72556a21a032261615b7a13348b62e85bd7d2926",
+      "sig": "d52e6b68e8c64bda544e2bb8b107f6a187024bca4c7fade707503ed16012d493b10d5eb2de1850b106da59b4c2f81a05684b27bb18b91c6a12cbd4b6105db70d",
+      "valid": true
+    },
+    {
+      "identity": 8,
+      "channel": "3ec53d4d99e627eaf11108345dc6f529a4e3b32f29723f434a0d929f073793ab",
+      "writer": "27a890f3cbebc2112af87635c371e6ef5a453ab2f9db7e0667f19620d0fcdf1a",
+      "owner": "885102c3bf7336a94afe47eb72556a21a032261615b7a13348b62e85bd7d2926",
+      "sig": "a528136a07135a6797fab199369c2bed01e9cfbd1c2f70fea41ea9077d5697c51d43378357ad70a15a62d30a83f8cf5c5e6740c46b9aa4e7259cebf238a49403",
+      "valid": true
+    },
+    {
+      "identity": 9,
+      "channel": "f451fb26f42b5f052c3f741a2ade8eab50fc61278550a7e7f1fdc141069c6b7c",
+      "writer": "822eb03d6ca4ddca79b75a915f5d1310a946ed801d9df080ff01d56d3b47b36f",
+      "owner": "822eb03d6ca4ddca79b75a915f5d1310a946ed801d9df080ff01d56d3b47b36f",
+      "sig": "77ae48dcbc82d70827ab4a5f60a718b58bfbd21a92f4ed342dfcd607da83872eca37051d96ecb842326730e18ea90be1fdd722191466b200569d7b39184c1709",
+      "valid": true
+    },
+    {
+      "identity": 9,
+      "channel": "d0fac587e876a79bc6fd84688da7320712e8dad7a5942ce78b8757ea0eb7e4e4",
+      "writer": "8a004c7e89a797dc003921ae621ac35940799b7817c64d878fc169adf14f1801",
+      "owner": "822eb03d6ca4ddca79b75a915f5d1310a946ed801d9df080ff01d56d3b47b36f",
+      "sig": "04c082cc566d8793722f80ed672d588553215395a689eb91bccf7037112da724a1a484586417dd0377770609a3b11cd90d332708ec668c028cd28fedec01e10b",
+      "valid": true
+    },
+    {
+      "identity": 10,
+      "channel": "e3b8a271b2706d0a50a10acfe95c381c24a4f88a1facfbb78004a866bf0b140f",
+      "writer": "087236dbc964e6e0518f0c2953d8fdbf3767b939b1029c41045138ccfbb50d00",
+      "owner": "087236dbc964e6e0518f0c2953d8fdbf3767b939b1029c41045138ccfbb50d00",
+      "sig": "43a31cbe2dc5384e68316e300a95f1ad14aa08762775c03aece64bb593be7551f8be5e9ccf827fc74f7b537d9d5bed231180722717293d906ea87c052378020f",
+      "valid": true
+    },
+    {
+      "identity": 10,
+      "channel": "f766a10e42e9088717980c2b3757c1f72ee89e54d28b77398c47d9ffe19aad1e",
+      "writer": "e0698509eb66824840f668e31029b7abb91767bb7bad3e9af01303b6e4cb195f",
+      "owner": "087236dbc964e6e0518f0c2953d8fdbf3767b939b1029c41045138ccfbb50d00",
+      "sig": "e83f6f129fcc01657c96ca6b719dd472601f06f6f0de2f7580ece4035a6f28665f4f887bfef5b6b72be2119302890098ff85a1b1d11dfe963c8b94c3b32db003",
+      "valid": true
+    },
+    {
+      "identity": 11,
+      "channel": "f4911c804a0a6db86e347ad090fd6523d7976121fe264ddf3cc00f5b3a7e5803",
+      "writer": "dd679012570cd8dbfc27e4df1a16d1fa8b1a187bcc8c2893af2d8bf473ab8286",
+      "owner": "dd679012570cd8dbfc27e4df1a16d1fa8b1a187bcc8c2893af2d8bf473ab8286",
+      "sig": "f5719824b954720f60537257c0b47eab7b03f36e8a6803ad7ae418d0ef69c0937ead336eb2845adec4d2c66c281fc101721ee08afe145376e8d5d7acaf5b3e0f",
+      "valid": true
+    },
+    {
+      "identity": 11,
+      "channel": "d80a54c6fbadedbda9240a24f64adf2fad361168a51529aa9701be7a00ce2a11",
+      "writer": "6ca505bb99dca806c1657b48453efe550332c766e2e3d1287be89f6d32d3127c",
+      "owner": "dd679012570cd8dbfc27e4df1a16d1fa8b1a187bcc8c2893af2d8bf473ab8286",
+      "sig": "8c7126f4515e7766c4913b295984ee6ce957edddaadbd843602132a11bdeb03089ed1d71cf0bb2e11b56ace8249061d941be2392ff2b70d40ddbd8f3efe9fd0e",
+      "valid": true
+    },
+    {
+      "identity": 12,
+      "channel": "60e89ef5f40e5083022b84c63337da031e52662a3ef2c913df932c9d9cc8c748",
+      "writer": "c970e52d0906c3470696e3fb371563127d0e4162bec6ee2f07cb6fa2b7f50d89",
+      "owner": "c970e52d0906c3470696e3fb371563127d0e4162bec6ee2f07cb6fa2b7f50d89",
+      "sig": "2229102d4e03abf527b1bec934f2fdb7b9f18b6d644829b933998c2b8ab18b43f565a3735015c10c42013f672b864e18fe136568cd6c89a593eadf9e18e3ee0a",
+      "valid": true
+    },
+    {
+      "identity": 12,
+      "channel": "416d10f83f1c3ac9bac3185d22b2b356d9dd6f709bb29f06a9ab3571eca1b3cb",
+      "writer": "f0aefec1b12c409a64d465ecf41d71de54b689894cd56d4f27b57fc00b002163",
+      "owner": "c970e52d0906c3470696e3fb371563127d0e4162bec6ee2f07cb6fa2b7f50d89",
+      "sig": "d8e9d42a63cb44a84ae3c12d2086cfe185996228ed9a46a6dd705c2b5f61ccf922f6a9c8a321b73df4a5eb222bcbb92881e424ebcce0b9b99514fe8dd520ca07",
+      "valid": true
+    },
+    {
+      "identity": 13,
+      "channel": "f16738583006f225ec25c2b791cdba8154c6d988d31ce723adba819de5117fc3",
+      "writer": "5a357374bc87fb3bf4b08f0ff3139e8f64c758c9a885eaea239ebae345f10b0f",
+      "owner": "5a357374bc87fb3bf4b08f0ff3139e8f64c758c9a885eaea239ebae345f10b0f",
+      "sig": "edbfb3bf4163596b0f699aefa55275aef89c5b431c223257fe07619c7a53d98091eed340c299527e3539cca5109ef67dbdde529e60995ca9b0d8e911ef89180c",
+      "valid": true
+    },
+    {
+      "identity": 13,
+      "channel": "5ba8131237b3730e114db065e5f33406dc5a1817da0e100a8601ba270a0f2549",
+      "writer": "222e267c63678133755fe3ddc2f00e994ec6694611ef23f397146b7c8fbc18b8",
+      "owner": "5a357374bc87fb3bf4b08f0ff3139e8f64c758c9a885eaea239ebae345f10b0f",
+      "sig": "b943df08b693c2f496b58c2fde07ac9f2a30e15a8cbacf430758721570d4ced76191d190c3642f6981d2ef9c6a56d3d6d499b8a07b8f17acfdfef88dc0cd5304",
+      "valid": true
+    },
+    {
+      "identity": 14,
+      "channel": "56f26bb64d5d67507231a315d3ec7f7fc128918f6db62bff3c59f269dd8a6176",
+      "writer": "dca7622d31854dfe1d2fa3d799f7214e49e82c88d7523ce52f65a9d0a0bbfa08",
+      "owner": "dca7622d31854dfe1d2fa3d799f7214e49e82c88d7523ce52f65a9d0a0bbfa08",
+      "sig": "d01db9ea33c6d964d72c893da5eb3cb3a38f010c846c9cfcd274a3101e3ffcdb77beb683358ea55118bf6a3c40443b7a8ea9153f1361d905d55cef0da79fb509",
+      "valid": true
+    },
+    {
+      "identity": 14,
+      "channel": "4683df8961107ff9103419530974fbcfd1c0dd72be2411e022ae43477d992d09",
+      "writer": "976e9bf721351ad5733add58777382d6b14f887a7660021b762495d88869f9a0",
+      "owner": "dca7622d31854dfe1d2fa3d799f7214e49e82c88d7523ce52f65a9d0a0bbfa08",
+      "sig": "8c16521af26e839725c1905f8ec05c7b8eb8ce7a996838207a26a285b3bf98e05b4377de520c38632b3675f28a3fbbbd199810ce72715ac0a353fd62bcf8070d",
+      "valid": true
+    },
+    {
+      "identity": 15,
+      "channel": "8b8925ee986d58a33b845b12e28521fa36ad12a39d628d192b4091dc648f12de",
+      "writer": "cf7d709b4890de2f469c99f7660ca1e728ffd601bc13272b7d38addc40dbdbf7",
+      "owner": "cf7d709b4890de2f469c99f7660ca1e728ffd601bc13272b7d38addc40dbdbf7",
+      "sig": "02bec82225a205ae0e84992988d4f06d67c38d3e4fcf5e7460161a294f005787e1d4431ba005eb6268a6dc7ed843dfd9a402cf78383b34d042ee8b2ffbf2820c",
+      "valid": true
+    },
+    {
+      "identity": 15,
+      "channel": "11c84ce0e33068148410d0c28ee10c4764d8772422042f9d7dc12c5f983321ff",
+      "writer": "7808e51b56925ae6708341e4bd64cac2957970f3084a8976091f07c70fff3e3a",
+      "owner": "cf7d709b4890de2f469c99f7660ca1e728ffd601bc13272b7d38addc40dbdbf7",
+      "sig": "fb6bcadddad76620e8c0958c1f3faa0425e2ec5b1b8f77aac7440a3efcbd75ccd671f19f43dbdcb33c868db36a41b89b891da28f96e5931816a2c76324de720b",
+      "valid": true
+    },
+    {
+      "identity": 16,
+      "channel": "a2ec2f97c805b0923d9c4a85d849aa26efadd25c5ea687504a488e0f296a8f90",
+      "writer": "fba99be0bc64eb0f0d067e474ee827d0badde0da41aeaea5975f53b8b33e034f",
+      "owner": "fba99be0bc64eb0f0d067e474ee827d0badde0da41aeaea5975f53b8b33e034f",
+      "sig": "80d15eb9bc31d21df2dfdc02d918450f3def6dd921a0bde20d37958d2207df18b063bc6b14f80687738829e6bb6545f0ffa68f50c1c1b78936bee7756ee37807",
+      "valid": true
+    },
+    {
+      "identity": 16,
+      "channel": "c3b025844f84b9c7add6009cb07b75541170ad78d2a91cc12bd107ce5141fb80",
+      "writer": "47db5fe489e1f119427d9cbd2a32b689a1ea6e49cdb054faa8dbc632538d4096",
+      "owner": "fba99be0bc64eb0f0d067e474ee827d0badde0da41aeaea5975f53b8b33e034f",
+      "sig": "4346729998a4cecae1b827991e859f3f87fdc39334b3a5ebd2611a60d2dbe1edea2e27873a7aaab02d8757036d3971dc7337c4d4a5bc94c0c5e82b2fa8bc790f",
+      "valid": true
+    },
+    {
+      "identity": 17,
+      "channel": "f57f80896b9146bc285da955e845f70caba1e23e82636071b2a2f1a7452a4c6d",
+      "writer": "c6156a9ffae0d40334237deaeba6c0565387903872b766ab3ff90be871681fda",
+      "owner": "c6156a9ffae0d40334237deaeba6c0565387903872b766ab3ff90be871681fda",
+      "sig": "1030f28a9f76bc10b466b7a4c6041fc23131f9a20fd61583d5a220ff8a088f387e5927df80268a38bcc5c73f8d6f1634e552d494f3284fa5eaf6995153454300",
+      "valid": true
+    },
+    {
+      "identity": 17,
+      "channel": "95831d36981992a9a1e6f5f4b33b197a59ee1b5d9f3afd33d8082ef43f54260b",
+      "writer": "cdcc8d52829529b268597c908d883e3b841f038a15d249e050952185c8396c49",
+      "owner": "c6156a9ffae0d40334237deaeba6c0565387903872b766ab3ff90be871681fda",
+      "sig": "bdd3a3b779dbe15d15a8644183d261642437f095af17f102b08b813db91974d8751b95da20e7fb69c846f86bc31af2a7f2a1a43e6924410e9831d8ef7c092c06",
+      "valid": true
+    },
+    {
+      "identity": 18,
+      "channel": "b7161156cbf4b1cabbc4ad85c58557109a05260f1c97b82e1c9e6cd374193225",
+      "writer": "5593f868e37aaaab4fa2151ced04a2ac99ea30347287a1bffd80d07cb23ec2f7",
+      "owner": "5593f868e37aaaab4fa2151ced04a2ac99ea30347287a1bffd80d07cb23ec2f7",
+      "sig": "acedca6f3edaf8177edae17a64bee7e61e1da73d1253cb03d8d5f4ef1db753773814ee6a21f3ce353fb64103e0a5ee5a1c13c787bafc47c7deaaf2b19d107e09",
+      "valid": true
+    },
+    {
+      "identity": 18,
+      "channel": "5b486ab0bbf1fbb1db409cc2a29409de373388a3a44187bac01046f8288a6e33",
+      "writer": "7333e29e060ec72084e39464fcf341fbea533955cd576b6c398b6c78614f5230",
+      "owner": "5593f868e37aaaab4fa2151ced04a2ac99ea30347287a1bffd80d07cb23ec2f7",
+      "sig": "75d069188b17cbe7a72039851d5eb4517e10084f80ca8992533eb301de49bdde5f50e36117c9cd5dd7018ad7d0ff97c50bfd1e1c1e93d208e1f3be29d12c4d07",
+      "valid": true
+    },
+    {
+      "identity": 19,
+      "channel": "13176ebea6b7caee3332743f618a3f091d736fb12cfcd5a10f7df9eea77d3087",
+      "writer": "a0fb59323349e5fc4f5cf8a31c1b319024832dbd05333d86f3ff8bf158f98eb4",
+      "owner": "a0fb59323349e5fc4f5cf8a31c1b319024832dbd05333d86f3ff8bf158f98eb4",
+      "sig": "84af4190eba25ada848622d79d54b2d55d3d67bbbe9438b9f15884a9f8a08f0f6c0fc4ce383762ca0e2d072a35f0b029c840e11312a402aa4ca0cbda6ca5430d",
+      "valid": true
+    },
+    {
+      "identity": 19,
+      "channel": "c5be9eb331ac192067583b307f35da7d9c167d32c94599f60f74a0f060557bbb",
+      "writer": "0661b9900e9d343142b80d829d013cb4528c5de2e0b4e7ade9b2396844f38330",
+      "owner": "a0fb59323349e5fc4f5cf8a31c1b319024832dbd05333d86f3ff8bf158f98eb4",
+      "sig": "571348c2823412639925b42bb7745d06587b6ce67d74115189971c8127e9fdf53cc5b113b14639ad290ec8963a1823c85c597192943e6f3200524d40c325e80f",
+      "valid": true
+    },
+    {
+      "identity": 0,
+      "channel": "5c551176d3e290af44f0c1c2aa3ddcd1c70b63d53862fe886222f4fdbc972ef5",
+      "writer": "ee7dfa2da6bb30211ddbf126dc9150ee3eb79ebb6ebaf11f072b9ccbf166f7d6",
+      "owner": "93f90e7c06c72f419cbb871f96ea1430db7970d32cfaa3d59721ecc124b018b3",
+      "sig": "a1d711e4f2514bae35ee445d7fbc9670f28344cf5baaf9507716052ed4a7af98e11e7a38b9f55ff4ce55e37a7c28f05dedf2a889033619b2719c9a3d0bc1a50e",
+      "valid": false
+    },
+    {
+      "identity": 0,
+      "channel": "5C551176D3E290AF44F0C1C2AA3DDCD1C70B63D53862FE886222F4FDBC972EF5",
+      "writer": "ee7dfa2da6bb30211ddbf126dc9150ee3eb79ebb6ebaf11f072b9ccbf166f7d6",
+      "owner": "93f90e7c06c72f419cbb871f96ea1430db7970d32cfaa3d59721ecc124b018b3",
+      "sig": "81d711e4f2514bae35ee445d7fbc9670f28344cf5baaf9507716052ed4a7af98e11e7a38b9f55ff4ce55e37a7c28f05dedf2a889033619b2719c9a3d0bc1a50e",
+      "valid": false
+    },
+    {
+      "identity": 0,
+      "channel": "5c551176d3e290af44f0c1c2aa3ddcd1c70b63d53862fe886222f4fdbc972ef5",
+      "writer": "ee7dfa2da6bb30211ddbf126dc9150ee3eb79ebb6ebaf11f072b9ccbf166f7d6",
+      "owner": "c59402099b808531a29dfe54f0fd48814012d4995f595fb7056062f566a97702",
+      "sig": "81d711e4f2514bae35ee445d7fbc9670f28344cf5baaf9507716052ed4a7af98e11e7a38b9f55ff4ce55e37a7c28f05dedf2a889033619b2719c9a3d0bc1a50e",
+      "valid": false
+    },
+    {
+      "identity": 0,
+      "channel": "5c551176d3e290af44f0c1c2aa3ddcd1c70b63d53862fe886222f4fdbc972ef5",
+      "writer": "ee7dfa2da6bb30211ddbf126dc9150ee3eb79ebb6ebaf11f072b9ccbf166f7d6",
+      "owner": "93f90e7c06c72f419cbb871f96ea1430db7970d32cfaa3d59721ecc124b018b3",
+      "sig": "81d711e4f2514bae35ee445d7fbc9670f28344cf5baaf9507716052ed4a7af98e11e7a38b9f55ff4ce55e37a7c28f05dedf2a889033619b2719c9a3d0bc1a5",
+      "valid": false
+    }
+  ],
+  "epochs": [
+    {
+      "identity": 0,
+      "channel": "11860142d2d339439b2aaf41216592812b7a0947850d105dcffb73a1acf53061",
+      "epoch": 0,
+      "epochKey": "8810524237cb7b224bb08c9ec5756dd75e0ad3672d85265818c1522cec43d21e"
+    },
+    {
+      "identity": 0,
+      "channel": "11860142d2d339439b2aaf41216592812b7a0947850d105dcffb73a1acf53061",
+      "epoch": 1,
+      "epochKey": "d186d9d28fd6f474bcba30f2eaa4aab3a3f7f60e2e3ea2d71b2ba0ffe84cfa1a"
+    },
+    {
+      "identity": 0,
+      "channel": "11860142d2d339439b2aaf41216592812b7a0947850d105dcffb73a1acf53061",
+      "epoch": 2,
+      "epochKey": "f5ab07b9ced4baf67aea9f2fe39bf5d9ec13b465d914c62e100e6f8c4468e07b"
+    },
+    {
+      "identity": 0,
+      "channel": "11860142d2d339439b2aaf41216592812b7a0947850d105dcffb73a1acf53061",
+      "epoch": 3,
+      "epochKey": "f32aa1865826a410d4f2f0312f2e5f4de1844d757965b70e18d35c3be204733b"
+    },
+    {
+      "identity": 1,
+      "channel": "6b57547dd7d2d209097f9a510a708aec11ba972fb009367d07642882cf485466",
+      "epoch": 0,
+      "epochKey": "4559cce365a103d592fc19c79d46585965866b1568194888e291a1c1b6a4624f"
+    },
+    {
+      "identity": 1,
+      "channel": "6b57547dd7d2d209097f9a510a708aec11ba972fb009367d07642882cf485466",
+      "epoch": 1,
+      "epochKey": "c1d3760fb2296891ffeb2484fcffdee9ef0b7cd6ac801b4a1f4be21793f05b83"
+    },
+    {
+      "identity": 1,
+      "channel": "6b57547dd7d2d209097f9a510a708aec11ba972fb009367d07642882cf485466",
+      "epoch": 2,
+      "epochKey": "67cfc603214132657e19c1e50b0d7768b132bb3751310463fa02ba7047e11d3e"
+    },
+    {
+      "identity": 1,
+      "channel": "6b57547dd7d2d209097f9a510a708aec11ba972fb009367d07642882cf485466",
+      "epoch": 3,
+      "epochKey": "2908c8749e825ddf78bf81a90832d271653aba61315451fad7b4fbd49ff6ce8b"
+    },
+    {
+      "identity": 2,
+      "channel": "d9f6c7370c767b42836a31102f8ff759c610e39bbe8e0215349194d314353afe",
+      "epoch": 0,
+      "epochKey": "9f324d595e9024074e163b40e1deb422d54a45ff9b1953e6c4f4cacd8d985fa4"
+    },
+    {
+      "identity": 2,
+      "channel": "d9f6c7370c767b42836a31102f8ff759c610e39bbe8e0215349194d314353afe",
+      "epoch": 1,
+      "epochKey": "330e816f3df49165f5a28e22c20d475a4c017908cac4f65960e8bb67fe3ca30f"
+    },
+    {
+      "identity": 2,
+      "channel": "d9f6c7370c767b42836a31102f8ff759c610e39bbe8e0215349194d314353afe",
+      "epoch": 2,
+      "epochKey": "ed80545268123c55c6fdfa8b02b020a88d4a9c6ade11dd31cf2a2b151f5e74c9"
+    },
+    {
+      "identity": 2,
+      "channel": "d9f6c7370c767b42836a31102f8ff759c610e39bbe8e0215349194d314353afe",
+      "epoch": 3,
+      "epochKey": "4d49c6c2c9436b8faf452835373d1ad2c2400d3d2678f6e496a9a903e24f9849"
+    },
+    {
+      "identity": 3,
+      "channel": "14931ebe9083d3a360beb7da33439e4c011e9eb844ff978caa3536671dba919f",
+      "epoch": 0,
+      "epochKey": "6dacc5c4777ad9e77da1419a40ee70bce01aabbb75a30fc246e98ed49c7a0d1e"
+    },
+    {
+      "identity": 3,
+      "channel": "14931ebe9083d3a360beb7da33439e4c011e9eb844ff978caa3536671dba919f",
+      "epoch": 1,
+      "epochKey": "414c19f30d4b534a531910800483267319fd54df946f50cae6c9dd6a5e9f8e6f"
+    },
+    {
+      "identity": 3,
+      "channel": "14931ebe9083d3a360beb7da33439e4c011e9eb844ff978caa3536671dba919f",
+      "epoch": 2,
+      "epochKey": "96fd1eef9f9c50247f3728db6367a0dc5182f9b65f9981879445e9438bacc0c0"
+    },
+    {
+      "identity": 3,
+      "channel": "14931ebe9083d3a360beb7da33439e4c011e9eb844ff978caa3536671dba919f",
+      "epoch": 3,
+      "epochKey": "9d92905ac166724b3f7f16b635a021fb533bb977efcc58baac878d778b0c5546"
+    },
+    {
+      "identity": 4,
+      "channel": "2bd339c18e344caa67a2110e03d50ce9a8a1b02a992e4e8bad43e412c01f76c5",
+      "epoch": 0,
+      "epochKey": "8d471307eb39a88386724223d10f33866113900f3268ca4deda85f6833d446a3"
+    },
+    {
+      "identity": 4,
+      "channel": "2bd339c18e344caa67a2110e03d50ce9a8a1b02a992e4e8bad43e412c01f76c5",
+      "epoch": 1,
+      "epochKey": "a39a14ee6c03d37f0f63c805c5331f198e062a8322dfd6cbf269b925ad1da786"
+    },
+    {
+      "identity": 4,
+      "channel": "2bd339c18e344caa67a2110e03d50ce9a8a1b02a992e4e8bad43e412c01f76c5",
+      "epoch": 2,
+      "epochKey": "b60b20901733c1ccb1052e0a4e3f03ce0fc3040816d74e2ba7164b99751b218f"
+    },
+    {
+      "identity": 4,
+      "channel": "2bd339c18e344caa67a2110e03d50ce9a8a1b02a992e4e8bad43e412c01f76c5",
+      "epoch": 3,
+      "epochKey": "df89a0cad5761cf3b98bcdfa5a304f95c249d7fac865bffbce018dd8df890fad"
+    },
+    {
+      "identity": 5,
+      "channel": "a01902ce404a30f1df3497b46be5043a63b6cc6252a11891826179f1f33ac3ba",
+      "epoch": 0,
+      "epochKey": "1de4cf7b708f15d396e9aec4b185d5577f3a95d67db1a85650d9a6d3869ff744"
+    },
+    {
+      "identity": 5,
+      "channel": "a01902ce404a30f1df3497b46be5043a63b6cc6252a11891826179f1f33ac3ba",
+      "epoch": 1,
+      "epochKey": "80129e0486da4f6f3df1281e258d47acc451d24765972d263c19c6b9c3152e96"
+    },
+    {
+      "identity": 5,
+      "channel": "a01902ce404a30f1df3497b46be5043a63b6cc6252a11891826179f1f33ac3ba",
+      "epoch": 2,
+      "epochKey": "ebb4f92d9cfcb22282840496ed5820d0d19d0157d01a57973564407fc4f720bb"
+    },
+    {
+      "identity": 5,
+      "channel": "a01902ce404a30f1df3497b46be5043a63b6cc6252a11891826179f1f33ac3ba",
+      "epoch": 3,
+      "epochKey": "b7c508434b9d8a6c6d365dbd31e3e5ceeede1ab4b0deccca6ab4e3562e202e46"
+    },
+    {
+      "identity": 6,
+      "channel": "20dca7e295905d43fb25d65d6a233db9ac5dab839dd270cb2de90da767cd02d7",
+      "epoch": 0,
+      "epochKey": "ffb6b2a40bae80791d88584ab1d3e04289acc20f596fd2c6f26bf28385470393"
+    },
+    {
+      "identity": 6,
+      "channel": "20dca7e295905d43fb25d65d6a233db9ac5dab839dd270cb2de90da767cd02d7",
+      "epoch": 1,
+      "epochKey": "b09ef2fc525f8ca3cc4da7c862a02a82b73bb918b1b93e9391fbf80b39b9aa58"
+    },
+    {
+      "identity": 6,
+      "channel": "20dca7e295905d43fb25d65d6a233db9ac5dab839dd270cb2de90da767cd02d7",
+      "epoch": 2,
+      "epochKey": "79171fa394068289d7ab74354a4ce9fcf9aadb43afedddb8944faa098e312c9d"
+    },
+    {
+      "identity": 6,
+      "channel": "20dca7e295905d43fb25d65d6a233db9ac5dab839dd270cb2de90da767cd02d7",
+      "epoch": 3,
+      "epochKey": "8f7bfee6bbc288af1dcd56df0ec60d06161a59c5c8c99d084dc7dcb186d7c6d2"
+    },
+    {
+      "identity": 7,
+      "channel": "7e5110841cb54df1d5992551eb68903359a0e1f54112cc2bac5f0ff71b718da1",
+      "epoch": 0,
+      "epochKey": "810510c432a9b8271d7bd9e0e330a79490b5f288c4c730431eff636b4d07fcc6"
+    },
+    {
+      "identity": 7,
+      "channel": "7e5110841cb54df1d5992551eb68903359a0e1f54112cc2bac5f0ff71b718da1",
+      "epoch": 1,
+      "epochKey": "51cf8ef3363008098db91071cd67e18f74e5d54383bb08fc01ccbdab3d4e80cb"
+    },
+    {
+      "identity": 7,
+      "channel": "7e5110841cb54df1d5992551eb68903359a0e1f54112cc2bac5f0ff71b718da1",
+      "epoch": 2,
+      "epochKey": "11b98f3a3e2642fa2b200e7452a75101dc3141fbc78e7ee30208a1a62cb81c7b"
+    },
+    {
+      "identity": 7,
+      "channel": "7e5110841cb54df1d5992551eb68903359a0e1f54112cc2bac5f0ff71b718da1",
+      "epoch": 3,
+      "epochKey": "4748b8b9e0e9fbb8c5142ba6487e46e967cd7d1d4edfcca609123b7f58de9f91"
+    },
+    {
+      "identity": 8,
+      "channel": "0af567f04eca7ffe5a6bedebd8b069ed55e639f30fae65959a68fcc5cfc62e61",
+      "epoch": 0,
+      "epochKey": "54b1725fe2956957afc19e897555ab694e11f160370412b32ee4b0abaf286adc"
+    },
+    {
+      "identity": 8,
+      "channel": "0af567f04eca7ffe5a6bedebd8b069ed55e639f30fae65959a68fcc5cfc62e61",
+      "epoch": 1,
+      "epochKey": "e837b3b22b10ac4e60c6b6519972782d16f5bda6e0c978f84fb8aee99bee762d"
+    },
+    {
+      "identity": 8,
+      "channel": "0af567f04eca7ffe5a6bedebd8b069ed55e639f30fae65959a68fcc5cfc62e61",
+      "epoch": 2,
+      "epochKey": "33c6b35f81d29f4228037f257cc69847b05c65deb6580c2f492028d4c280f6fc"
+    },
+    {
+      "identity": 8,
+      "channel": "0af567f04eca7ffe5a6bedebd8b069ed55e639f30fae65959a68fcc5cfc62e61",
+      "epoch": 3,
+      "epochKey": "e945c2414678da3b064426fec8e26a77f4dbf6ced75d95220b5f92f7e33d9537"
+    },
+    {
+      "identity": 9,
+      "channel": "f451fb26f42b5f052c3f741a2ade8eab50fc61278550a7e7f1fdc141069c6b7c",
+      "epoch": 0,
+      "epochKey": "6508a6d5acb2c5bbf93d7c98393e069676a3eb9dfd5ec0bfc61b78268b132038"
+    },
+    {
+      "identity": 9,
+      "channel": "f451fb26f42b5f052c3f741a2ade8eab50fc61278550a7e7f1fdc141069c6b7c",
+      "epoch": 1,
+      "epochKey": "94da76181f52d08e61194b4f72fcfda81821236ccf4cdcad5920d56593c0d9ae"
+    },
+    {
+      "identity": 9,
+      "channel": "f451fb26f42b5f052c3f741a2ade8eab50fc61278550a7e7f1fdc141069c6b7c",
+      "epoch": 2,
+      "epochKey": "e2d987bf972b5f8318b75d2d345d67f7684514a3c208059c895ff2db37926e81"
+    },
+    {
+      "identity": 9,
+      "channel": "f451fb26f42b5f052c3f741a2ade8eab50fc61278550a7e7f1fdc141069c6b7c",
+      "epoch": 3,
+      "epochKey": "1f612c58ca63891189cdb67a01eb58ec068b6ec82f63aed602c352b650c769fd"
+    },
+    {
+      "identity": 10,
+      "channel": "e3b8a271b2706d0a50a10acfe95c381c24a4f88a1facfbb78004a866bf0b140f",
+      "epoch": 0,
+      "epochKey": "dbf751d397accc8bf0d09febf2da6da4ddeddeab051fd069e1fe2569ab60b0c3"
+    },
+    {
+      "identity": 10,
+      "channel": "e3b8a271b2706d0a50a10acfe95c381c24a4f88a1facfbb78004a866bf0b140f",
+      "epoch": 1,
+      "epochKey": "a06a39d616b56e2e9931e6682646d4de2dd52e62221d99d10db097b6927dfbbd"
+    },
+    {
+      "identity": 10,
+      "channel": "e3b8a271b2706d0a50a10acfe95c381c24a4f88a1facfbb78004a866bf0b140f",
+      "epoch": 2,
+      "epochKey": "bc2d9c8afe8a21e9cf15ca91234cd95a8e2e8b7e8ee00e4ec8d8131f4f61247d"
+    },
+    {
+      "identity": 10,
+      "channel": "e3b8a271b2706d0a50a10acfe95c381c24a4f88a1facfbb78004a866bf0b140f",
+      "epoch": 3,
+      "epochKey": "764c5ceaf6f5e2b8d32ba0c8a92ed62cf3308dd5dbee15cb26e895bbae1efb4a"
+    },
+    {
+      "identity": 11,
+      "channel": "f4911c804a0a6db86e347ad090fd6523d7976121fe264ddf3cc00f5b3a7e5803",
+      "epoch": 0,
+      "epochKey": "3cd0f46ec578627ded25b02443a6b631db27e9098ce0aa59cfad97888bae908a"
+    },
+    {
+      "identity": 11,
+      "channel": "f4911c804a0a6db86e347ad090fd6523d7976121fe264ddf3cc00f5b3a7e5803",
+      "epoch": 1,
+      "epochKey": "3f59151a58d538a70dbc0b6070009801231d76f526b7b39cd5f0a392d02f9bea"
+    },
+    {
+      "identity": 11,
+      "channel": "f4911c804a0a6db86e347ad090fd6523d7976121fe264ddf3cc00f5b3a7e5803",
+      "epoch": 2,
+      "epochKey": "8218f08b440b725aad960d21ce4164dfc17fd5ff084083b92b129f7c7f614e51"
+    },
+    {
+      "identity": 11,
+      "channel": "f4911c804a0a6db86e347ad090fd6523d7976121fe264ddf3cc00f5b3a7e5803",
+      "epoch": 3,
+      "epochKey": "7f62b9995b6fae24633163d6043a7b52fd7ee77a982be9c9914429cea2d180f2"
+    },
+    {
+      "identity": 12,
+      "channel": "60e89ef5f40e5083022b84c63337da031e52662a3ef2c913df932c9d9cc8c748",
+      "epoch": 0,
+      "epochKey": "7a2b7fc1becf5c98c35043ad9c52a1bd9ff9c717abdd1bf3840f7821ffb5dd93"
+    },
+    {
+      "identity": 12,
+      "channel": "60e89ef5f40e5083022b84c63337da031e52662a3ef2c913df932c9d9cc8c748",
+      "epoch": 1,
+      "epochKey": "3ef269102ece6fcc49de86543e028946d77e21df12916fdffe108184e2db504c"
+    },
+    {
+      "identity": 12,
+      "channel": "60e89ef5f40e5083022b84c63337da031e52662a3ef2c913df932c9d9cc8c748",
+      "epoch": 2,
+      "epochKey": "94bc00d5f995618a559bbc9bbeddd80b059eb4b32aecc3e36be8783b78de314d"
+    },
+    {
+      "identity": 12,
+      "channel": "60e89ef5f40e5083022b84c63337da031e52662a3ef2c913df932c9d9cc8c748",
+      "epoch": 3,
+      "epochKey": "a31dc60da7349e6798048844fcdf5835717afc713b96012fd2a7e368f5e4174a"
+    },
+    {
+      "identity": 13,
+      "channel": "f16738583006f225ec25c2b791cdba8154c6d988d31ce723adba819de5117fc3",
+      "epoch": 0,
+      "epochKey": "d4fdbb666373e65a2ccddb31a19e07aa10d7df31f6718be156337a97d8dff9c3"
+    },
+    {
+      "identity": 13,
+      "channel": "f16738583006f225ec25c2b791cdba8154c6d988d31ce723adba819de5117fc3",
+      "epoch": 1,
+      "epochKey": "dc3874ceef0de7761133d02ece82ad34fff7122861ee31a3fa579b56590a8b14"
+    },
+    {
+      "identity": 13,
+      "channel": "f16738583006f225ec25c2b791cdba8154c6d988d31ce723adba819de5117fc3",
+      "epoch": 2,
+      "epochKey": "f45580998f6aaff942ff1b77696f57465a96df012b0c0b27868b0ec5da07addb"
+    },
+    {
+      "identity": 13,
+      "channel": "f16738583006f225ec25c2b791cdba8154c6d988d31ce723adba819de5117fc3",
+      "epoch": 3,
+      "epochKey": "af35778c5317e5df391a1989aac2bbd6e94644d85ec4240aca6bcb587f588c76"
+    },
+    {
+      "identity": 14,
+      "channel": "56f26bb64d5d67507231a315d3ec7f7fc128918f6db62bff3c59f269dd8a6176",
+      "epoch": 0,
+      "epochKey": "8d1698af6e03f69cffca42bd1beebe9269582076c82ab88f0dd5175a11dac76a"
+    },
+    {
+      "identity": 14,
+      "channel": "56f26bb64d5d67507231a315d3ec7f7fc128918f6db62bff3c59f269dd8a6176",
+      "epoch": 1,
+      "epochKey": "97534e6c57eca11e01e4d474a7b1bc1672ce5d6acfe892eed9b0dc71f3d13b7d"
+    },
+    {
+      "identity": 14,
+      "channel": "56f26bb64d5d67507231a315d3ec7f7fc128918f6db62bff3c59f269dd8a6176",
+      "epoch": 2,
+      "epochKey": "55654fa434e1885f22c7421c0f3809cb59cba2547b123d72d6f61a78de94bfa7"
+    },
+    {
+      "identity": 14,
+      "channel": "56f26bb64d5d67507231a315d3ec7f7fc128918f6db62bff3c59f269dd8a6176",
+      "epoch": 3,
+      "epochKey": "93a9ea7173b629442a35c3c0ce3462a970fdbfd39fdaf3faa2db688c36f4c556"
+    },
+    {
+      "identity": 15,
+      "channel": "8b8925ee986d58a33b845b12e28521fa36ad12a39d628d192b4091dc648f12de",
+      "epoch": 0,
+      "epochKey": "80401b93e63dfed615cdbd798cb0ec12cfd13d42348717848bced6a280032cb8"
+    },
+    {
+      "identity": 15,
+      "channel": "8b8925ee986d58a33b845b12e28521fa36ad12a39d628d192b4091dc648f12de",
+      "epoch": 1,
+      "epochKey": "ab1cb16332fd560db0f8caaf44fd951350a3fba2bacc769fd9cd603f5e6026f5"
+    },
+    {
+      "identity": 15,
+      "channel": "8b8925ee986d58a33b845b12e28521fa36ad12a39d628d192b4091dc648f12de",
+      "epoch": 2,
+      "epochKey": "a6fcb2e8848110c3b6068b655ecd7e384d2164c0dd5ad758f56f9807bf41ac98"
+    },
+    {
+      "identity": 15,
+      "channel": "8b8925ee986d58a33b845b12e28521fa36ad12a39d628d192b4091dc648f12de",
+      "epoch": 3,
+      "epochKey": "12913bc4c3b4474b00d99cccc681346c6cfd60ef6fa8431e8fcb4dee7bc41b10"
+    },
+    {
+      "identity": 16,
+      "channel": "a2ec2f97c805b0923d9c4a85d849aa26efadd25c5ea687504a488e0f296a8f90",
+      "epoch": 0,
+      "epochKey": "4919249e78b608e32dfa46a78bfdbbb44140f973ce7fd660b4c738f8b28c6640"
+    },
+    {
+      "identity": 16,
+      "channel": "a2ec2f97c805b0923d9c4a85d849aa26efadd25c5ea687504a488e0f296a8f90",
+      "epoch": 1,
+      "epochKey": "913be8e5c8dede1ba7e532c20434c65df94cb231af1f44ae698f80a6b74d142c"
+    },
+    {
+      "identity": 16,
+      "channel": "a2ec2f97c805b0923d9c4a85d849aa26efadd25c5ea687504a488e0f296a8f90",
+      "epoch": 2,
+      "epochKey": "81a90a05c16bbb03fc8215d7c960618e7cb54712af85e766302745c6c79757fc"
+    },
+    {
+      "identity": 16,
+      "channel": "a2ec2f97c805b0923d9c4a85d849aa26efadd25c5ea687504a488e0f296a8f90",
+      "epoch": 3,
+      "epochKey": "e849203ff23f44c4ce473196bd3fac51f4df1be778b7c1fe219220ea64ebb707"
+    },
+    {
+      "identity": 17,
+      "channel": "f57f80896b9146bc285da955e845f70caba1e23e82636071b2a2f1a7452a4c6d",
+      "epoch": 0,
+      "epochKey": "b855b6e8cf47f79b58308ffa65adeda6e44cdecda84d3b619a673dd8c3bdefcf"
+    },
+    {
+      "identity": 17,
+      "channel": "f57f80896b9146bc285da955e845f70caba1e23e82636071b2a2f1a7452a4c6d",
+      "epoch": 1,
+      "epochKey": "ac82dd249e44600621c47e0bd0fb0b6400b5a03519fd52df2caf2a7ac9d67121"
+    },
+    {
+      "identity": 17,
+      "channel": "f57f80896b9146bc285da955e845f70caba1e23e82636071b2a2f1a7452a4c6d",
+      "epoch": 2,
+      "epochKey": "ad136d89d810135abc81dec1e655d12edb03d5b332889cb987af724384d06193"
+    },
+    {
+      "identity": 17,
+      "channel": "f57f80896b9146bc285da955e845f70caba1e23e82636071b2a2f1a7452a4c6d",
+      "epoch": 3,
+      "epochKey": "f310a8c147f74ab909872b2f06f62dd157a321fa859adf00a98f6a26d6fcb720"
+    },
+    {
+      "identity": 18,
+      "channel": "b7161156cbf4b1cabbc4ad85c58557109a05260f1c97b82e1c9e6cd374193225",
+      "epoch": 0,
+      "epochKey": "545191e2d5e4402fe6794333fba7f4594610fa901b713e2eac991997aa431256"
+    },
+    {
+      "identity": 18,
+      "channel": "b7161156cbf4b1cabbc4ad85c58557109a05260f1c97b82e1c9e6cd374193225",
+      "epoch": 1,
+      "epochKey": "b749966ed086ca3a50612f3671fcbae054b81c385e45d8d3e3f7ee388b030a21"
+    },
+    {
+      "identity": 18,
+      "channel": "b7161156cbf4b1cabbc4ad85c58557109a05260f1c97b82e1c9e6cd374193225",
+      "epoch": 2,
+      "epochKey": "174e042744267415875b07eb73b553b44226d8e8164e5872188bd624fbfc2689"
+    },
+    {
+      "identity": 18,
+      "channel": "b7161156cbf4b1cabbc4ad85c58557109a05260f1c97b82e1c9e6cd374193225",
+      "epoch": 3,
+      "epochKey": "f75aae1c4c38c143d4338b7a5affcd981c24685b474fa2c289cc777e55d62636"
+    },
+    {
+      "identity": 19,
+      "channel": "13176ebea6b7caee3332743f618a3f091d736fb12cfcd5a10f7df9eea77d3087",
+      "epoch": 0,
+      "epochKey": "0a7379a665de78a1aca9d30bd143493f9ca556bac87f1b5999f09630ae114245"
+    },
+    {
+      "identity": 19,
+      "channel": "13176ebea6b7caee3332743f618a3f091d736fb12cfcd5a10f7df9eea77d3087",
+      "epoch": 1,
+      "epochKey": "ec909983fccccbe34aa5c621a3b6eee65dcba3e312c55c0870952eb7834c8606"
+    },
+    {
+      "identity": 19,
+      "channel": "13176ebea6b7caee3332743f618a3f091d736fb12cfcd5a10f7df9eea77d3087",
+      "epoch": 2,
+      "epochKey": "e5a00e3f719781851fb201be8e044dd8a029470b37e39323e97084457f25f80a"
+    },
+    {
+      "identity": 19,
+      "channel": "13176ebea6b7caee3332743f618a3f091d736fb12cfcd5a10f7df9eea77d3087",
+      "epoch": 3,
+      "epochKey": "68a79d862a085e635b3ccc6c298315b23a15e14118efff1db3513a6fdd14b15b"
+    },
+    {
+      "identity": 0,
+      "channel": "11860142D2D339439B2AAF41216592812B7A0947850D105DCFFB73A1ACF53061",
+      "epoch": 1,
+      "epochKey": "d186d9d28fd6f474bcba30f2eaa4aab3a3f7f60e2e3ea2d71b2ba0ffe84cfa1a"
+    },
+    {
+      "identity": 1,
+      "channel": "6B57547DD7D2D209097F9A510A708AEC11BA972FB009367D07642882CF485466",
+      "epoch": 2,
+      "epochKey": "67cfc603214132657e19c1e50b0d7768b132bb3751310463fa02ba7047e11d3e"
+    },
+    {
+      "identity": 2,
+      "channel": "d134a843a3525d80433485f3fdd802669ce801ea0dae1a1ff8bf9644fc6c0abb",
+      "epoch": 0,
+      "epochKey": "177af0cd92b44c43abda6acaf419f34754b2fe4c8070085b46e64398b71c1f50"
+    },
+    {
+      "identity": 3,
+      "channel": "57cdd4cca7c6c691672af517b1e79420ed13ddc4834197109ef476c93ce96d35",
+      "epoch": 7,
+      "epochKey": "d2ae40c878538e20b408d35611ca3dfb3af51025848b209f14b78a2a3a5c0f32"
+    }
+  ],
+  "wrapped": [
+    {
+      "videoKey": "5eafc7ae898c4542bdb20e661367ae18ba282e904350658a92e8b320affd0ec1",
+      "epochKey": "8810524237cb7b224bb08c9ec5756dd75e0ad3672d85265818c1522cec43d21e",
+      "wrapped": "193af128a7744b93563db289c3735ec8729201cb8a7de87c577636ae4f1c0b0c44128ea9ba6fc0de62e64eefb64c008d61a236bc0642a296039be015de1563a1adee2ff08d2202aa",
+      "unwrap": "5eafc7ae898c4542bdb20e661367ae18ba282e904350658a92e8b320affd0ec1"
+    },
+    {
+      "videoKey": "ba34a12b1d152ae563cfd8a24670fd40e1107b706f98160c3e9b8248590a8a65",
+      "epochKey": "c1d3760fb2296891ffeb2484fcffdee9ef0b7cd6ac801b4a1f4be21793f05b83",
+      "wrapped": "779483f1c9b45d0667a77925d102ef3b4b9b108cb00e63abaca34307390cfb35a3c5ddd48a1fd1ed2727afcf2ded87c0cb3ab847b8e7d3b42a4f4585d021854a72d3b8bd6d33ce6c",
+      "unwrap": "ba34a12b1d152ae563cfd8a24670fd40e1107b706f98160c3e9b8248590a8a65"
+    },
+    {
+      "videoKey": "b1450907d0487cd9df114d4cdc1d68b1caf769cfda7fe03855a18311be61ba20",
+      "epochKey": "ed80545268123c55c6fdfa8b02b020a88d4a9c6ade11dd31cf2a2b151f5e74c9",
+      "wrapped": "381035e66e28c5fd145858f4e1347687c328ef995c089445902c3325f862b7bcb0a0c40e09435d57f9e5e1f18f0a5dd505a5204797fb3e18fe2bd354021584aa0d5d4323f17638b2",
+      "unwrap": "b1450907d0487cd9df114d4cdc1d68b1caf769cfda7fe03855a18311be61ba20"
+    },
+    {
+      "videoKey": "7d43473e1d934954cb0b2c92ee1e7ddf",
+      "epochKey": "9d92905ac166724b3f7f16b635a021fb533bb977efcc58baac878d778b0c5546",
+      "wrapped": "a6e064ec949f74eeaa00296a3196efd7b6548e04f49e2b0261d82461903012957e41e63ad77662fe4bde41da268a5a8ab0c4bba7a446a0ce",
+      "unwrap": null
+    },
+    {
+      "videoKey": "7f512c1e2532f8057027169d3102109a6754b22f047b094b",
+      "epochKey": "8d471307eb39a88386724223d10f33866113900f3268ca4deda85f6833d446a3",
+      "wrapped": "0c90a6f826f1502b35119c2f16479a2dbb2d0a579509bc3ab4bdc8f811f33d69a36e5f693896b616862402b726655de02a18ec97b3462dd2a9a6465d3b3b6658",
+      "unwrap": null
+    },
+    {
+      "videoKey": "e0",
+      "epochKey": "80129e0486da4f6f3df1281e258d47acc451d24765972d263c19c6b9c3152e96",
+      "wrapped": "7843c91c146ca6fe3d9b20ee8e9ca9a0537e0505ef1208d9992c22f0756664b59c70dd431d7ce6fa6f",
+      "unwrap": null
+    },
+    {
+      "videoKey": "4d21c96ef035cfbb4569cbef13cd1cd72effaeeeadc2860213ae2ef5a7133dd1",
+      "epochKey": "79171fa394068289d7ab74354a4ce9fcf9aadb43afedddb8944faa098e312c9d",
+      "wrapped": "37e84ff73de92e3d4230aa60013c6a2cf2ba78075cf3c71a872998f9a2bc849de012c58e3947a777f837a1845e6610990ae2d4461b76bab0ce231b0d8d2bd3b7695e8a047cb522b5",
+      "unwrap": "4d21c96ef035cfbb4569cbef13cd1cd72effaeeeadc2860213ae2ef5a7133dd1"
+    },
+    {
+      "videoKey": "6cc45cca23f6aeffb2dfe573c76fb0ce8f318a5e97a38ddb01e5704cf51e4f16",
+      "epochKey": "4748b8b9e0e9fbb8c5142ba6487e46e967cd7d1d4edfcca609123b7f58de9f91",
+      "wrapped": "f7c8a90874ade0b5a0ad6a83019c10794ffcf0b69260cca897bf8a69195038520431e7ecf3c11430c9d430814eb2b6e96e29a32f6f591853a256d1bde1be95d1bdbf7a14d003f25f",
+      "unwrap": "6cc45cca23f6aeffb2dfe573c76fb0ce8f318a5e97a38ddb01e5704cf51e4f16"
+    },
+    {
+      "videoKey": "5eafc7ae898c4542bdb20e661367ae18ba282e904350658a92e8b320affd0ec1",
+      "epochKey": "8810524237cb7b224bb08c9ec5756dd75e0ad3672d85265818c1522cec43d21e",
+      "wrapped": "a6bc0642a296039be015de1563a1adee2ff08d2202aa",
+      "unwrap": null
+    }
+  ],
+  "mnemonicCheck": [
+    {
+      "phrase": "extend carry rebuild prepare wagon chaos rubber student chat mercy universe home",
+      "normalized": "extend carry rebuild prepare wagon chaos rubber student chat mercy universe home",
+      "valid": true
+    },
+    {
+      "phrase": "poem turkey afford torch flat library utility obvious annual position stem zero donor claw poem alter entry battle doll skull behave air come sorry",
+      "normalized": "poem turkey afford torch flat library utility obvious annual position stem zero donor claw poem alter entry battle doll skull behave air come sorry",
+      "valid": true
+    },
+    {
+      "phrase": "extend carry rebuild prepare wagon chaos rubber student chat mercy universe home",
+      "normalized": "extend carry rebuild prepare wagon chaos rubber student chat mercy universe home",
+      "valid": true
+    },
+    {
+      "phrase": "  extend carry rebuild prepare wagon chaos rubber student chat mercy universe home  ",
+      "normalized": "extend carry rebuild prepare wagon chaos rubber student chat mercy universe home",
+      "valid": true
+    },
+    {
+      "phrase": "EXTEND CARRY REBUILD PREPARE WAGON CHAOS RUBBER STUDENT CHAT MERCY UNIVERSE HOME",
+      "normalized": "extend carry rebuild prepare wagon chaos rubber student chat mercy universe home",
+      "valid": true
+    },
+    {
+      "phrase": "extend   carry   rebuild   prepare   wagon   chaos   rubber   student   chat   mercy   universe   home",
+      "normalized": "extend carry rebuild prepare wagon chaos rubber student chat mercy universe home",
+      "valid": true
+    },
+    {
+      "phrase": "extend\n\t carry\n\t rebuild\n\t prepare\n\t wagon\n\t chaos\n\t rubber\n\t student\n\t chat\n\t mercy\n\t universe\n\t home",
+      "normalized": "extend carry rebuild prepare wagon chaos rubber student chat mercy universe home",
+      "valid": true
+    },
+    {
+      "phrase": " extend carry rebuild prepare wagon chaos rubber student chat mercy universe home ",
+      "normalized": "extend carry rebuild prepare wagon chaos rubber student chat mercy universe home",
+      "valid": true
+    },
+    {
+      "phrase": "POEM TURKEY AFFORD TORCH FLAT LIBRARY UTILITY OBVIOUS ANNUAL POSITION STEM ZERO DONOR CLAW POEM ALTER ENTRY BATTLE DOLL SKULL BEHAVE AIR COME SORRY",
+      "normalized": "poem turkey afford torch flat library utility obvious annual position stem zero donor claw poem alter entry battle doll skull behave air come sorry",
+      "valid": true
+    },
+    {
+      "phrase": "extend carry rebuild prepare wagon chaos rubber student chat mercy universe abandon",
+      "normalized": "extend carry rebuild prepare wagon chaos rubber student chat mercy universe abandon",
+      "valid": false
+    },
+    {
+      "phrase": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon",
+      "normalized": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon",
+      "valid": false
+    },
+    {
+      "phrase": "extend carry rebuild prepare wagon chaos rubber student chat mercy universe",
+      "normalized": "extend carry rebuild prepare wagon chaos rubber student chat mercy universe",
+      "valid": false
+    },
+    {
+      "phrase": "extend carry rebuild prepare wagon chaos rubber student chat mercy universe home abandon",
+      "normalized": "extend carry rebuild prepare wagon chaos rubber student chat mercy universe home abandon",
+      "valid": false
+    },
+    {
+      "phrase": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon",
+      "normalized": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon",
+      "valid": false
+    },
+    {
+      "phrase": "abandon",
+      "normalized": "abandon",
+      "valid": false
+    },
+    {
+      "phrase": "",
+      "normalized": "",
+      "valid": false
+    },
+    {
+      "phrase": "   ",
+      "normalized": "",
+      "valid": false
+    },
+    {
+      "phrase": "extend carry rebuild notaword wagon chaos rubber student chat mercy universe home",
+      "normalized": "extend carry rebuild notaword wagon chaos rubber student chat mercy universe home",
+      "valid": false
+    },
+    {
+      "phrase": "extend carry rebuild prepare wagon chaos rubber student chat mercy universe zoo",
+      "normalized": "extend carry rebuild prepare wagon chaos rubber student chat mercy universe zoo",
+      "valid": false
+    },
+    {
+      "phrase": "poem turkey afford torch flat library utility obvious annual position stem zero donor claw poem alter entry battle doll skull behave air come",
+      "normalized": "poem turkey afford torch flat library utility obvious annual position stem zero donor claw poem alter entry battle doll skull behave air come",
+      "valid": false
+    },
+    {
+      "phrase": "poem turkey afford torch flat library utility obvious annual position stem zero donor claw poem alter entry battle doll skull behave air come sorry abandon",
+      "normalized": "poem turkey afford torch flat library utility obvious annual position stem zero donor claw poem alter entry battle doll skull behave air come sorry abandon",
+      "valid": false
+    }
+  ],
+  "parseUri": [
+    {
+      "input": "4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3",
+      "ok": true,
+      "value": {
+        "action": "source",
+        "key": "4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3",
+        "kind": "channel",
+        "alias": ""
+      }
+    },
+    {
+      "input": "4282ADCC4AD5BD07D587C56B6C714BA373530D12CF50046B77B4AD31F76462E3",
+      "ok": true,
+      "value": {
+        "action": "source",
+        "key": "4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3",
+        "kind": "channel",
+        "alias": ""
+      }
+    },
+    {
+      "input": "  4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3  ",
+      "ok": true,
+      "value": {
+        "action": "source",
+        "key": "4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3",
+        "kind": "channel",
+        "alias": ""
+      }
+    },
+    {
+      "input": "peartube://channel/4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3",
+      "ok": true,
+      "value": {
+        "action": "source",
+        "key": "4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3",
+        "kind": "channel",
+        "alias": ""
+      }
+    },
+    {
+      "input": "peartube://channel/4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3?name=My%20Channel&foo=bar",
+      "ok": true,
+      "value": {
+        "action": "source",
+        "key": "4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3",
+        "kind": "channel",
+        "alias": "My Channel"
+      }
+    },
+    {
+      "input": "peartube:channel/4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3?alias=plus+space",
+      "ok": true,
+      "value": {
+        "action": "source",
+        "key": "4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3",
+        "kind": "channel",
+        "alias": "plus space"
+      }
+    },
+    {
+      "input": "peartube://tracker/7198a8190771df59f73b80c074b6a191fa07bc5152d2c7d3e06780997b3996e3?name=%E2%9C%93",
+      "ok": true,
+      "value": {
+        "action": "source",
+        "key": "7198a8190771df59f73b80c074b6a191fa07bc5152d2c7d3e06780997b3996e3",
+        "kind": "channel",
+        "alias": "✓"
+      }
+    },
+    {
+      "input": "peartube://add/4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3",
+      "ok": true,
+      "value": {
+        "action": "source",
+        "key": "4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3",
+        "kind": "channel",
+        "alias": ""
+      }
+    },
+    {
+      "input": "peartube://source/4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3?name=0",
+      "ok": true,
+      "value": {
+        "action": "source",
+        "key": "4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3",
+        "kind": "channel",
+        "alias": "0"
+      }
+    },
+    {
+      "input": "peartube://source/4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3?name=",
+      "ok": true,
+      "value": {
+        "action": "source",
+        "key": "4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3",
+        "kind": "channel",
+        "alias": ""
+      }
+    },
+    {
+      "input": "peartube://source/4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3?name=%ZZ",
+      "ok": true,
+      "value": {
+        "action": "source",
+        "key": "4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3",
+        "kind": "channel",
+        "alias": "%ZZ"
+      }
+    },
+    {
+      "input": "peartube://source/4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3?name=a+b",
+      "ok": true,
+      "value": {
+        "action": "source",
+        "key": "4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3",
+        "kind": "channel",
+        "alias": "a b"
+      }
+    },
+    {
+      "input": "peartube://channel/4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3?name=%E2%9C%93+ok",
+      "ok": true,
+      "value": {
+        "action": "source",
+        "key": "4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3",
+        "kind": "channel",
+        "alias": "✓ ok"
+      }
+    },
+    {
+      "input": "peartube://channel/4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3?name=a%26b",
+      "ok": true,
+      "value": {
+        "action": "source",
+        "key": "4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3",
+        "kind": "channel",
+        "alias": "a&b"
+      }
+    },
+    {
+      "input": "peartube://channel/4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3#fragment",
+      "ok": true,
+      "value": {
+        "action": "source",
+        "key": "4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3",
+        "kind": "channel",
+        "alias": ""
+      }
+    },
+    {
+      "input": "peartube://%63hannel/4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3",
+      "ok": false,
+      "error": "Invalid PearTube URI or 64-hex key"
+    },
+    {
+      "input": "peartube://watch/4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3:1:2:0:1048576?title=Hello%20World",
+      "ok": true,
+      "value": {
+        "action": "watch",
+        "sourceKey": null,
+        "sourceKind": "channel",
+        "entry": {
+          "type": "announce",
+          "id": "clip:4282adcc4ad5",
+          "title": "Hello World",
+          "size": 1048576,
+          "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "blobs": "4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3",
+          "blob": {
+            "blockOffset": 1,
+            "blockLength": 2,
+            "byteOffset": 0,
+            "byteLength": 1048576
+          }
+        }
+      }
+    },
+    {
+      "input": "peartube://watch/4282ADCC4AD5BD07D587C56B6C714BA373530D12CF50046B77B4AD31F76462E3:0:1:0:0?id=clip:abc&title=Hi&sha256=7198a8190771df59f73b80c074b6a191fa07bc5152d2c7d3e06780997b3996e3",
+      "ok": true,
+      "value": {
+        "action": "watch",
+        "sourceKey": null,
+        "sourceKind": "channel",
+        "entry": {
+          "type": "announce",
+          "id": "clip:abc",
+          "title": "Hi",
+          "size": 0,
+          "sha256": "7198a8190771df59f73b80c074b6a191fa07bc5152d2c7d3e06780997b3996e3",
+          "blobs": "4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3",
+          "blob": {
+            "blockOffset": 0,
+            "blockLength": 1,
+            "byteOffset": 0,
+            "byteLength": 0
+          }
+        }
+      }
+    },
+    {
+      "input": "peartube://watch/4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3:0:1:0:0?id=series:show:s01e02&source=7198a8190771df59f73b80c074b6a191fa07bc5152d2c7d3e06780997b3996e3&kind=channel&title=Ep",
+      "ok": true,
+      "value": {
+        "action": "watch",
+        "sourceKey": "7198a8190771df59f73b80c074b6a191fa07bc5152d2c7d3e06780997b3996e3",
+        "sourceKind": "channel",
+        "entry": {
+          "type": "announce",
+          "id": "series:show:s01e02",
+          "title": "Ep",
+          "size": 0,
+          "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "blobs": "4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3",
+          "blob": {
+            "blockOffset": 0,
+            "blockLength": 1,
+            "byteOffset": 0,
+            "byteLength": 0
+          }
+        }
+      }
+    },
+    {
+      "input": "peartube://watch/4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3:0:1:0:0?source=7198a8190771df59f73b80c074b6a191fa07bc5152d2c7d3e06780997b3996e3&kind=tracker",
+      "ok": true,
+      "value": {
+        "action": "watch",
+        "sourceKey": null,
+        "sourceKind": "channel",
+        "entry": {
+          "type": "announce",
+          "id": "clip:4282adcc4ad5",
+          "title": "clip:4282adcc4ad5",
+          "size": 0,
+          "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "blobs": "4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3",
+          "blob": {
+            "blockOffset": 0,
+            "blockLength": 1,
+            "byteOffset": 0,
+            "byteLength": 0
+          }
+        }
+      }
+    },
+    {
+      "input": "peartube://watch/4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3:0:1:0:0?sha256=zzz&title=",
+      "ok": true,
+      "value": {
+        "action": "watch",
+        "sourceKey": null,
+        "sourceKind": "channel",
+        "entry": {
+          "type": "announce",
+          "id": "clip:zzz",
+          "title": "clip:zzz",
+          "size": 0,
+          "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "blobs": "4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3",
+          "blob": {
+            "blockOffset": 0,
+            "blockLength": 1,
+            "byteOffset": 0,
+            "byteLength": 0
+          }
+        }
+      }
+    },
+    {
+      "input": "peartube://watch/4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3:0:1:0:0?id=BAD",
+      "ok": true,
+      "value": {
+        "action": "watch",
+        "sourceKey": null,
+        "sourceKind": "channel",
+        "entry": {
+          "type": "announce",
+          "id": "clip:4282adcc4ad5",
+          "title": "clip:4282adcc4ad5",
+          "size": 0,
+          "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "blobs": "4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3",
+          "blob": {
+            "blockOffset": 0,
+            "blockLength": 1,
+            "byteOffset": 0,
+            "byteLength": 0
+          }
+        }
+      }
+    },
+    {
+      "input": "peartube://watch/4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3:0:1:0:0?sha256=4282ADCC4AD5BD07D587C56B6C714BA373530D12CF50046B77B4AD31F76462E3",
+      "ok": true,
+      "value": {
+        "action": "watch",
+        "sourceKey": null,
+        "sourceKind": "channel",
+        "entry": {
+          "type": "announce",
+          "id": "clip:4282adcc4ad5",
+          "title": "clip:4282adcc4ad5",
+          "size": 0,
+          "sha256": "4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3",
+          "blobs": "4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3",
+          "blob": {
+            "blockOffset": 0,
+            "blockLength": 1,
+            "byteOffset": 0,
+            "byteLength": 0
+          }
+        }
+      }
+    },
+    {
+      "input": "peartube://watch/4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3:0:0:0:0",
+      "ok": false,
+      "error": "Malformed peartube://watch block bounds"
+    },
+    {
+      "input": "peartube://watch/4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3:-1:1:0:0",
+      "ok": false,
+      "error": "Malformed peartube://watch block bounds"
+    },
+    {
+      "input": "peartube://watch/4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3:1:2:0",
+      "ok": false,
+      "error": "Malformed peartube://watch blob pointer"
+    },
+    {
+      "input": "peartube://watch/4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3:1:2:0:1:2",
+      "ok": false,
+      "error": "Malformed peartube://watch blob pointer"
+    },
+    {
+      "input": "peartube://watch/xyz:1:2:0:1",
+      "ok": false,
+      "error": "Malformed peartube://watch blob pointer"
+    },
+    {
+      "input": "peartube://watch/4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3:1:2:0:1.5",
+      "ok": false,
+      "error": "Malformed peartube://watch block bounds"
+    },
+    {
+      "input": "peartube://watch/4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3:1:2:0:1e20",
+      "ok": false,
+      "error": "Malformed peartube://watch block bounds"
+    },
+    {
+      "input": "peartube://watch/4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3:::1:2",
+      "ok": false,
+      "error": "Malformed peartube://watch block bounds"
+    },
+    {
+      "input": "peartube://watch/4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3:1:2:0:3",
+      "ok": true,
+      "value": {
+        "action": "watch",
+        "sourceKey": null,
+        "sourceKind": "channel",
+        "entry": {
+          "type": "announce",
+          "id": "clip:4282adcc4ad5",
+          "title": "clip:4282adcc4ad5",
+          "size": 3,
+          "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "blobs": "4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3",
+          "blob": {
+            "blockOffset": 1,
+            "blockLength": 2,
+            "byteOffset": 0,
+            "byteLength": 3
+          }
+        }
+      }
+    },
+    {
+      "input": "peartube://watch/4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3:0:1:0:0?title=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "ok": true,
+      "value": {
+        "action": "watch",
+        "sourceKey": null,
+        "sourceKind": "channel",
+        "entry": {
+          "type": "announce",
+          "id": "clip:4282adcc4ad5",
+          "title": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "size": 0,
+          "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "blobs": "4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3",
+          "blob": {
+            "blockOffset": 0,
+            "blockLength": 1,
+            "byteOffset": 0,
+            "byteLength": 0
+          }
+        }
+      }
+    },
+    {
+      "input": "peartube://watch/4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3:0:1:0:0?title=😀aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "ok": true,
+      "value": {
+        "action": "watch",
+        "sourceKey": null,
+        "sourceKind": "channel",
+        "entry": {
+          "type": "announce",
+          "id": "clip:4282adcc4ad5",
+          "title": "😀aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "size": 0,
+          "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "blobs": "4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3",
+          "blob": {
+            "blockOffset": 0,
+            "blockLength": 1,
+            "byteOffset": 0,
+            "byteLength": 0
+          }
+        }
+      }
+    },
+    {
+      "input": "peartube://watch/4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3:0:1:0:0?title=%F0%9F%98%80",
+      "ok": true,
+      "value": {
+        "action": "watch",
+        "sourceKey": null,
+        "sourceKind": "channel",
+        "entry": {
+          "type": "announce",
+          "id": "clip:4282adcc4ad5",
+          "title": "😀",
+          "size": 0,
+          "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "blobs": "4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3",
+          "blob": {
+            "blockOffset": 0,
+            "blockLength": 1,
+            "byteOffset": 0,
+            "byteLength": 0
+          }
+        }
+      }
+    },
+    {
+      "input": "peartube://watch/4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3:9007199254740992:1:0:0",
+      "ok": false,
+      "error": "Malformed peartube://watch block bounds"
+    },
+    {
+      "input": "peartube://watch/4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3:0:1:0:0?id=clip:abc&title=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb😀",
+      "ok": true,
+      "value": {
+        "action": "watch",
+        "sourceKey": null,
+        "sourceKind": "channel",
+        "entry": {
+          "type": "announce",
+          "id": "clip:abc",
+          "title": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb�",
+          "size": 0,
+          "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "blobs": "4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3",
+          "blob": {
+            "blockOffset": 0,
+            "blockLength": 1,
+            "byteOffset": 0,
+            "byteLength": 0
+          }
+        }
+      }
+    },
+    {
+      "input": "PEARTUBE://WATCH/4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3:0:1:0:0?ID=clip:abc",
+      "ok": true,
+      "value": {
+        "action": "watch",
+        "sourceKey": null,
+        "sourceKind": "channel",
+        "entry": {
+          "type": "announce",
+          "id": "clip:4282adcc4ad5",
+          "title": "clip:4282adcc4ad5",
+          "size": 0,
+          "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "blobs": "4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3",
+          "blob": {
+            "blockOffset": 0,
+            "blockLength": 1,
+            "byteOffset": 0,
+            "byteLength": 0
+          }
+        }
+      }
+    },
+    {
+      "input": "peartube://access/4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3:1:7198a8190771df59f73b80c074b6a191fa07bc5152d2c7d3e06780997b3996e3",
+      "ok": true,
+      "value": {
+        "action": "access",
+        "channel": "4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3",
+        "epoch": 1,
+        "epochKey": "7198a8190771df59f73b80c074b6a191fa07bc5152d2c7d3e06780997b3996e3",
+        "alias": ""
+      }
+    },
+    {
+      "input": "peartube://access/4282ADCC4AD5BD07D587C56B6C714BA373530D12CF50046B77B4AD31F76462E3:0x10:7198a8190771df59f73b80c074b6a191fa07bc5152d2c7d3e06780997b3996e3",
+      "ok": true,
+      "value": {
+        "action": "access",
+        "channel": "4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3",
+        "epoch": 16,
+        "epochKey": "7198a8190771df59f73b80c074b6a191fa07bc5152d2c7d3e06780997b3996e3",
+        "alias": ""
+      }
+    },
+    {
+      "input": "peartube://access/4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3:1e3:7198a8190771df59f73b80c074b6a191fa07bc5152d2c7d3e06780997b3996e3",
+      "ok": true,
+      "value": {
+        "action": "access",
+        "channel": "4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3",
+        "epoch": 1000,
+        "epochKey": "7198a8190771df59f73b80c074b6a191fa07bc5152d2c7d3e06780997b3996e3",
+        "alias": ""
+      }
+    },
+    {
+      "input": "peartube://access/4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3:9007199254740991:7198a8190771df59f73b80c074b6a191fa07bc5152d2c7d3e06780997b3996e3",
+      "ok": true,
+      "value": {
+        "action": "access",
+        "channel": "4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3",
+        "epoch": 9007199254740991,
+        "epochKey": "7198a8190771df59f73b80c074b6a191fa07bc5152d2c7d3e06780997b3996e3",
+        "alias": ""
+      }
+    },
+    {
+      "input": "peartube://access/4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3:9007199254740992:7198a8190771df59f73b80c074b6a191fa07bc5152d2c7d3e06780997b3996e3",
+      "ok": false,
+      "error": "Malformed peartube://access epoch"
+    },
+    {
+      "input": "peartube://access/4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3:1:4282ADCC4AD5BD07D587C56B6C714BA373530D12CF50046B77B4AD31F76462E3",
+      "ok": true,
+      "value": {
+        "action": "access",
+        "channel": "4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3",
+        "epoch": 1,
+        "epochKey": "4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3",
+        "alias": ""
+      }
+    },
+    {
+      "input": "peartube://access/4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3:0:7198a8190771df59f73b80c074b6a191fa07bc5152d2c7d3e06780997b3996e3",
+      "ok": false,
+      "error": "Malformed peartube://access epoch"
+    },
+    {
+      "input": "peartube://access/4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3:1.5:7198a8190771df59f73b80c074b6a191fa07bc5152d2c7d3e06780997b3996e3",
+      "ok": false,
+      "error": "Malformed peartube://access epoch"
+    },
+    {
+      "input": "peartube://access/4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3:1:7198a8190771df59f73b80c074b6a191fa07bc5152d2c7d3e06780997b3996e3:extra",
+      "ok": false,
+      "error": "Malformed peartube://access pass"
+    },
+    {
+      "input": "peartube://access/4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3:1",
+      "ok": false,
+      "error": "Malformed peartube://access pass"
+    },
+    {
+      "input": "peartube://access/xyz:1:7198a8190771df59f73b80c074b6a191fa07bc5152d2c7d3e06780997b3996e3",
+      "ok": false,
+      "error": "Malformed peartube://access pass"
+    },
+    {
+      "input": "peartube://receiver/4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3",
+      "ok": true,
+      "value": {
+        "action": "receiver",
+        "publicKey": "4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3",
+        "deviceId": "",
+        "host": "",
+        "port": 0,
+        "token": "",
+        "name": "Paired TV",
+        "p2p": true
+      }
+    },
+    {
+      "input": "peartube://receiver/4282ADCC4AD5BD07D587C56B6C714BA373530D12CF50046B77B4AD31F76462E3?name=TV&token=abc&p2p=0",
+      "ok": true,
+      "value": {
+        "action": "receiver",
+        "publicKey": "4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3",
+        "deviceId": "",
+        "host": "",
+        "port": 0,
+        "token": "abc",
+        "name": "TV",
+        "p2p": true
+      }
+    },
+    {
+      "input": "peartube://receiver/4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3?id=x",
+      "ok": true,
+      "value": {
+        "action": "receiver",
+        "publicKey": "4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3",
+        "deviceId": "x",
+        "host": "",
+        "port": 0,
+        "token": "",
+        "name": "Paired TV",
+        "p2p": true
+      }
+    },
+    {
+      "input": "peartube://receiver/4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3?name=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "ok": true,
+      "value": {
+        "action": "receiver",
+        "publicKey": "4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3",
+        "deviceId": "",
+        "host": "",
+        "port": 0,
+        "token": "",
+        "name": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "p2p": true
+      }
+    },
+    {
+      "input": "peartube://receiver/living-room-tv?name=TV",
+      "ok": true,
+      "value": {
+        "action": "receiver",
+        "publicKey": "",
+        "deviceId": "living-room-tv",
+        "host": "",
+        "port": 0,
+        "token": "",
+        "name": "TV",
+        "p2p": false
+      }
+    },
+    {
+      "input": "peartube://receiver/xyz?id=abc",
+      "ok": true,
+      "value": {
+        "action": "receiver",
+        "publicKey": "",
+        "deviceId": "xyz",
+        "host": "",
+        "port": 0,
+        "token": "",
+        "name": "Paired TV",
+        "p2p": false
+      }
+    },
+    {
+      "input": "peartube://receiver/!!!?id=abc",
+      "ok": false,
+      "error": "Receiver URI needs a 64-hex key, device ID, or host:port"
+    },
+    {
+      "input": "peartube://receiver/living%20room",
+      "ok": true,
+      "value": {
+        "action": "receiver",
+        "publicKey": "",
+        "deviceId": "living20room",
+        "host": "",
+        "port": 0,
+        "token": "",
+        "name": "Paired TV",
+        "p2p": false
+      }
+    },
+    {
+      "input": "peartube://receiver/DEVICE_42",
+      "ok": true,
+      "value": {
+        "action": "receiver",
+        "publicKey": "",
+        "deviceId": "device_42",
+        "host": "",
+        "port": 0,
+        "token": "",
+        "name": "Paired TV",
+        "p2p": false
+      }
+    },
+    {
+      "input": "peartube://receiver/xyz",
+      "ok": true,
+      "value": {
+        "action": "receiver",
+        "publicKey": "",
+        "deviceId": "xyz",
+        "host": "",
+        "port": 0,
+        "token": "",
+        "name": "Paired TV",
+        "p2p": false
+      }
+    },
+    {
+      "input": "peartube://receiver/---",
+      "ok": true,
+      "value": {
+        "action": "receiver",
+        "publicKey": "",
+        "deviceId": "---",
+        "host": "",
+        "port": 0,
+        "token": "",
+        "name": "Paired TV",
+        "p2p": false
+      }
+    },
+    {
+      "input": "peartube://receiver/!!!",
+      "ok": false,
+      "error": "Receiver URI needs a 64-hex key, device ID, or host:port"
+    },
+    {
+      "input": "peartube://receiver/10.0.0.5:8176",
+      "ok": true,
+      "value": {
+        "action": "receiver",
+        "publicKey": "",
+        "deviceId": "",
+        "host": "10.0.0.5",
+        "port": 8176,
+        "token": "",
+        "name": "Paired TV",
+        "p2p": false
+      }
+    },
+    {
+      "input": "peartube://receiver/10.0.0.5:8176?host=real.host&port=9000",
+      "ok": true,
+      "value": {
+        "action": "receiver",
+        "publicKey": "",
+        "deviceId": "",
+        "host": "real.host",
+        "port": 9000,
+        "token": "",
+        "name": "Paired TV",
+        "p2p": false
+      }
+    },
+    {
+      "input": "peartube://receiver/10.0.0.5:8176?port=2.5",
+      "ok": true,
+      "value": {
+        "action": "receiver",
+        "publicKey": "",
+        "deviceId": "",
+        "host": "10.0.0.5",
+        "port": 2.5,
+        "token": "",
+        "name": "Paired TV",
+        "p2p": false
+      }
+    },
+    {
+      "input": "peartube://receiver/10.0.0.5?port=Infinity",
+      "ok": true,
+      "value": {
+        "action": "receiver",
+        "publicKey": "",
+        "deviceId": "10005",
+        "host": "",
+        "port": null,
+        "token": "",
+        "name": "Paired TV",
+        "p2p": false
+      }
+    },
+    {
+      "input": "peartube://receiver/10.0.0.5:8176?port=0x10",
+      "ok": true,
+      "value": {
+        "action": "receiver",
+        "publicKey": "",
+        "deviceId": "",
+        "host": "10.0.0.5",
+        "port": 16,
+        "token": "",
+        "name": "Paired TV",
+        "p2p": false
+      }
+    },
+    {
+      "input": "peartube://receiver/host:1?port=-5",
+      "ok": false,
+      "error": "Receiver URI needs a 64-hex key, device ID, or host:port"
+    },
+    {
+      "input": "peartube://receiver/host:1?host=&port=2",
+      "ok": true,
+      "value": {
+        "action": "receiver",
+        "publicKey": "",
+        "deviceId": "",
+        "host": "host",
+        "port": 2,
+        "token": "",
+        "name": "Paired TV",
+        "p2p": false
+      }
+    },
+    {
+      "input": "peartube://receiver/device?p2p=1&port=0",
+      "ok": true,
+      "value": {
+        "action": "receiver",
+        "publicKey": "",
+        "deviceId": "device",
+        "host": "",
+        "port": 0,
+        "token": "",
+        "name": "Paired TV",
+        "p2p": true
+      }
+    },
+    {
+      "input": "peartube://receiver/?pk=4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3",
+      "ok": false,
+      "error": "Invalid PearTube URI or 64-hex key"
+    },
+    {
+      "input": "peartube://receiver/",
+      "ok": false,
+      "error": "Invalid PearTube URI or 64-hex key"
+    },
+    {
+      "input": "peartube://cast/device?name=Living%20Room",
+      "ok": true,
+      "value": {
+        "action": "receiver",
+        "publicKey": "",
+        "deviceId": "device",
+        "host": "",
+        "port": 0,
+        "token": "",
+        "name": "Living Room",
+        "p2p": false
+      }
+    },
+    {
+      "input": "peartube://nope/4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3",
+      "ok": false,
+      "error": "Unsupported PearTube URI action: nope"
+    },
+    {
+      "input": "peartube:4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3",
+      "ok": false,
+      "error": "Invalid PearTube URI or 64-hex key"
+    },
+    {
+      "input": "",
+      "ok": false,
+      "error": "Invalid PearTube URI or 64-hex key"
+    },
+    {
+      "input": "   ",
+      "ok": false,
+      "error": "Invalid PearTube URI or 64-hex key"
+    },
+    {
+      "input": "peartube://channel/4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e",
+      "ok": false,
+      "error": "Channel key must be 64 hex characters"
+    }
+  ],
+  "formatWatchUri": [
+    {
+      "entry": {
+        "id": "clip:abc",
+        "title": "Hello World",
+        "blobs": "4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3",
+        "blob": {
+          "blockOffset": 0,
+          "blockLength": 1,
+          "byteOffset": 0,
+          "byteLength": 10
+        }
+      },
+      "source": "",
+      "sourceKind": "",
+      "value": "peartube://watch/4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3:0:1:0:10?id=clip%3Aabc&title=Hello%20World"
+    },
+    {
+      "entry": {
+        "id": "clip:abc",
+        "title": "Hello World",
+        "sha256": "7198a8190771df59f73b80c074b6a191fa07bc5152d2c7d3e06780997b3996e3",
+        "blobs": "4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3",
+        "blob": {
+          "blockOffset": 0,
+          "blockLength": 1,
+          "byteOffset": 0,
+          "byteLength": 10
+        }
+      },
+      "source": "4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3",
+      "sourceKind": "channel",
+      "value": "peartube://watch/4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3:0:1:0:10?id=clip%3Aabc&title=Hello%20World&sha256=7198a8190771df59f73b80c074b6a191fa07bc5152d2c7d3e06780997b3996e3&source=4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3&kind=channel"
+    },
+    {
+      "entry": {
+        "id": "clip:abc",
+        "title": "Hello World",
+        "sha256": "4282ADCC4AD5BD07D587C56B6C714BA373530D12CF50046B77B4AD31F76462E3",
+        "blobs": "4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3",
+        "blob": {
+          "blockOffset": 0,
+          "blockLength": 1,
+          "byteOffset": 0,
+          "byteLength": 10
+        }
+      },
+      "source": "4282ADCC4AD5BD07D587C56B6C714BA373530D12CF50046B77B4AD31F76462E3",
+      "sourceKind": "channel",
+      "value": "peartube://watch/4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3:0:1:0:10?id=clip%3Aabc&title=Hello%20World"
+    },
+    {
+      "entry": {
+        "id": "clip:abc",
+        "title": "",
+        "blobs": "4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3",
+        "blob": {
+          "blockOffset": 0,
+          "blockLength": 1,
+          "byteOffset": 0,
+          "byteLength": 10
+        }
+      },
+      "source": "",
+      "sourceKind": "",
+      "value": "peartube://watch/4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3:0:1:0:10?id=clip%3Aabc&title=clip%3Aabc"
+    },
+    {
+      "entry": {
+        "id": "clip:abc",
+        "title": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "blobs": "4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3",
+        "blob": {
+          "blockOffset": 0,
+          "blockLength": 1,
+          "byteOffset": 0,
+          "byteLength": 10
+        }
+      },
+      "source": "",
+      "sourceKind": "",
+      "value": "peartube://watch/4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3:0:1:0:10?id=clip%3Aabc&title=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    {
+      "entry": {
+        "id": "clip:abc",
+        "title": "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀",
+        "blobs": "4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3",
+        "blob": {
+          "blockOffset": 0,
+          "blockLength": 1,
+          "byteOffset": 0,
+          "byteLength": 10
+        }
+      },
+      "source": "",
+      "sourceKind": "",
+      "value": "peartube://watch/4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3:0:1:0:10?id=clip%3Aabc&title=%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80%F0%9F%98%80"
+    },
+    {
+      "entry": {
+        "id": "clip:abc",
+        "title": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa😀",
+        "blobs": "4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3",
+        "blob": {
+          "blockOffset": 0,
+          "blockLength": 1,
+          "byteOffset": 0,
+          "byteLength": 10
+        }
+      },
+      "source": "",
+      "sourceKind": "",
+      "value": "peartube://watch/4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3:0:1:0:10?id=clip%3Aabc&title=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa%EF%BF%BD"
+    },
+    {
+      "entry": {
+        "id": "id with space&x=1",
+        "title": "q&a",
+        "blobs": "4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3",
+        "blob": {
+          "blockOffset": 0,
+          "blockLength": 1,
+          "byteOffset": 0,
+          "byteLength": 10
+        }
+      },
+      "source": "",
+      "sourceKind": "",
+      "value": "peartube://watch/4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3:0:1:0:10?id=id%20with%20space%26x%3D1&title=q%26a"
+    },
+    {
+      "entry": {
+        "id": "clip:abc",
+        "title": "x",
+        "blobs": "4282ADCC4AD5BD07D587C56B6C714BA373530D12CF50046B77B4AD31F76462E3",
+        "blob": {
+          "blockOffset": 0,
+          "blockLength": 1,
+          "byteOffset": 0,
+          "byteLength": 10
+        }
+      },
+      "source": "",
+      "sourceKind": "",
+      "value": "peartube://watch/4282ADCC4AD5BD07D587C56B6C714BA373530D12CF50046B77B4AD31F76462E3:0:1:0:10?id=clip%3Aabc&title=x"
+    },
+    {
+      "entry": {
+        "id": "clip:abc",
+        "title": "x",
+        "sha256": "",
+        "blobs": "4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3",
+        "blob": {
+          "blockOffset": 0,
+          "blockLength": 1,
+          "byteOffset": 0,
+          "byteLength": 10
+        }
+      },
+      "source": "",
+      "sourceKind": "",
+      "value": "peartube://watch/4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3:0:1:0:10?id=clip%3Aabc&title=x"
+    },
+    {
+      "entry": {
+        "id": "clip:abc",
+        "title": "x",
+        "source": "4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3",
+        "blobs": "4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3",
+        "blob": {
+          "blockOffset": 0,
+          "blockLength": 1,
+          "byteOffset": 0,
+          "byteLength": 10
+        }
+      },
+      "source": "4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3",
+      "sourceKind": "tracker",
+      "value": "peartube://watch/4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3:0:1:0:10?id=clip%3Aabc&title=x"
+    }
+  ],
+  "formatReceiverUri": [
+    {
+      "input": {},
+      "value": "peartube://receiver/?p2p=0"
+    },
+    {
+      "input": {
+        "publicKey": "4282ADCC4AD5BD07D587C56B6C714BA373530D12CF50046B77B4AD31F76462E3"
+      },
+      "value": "peartube://receiver/4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3?p2p=0"
+    },
+    {
+      "input": {
+        "deviceId": "Living-Room"
+      },
+      "value": "peartube://receiver/living-room?p2p=0"
+    },
+    {
+      "input": {
+        "host": "10.0.0.5",
+        "port": 8176
+      },
+      "value": "peartube://receiver/10.0.0.5:8176?host=10.0.0.5&port=8176&p2p=0"
+    },
+    {
+      "input": {
+        "publicKey": "4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3",
+        "deviceId": "pad",
+        "host": "x",
+        "port": 1,
+        "name": "TV",
+        "token": "a b&c",
+        "p2p": true
+      },
+      "value": "peartube://receiver/4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3?name=TV&token=a%20b%26c&host=x&port=1&p2p=1"
+    },
+    {
+      "input": {
+        "name": "  Living   Room  "
+      },
+      "value": "peartube://receiver/?name=Living%20%20%20Room&p2p=0"
+    },
+    {
+      "input": {
+        "name": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      },
+      "value": "peartube://receiver/?name=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx&p2p=0"
+    },
+    {
+      "input": {
+        "port": -5
+      },
+      "value": "peartube://receiver/?p2p=0"
+    },
+    {
+      "input": {
+        "port": 2.5
+      },
+      "value": "peartube://receiver/?port=2.5&p2p=0"
+    },
+    {
+      "input": {
+        "host": "Host",
+        "port": 0
+      },
+      "value": "peartube://receiver/?host=Host&p2p=0"
+    },
+    {
+      "input": {
+        "deviceId": "Pad",
+        "p2p": true
+      },
+      "value": "peartube://receiver/pad?p2p=1"
+    }
+  ],
+  "decodeOp": [
+    {
+      "input": "{\"type\":\"init\"}",
+      "value": {
+        "type": "init"
+      }
+    },
+    {
+      "input": "{\"type\":\"init\",\"owner\":\"4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3\"}",
+      "value": {
+        "type": "init",
+        "owner": "4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3"
+      }
+    },
+    {
+      "input": "{\"type\":\"init\",\"owner\":\"4282ADCC4AD5BD07D587C56B6C714BA373530D12CF50046B77B4AD31F76462E3\"}",
+      "value": null
+    },
+    {
+      "input": "{\"type\":\"init\",\"owner\":\"zz\"}",
+      "value": null
+    },
+    {
+      "input": "{\"type\":\"init\",\"epoch\":1}",
+      "value": {
+        "type": "init",
+        "epoch": 1
+      }
+    },
+    {
+      "input": "{\"type\":\"init\",\"epoch\":0}",
+      "value": null
+    },
+    {
+      "input": "{\"type\":\"init\",\"epoch\":1.0}",
+      "value": {
+        "type": "init",
+        "epoch": 1
+      }
+    },
+    {
+      "input": "{\"type\":\"init\",\"epoch\":1e3}",
+      "value": {
+        "type": "init",
+        "epoch": 1000
+      }
+    },
+    {
+      "input": "{\"type\":\"init\",\"epoch\":1e400}",
+      "value": null
+    },
+    {
+      "input": "{\"type\":\"init\",\"epoch\":\"1\"}",
+      "value": null
+    },
+    {
+      "input": "{\"type\":\"init\",\"owner\":null}",
+      "value": null
+    },
+    {
+      "input": "{\"type\":\"owner\",\"owner\":\"4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3\"}",
+      "value": {
+        "type": "owner",
+        "owner": "4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3"
+      }
+    },
+    {
+      "input": "{\"type\":\"owner\"}",
+      "value": null
+    },
+    {
+      "input": "{\"type\":\"epoch\",\"epoch\":3}",
+      "value": {
+        "type": "epoch",
+        "epoch": 3
+      }
+    },
+    {
+      "input": "{\"type\":\"epoch\",\"epoch\":1.5}",
+      "value": null
+    },
+    {
+      "input": "{\"type\":\"epoch\",\"epoch\":9007199254740991}",
+      "value": {
+        "type": "epoch",
+        "epoch": 9007199254740991
+      }
+    },
+    {
+      "input": "{\"type\":\"epoch\",\"epoch\":9007199254740992}",
+      "value": null
+    },
+    {
+      "input": "{\"type\":\"claim\",\"sig\":\"f33d165de10755f94e6db3bf2f5456a4668df3802fcfdff17593bc19600845f1\"}",
+      "value": null
+    },
+    {
+      "input": "{\"type\":\"claim\",\"sig\":\"f33d165de10755f94e6db3bf2f5456a4668df3802fcfdff17593bc19600845f1\",\"claim\":\"f33d165de10755f94e6db3bf2f5456a4668df3802fcfdff17593bc19600845f1\"}",
+      "value": null
+    },
+    {
+      "input": "{\"type\":\"claim\",\"sig\":\"abc\"}",
+      "value": null
+    },
+    {
+      "input": "{\"type\":\"claim\",\"claim\":\"zzz\"}",
+      "value": null
+    },
+    {
+      "input": "{\"type\":\"grant\",\"writer\":\"4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3\",\"role\":\"mod\"}",
+      "value": {
+        "type": "grant",
+        "writer": "4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3",
+        "role": "mod"
+      }
+    },
+    {
+      "input": "{\"type\":\"grant\",\"writer\":\"4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3\"}",
+      "value": {
+        "type": "grant",
+        "writer": "4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3"
+      }
+    },
+    {
+      "input": "{\"type\":\"grant\",\"writer\":\"4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3\",\"role\":\"\"}",
+      "value": {
+        "type": "grant",
+        "writer": "4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3",
+        "role": ""
+      }
+    },
+    {
+      "input": "{\"type\":\"grant\",\"writer\":\"4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3\",\"role\":\"admin\"}",
+      "value": null
+    },
+    {
+      "input": "{\"type\":\"grant\",\"writer\":\"4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3\",\"role\":0}",
+      "value": {
+        "type": "grant",
+        "writer": "4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3",
+        "role": 0
+      }
+    },
+    {
+      "input": "{\"type\":\"grant\",\"writer\":\"4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3\",\"role\":1}",
+      "value": null
+    },
+    {
+      "input": "{\"type\":\"revoke\",\"writer\":\"4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3\"}",
+      "value": {
+        "type": "revoke",
+        "writer": "4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3"
+      }
+    },
+    {
+      "input": "{\"type\":\"revoke\",\"writer\":\"4282ADCC4AD5BD07D587C56B6C714BA373530D12CF50046B77B4AD31F76462E3\"}",
+      "value": null
+    },
+    {
+      "input": "{\"type\":\"remove\",\"key\":\"writer/x\"}",
+      "value": {
+        "type": "remove",
+        "key": "writer/x"
+      }
+    },
+    {
+      "input": "{\"type\":\"remove\",\"key\":5}",
+      "value": null
+    },
+    {
+      "input": "{\"type\":\"source\",\"sourceKey\":\"4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3\",\"kind\":\"channel\",\"title\":\"T\"}",
+      "value": {
+        "type": "source",
+        "sourceKey": "4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3",
+        "kind": "channel",
+        "title": "T"
+      }
+    },
+    {
+      "input": "{\"type\":\"source\",\"sourceKey\":\"4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3\",\"kind\":\"tracker\",\"title\":\"T\"}",
+      "value": {
+        "type": "source",
+        "sourceKey": "4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3",
+        "kind": "tracker",
+        "title": "T"
+      }
+    },
+    {
+      "input": "{\"type\":\"source\",\"sourceKey\":\"4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3\",\"kind\":\"bad\",\"title\":\"T\"}",
+      "value": null
+    },
+    {
+      "input": "{\"type\":\"source\",\"sourceKey\":\"4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3\",\"kind\":\"channel\",\"title\":\"\"}",
+      "value": null
+    },
+    {
+      "input": "{\"type\":\"source\",\"sourceKey\":\"4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3\",\"kind\":\"channel\",\"title\":\"tttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttt\"}",
+      "value": {
+        "type": "source",
+        "sourceKey": "4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3",
+        "kind": "channel",
+        "title": "tttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttt"
+      }
+    },
+    {
+      "input": "{\"type\":\"source\",\"sourceKey\":\"4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3\",\"kind\":\"channel\",\"title\":\"ttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttt\"}",
+      "value": null
+    },
+    {
+      "input": "{\"type\":\"announce\",\"id\":\"clip:abc\",\"title\":\"Title\",\"size\":10,\"sha256\":\"4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3\",\"blobs\":\"7198a8190771df59f73b80c074b6a191fa07bc5152d2c7d3e06780997b3996e3\",\"blob\":{\"blockOffset\":0,\"blockLength\":1,\"byteOffset\":0,\"byteLength\":10}}",
+      "value": {
+        "type": "announce",
+        "id": "clip:abc",
+        "title": "Title",
+        "size": 10,
+        "sha256": "4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3",
+        "blobs": "7198a8190771df59f73b80c074b6a191fa07bc5152d2c7d3e06780997b3996e3",
+        "blob": {
+          "blockOffset": 0,
+          "blockLength": 1,
+          "byteOffset": 0,
+          "byteLength": 10
+        }
+      }
+    },
+    {
+      "input": "{\"type\":\"announce\",\"id\":\"clip:abc\",\"title\":\"Title\",\"size\":10,\"sha256\":\"4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3\",\"blobs\":\"7198a8190771df59f73b80c074b6a191fa07bc5152d2c7d3e06780997b3996e3\",\"blob\":{\"blockOffset\":0,\"blockLength\":1,\"byteOffset\":0,\"byteLength\":10},\"epoch\":2,\"wrappedKey\":\"216433330c87d3424f41d3872edb9d5f0ddc50098b1782a977b3f1e76487d6e5216433330c87d3424f41d3872edb9d5f0ddc50098b1782a977b3f1e76487d6e5216433330c87d342\"}",
+      "value": {
+        "type": "announce",
+        "id": "clip:abc",
+        "title": "Title",
+        "size": 10,
+        "sha256": "4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3",
+        "blobs": "7198a8190771df59f73b80c074b6a191fa07bc5152d2c7d3e06780997b3996e3",
+        "blob": {
+          "blockOffset": 0,
+          "blockLength": 1,
+          "byteOffset": 0,
+          "byteLength": 10
+        },
+        "epoch": 2,
+        "wrappedKey": "216433330c87d3424f41d3872edb9d5f0ddc50098b1782a977b3f1e76487d6e5216433330c87d3424f41d3872edb9d5f0ddc50098b1782a977b3f1e76487d6e5216433330c87d342"
+      }
+    },
+    {
+      "input": "{\"type\":\"announce\",\"id\":\"clip:abc\",\"title\":\"Title\",\"size\":10,\"sha256\":\"4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3\",\"blobs\":\"7198a8190771df59f73b80c074b6a191fa07bc5152d2c7d3e06780997b3996e3\"}",
+      "value": null
+    },
+    {
+      "input": "{\"type\":\"announce\",\"id\":\"clip:abc\",\"title\":\"Title\",\"size\":10,\"sha256\":\"4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3\",\"blobs\":\"7198a8190771df59f73b80c074b6a191fa07bc5152d2c7d3e06780997b3996e3\",\"blob\":{\"blockOffset\":0,\"blockLength\":1.5,\"byteOffset\":0,\"byteLength\":10}}",
+      "value": null
+    },
+    {
+      "input": "{\"type\":\"announce\",\"id\":\"clip:abc\",\"title\":\"Title\",\"size\":10,\"sha256\":\"4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3\",\"blobs\":\"7198a8190771df59f73b80c074b6a191fa07bc5152d2c7d3e06780997b3996e3\",\"blob\":null}",
+      "value": null
+    },
+    {
+      "input": "{\"type\":\"announce\",\"id\":\"clip:abc\",\"title\":\"Title\",\"size\":-1,\"sha256\":\"4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3\",\"blobs\":\"7198a8190771df59f73b80c074b6a191fa07bc5152d2c7d3e06780997b3996e3\",\"blob\":{\"blockOffset\":0,\"blockLength\":1,\"byteOffset\":0,\"byteLength\":10}}",
+      "value": null
+    },
+    {
+      "input": "{\"type\":\"announce\",\"id\":\"clip:abc\",\"title\":\"Title\",\"size\":1.5,\"sha256\":\"4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3\",\"blobs\":\"7198a8190771df59f73b80c074b6a191fa07bc5152d2c7d3e06780997b3996e3\",\"blob\":{\"blockOffset\":0,\"blockLength\":1,\"byteOffset\":0,\"byteLength\":10}}",
+      "value": null
+    },
+    {
+      "input": "{\"type\":\"announce\",\"id\":\"clip:abc\",\"title\":\"T\",\"size\":1.0,\"sha256\":\"4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3\",\"blobs\":\"7198a8190771df59f73b80c074b6a191fa07bc5152d2c7d3e06780997b3996e3\",\"blob\":{\"blockOffset\":0,\"blockLength\":1,\"byteOffset\":0,\"byteLength\":10}}",
+      "value": {
+        "type": "announce",
+        "id": "clip:abc",
+        "title": "T",
+        "size": 1,
+        "sha256": "4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3",
+        "blobs": "7198a8190771df59f73b80c074b6a191fa07bc5152d2c7d3e06780997b3996e3",
+        "blob": {
+          "blockOffset": 0,
+          "blockLength": 1,
+          "byteOffset": 0,
+          "byteLength": 10
+        }
+      }
+    },
+    {
+      "input": "{\"type\":\"announce\",\"id\":\"clip:abc\",\"title\":\"Title\",\"size\":10,\"sha256\":\"4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3\",\"blobs\":\"7198a8190771df59f73b80c074b6a191fa07bc5152d2c7d3e06780997b3996e3\",\"blob\":{\"blockOffset\":0,\"blockLength\":1,\"byteOffset\":0,\"byteLength\":10},\"wrappedKey\":\"216433330c87d3424f41d3872edb9d5f0ddc50098b1782a977b3f1e76487d6e5216433330c87d3424f41d3872edb9d5f0ddc50098b1782a977b3f1e76487d6e5216433330c87d3\"}",
+      "value": null
+    },
+    {
+      "input": "{\"type\":\"announce\",\"id\":\"clip:abc\",\"title\":\"Title\",\"size\":10,\"sha256\":\"4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3\",\"blobs\":\"7198a8190771df59f73b80c074b6a191fa07bc5152d2c7d3e06780997b3996e3\",\"blob\":{\"blockOffset\":0,\"blockLength\":1,\"byteOffset\":0,\"byteLength\":10},\"epoch\":0}",
+      "value": null
+    },
+    {
+      "input": "{\"type\":\"announce\",\"id\":\"clip:abc\",\"title\":\"ttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttt\",\"size\":10,\"sha256\":\"4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3\",\"blobs\":\"7198a8190771df59f73b80c074b6a191fa07bc5152d2c7d3e06780997b3996e3\",\"blob\":{\"blockOffset\":0,\"blockLength\":1,\"byteOffset\":0,\"byteLength\":10}}",
+      "value": null
+    },
+    {
+      "input": "{\"type\":\"announce\",\"id\":\"clip:abc\",\"title\":\"😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀\",\"size\":10,\"sha256\":\"4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3\",\"blobs\":\"7198a8190771df59f73b80c074b6a191fa07bc5152d2c7d3e06780997b3996e3\",\"blob\":{\"blockOffset\":0,\"blockLength\":1,\"byteOffset\":0,\"byteLength\":10}}",
+      "value": {
+        "type": "announce",
+        "id": "clip:abc",
+        "title": "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀",
+        "size": 10,
+        "sha256": "4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3",
+        "blobs": "7198a8190771df59f73b80c074b6a191fa07bc5152d2c7d3e06780997b3996e3",
+        "blob": {
+          "blockOffset": 0,
+          "blockLength": 1,
+          "byteOffset": 0,
+          "byteLength": 10
+        }
+      }
+    },
+    {
+      "input": "{\"type\":\"announce\",\"id\":\"clip:abc\",\"title\":\"😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀\",\"size\":10,\"sha256\":\"4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3\",\"blobs\":\"7198a8190771df59f73b80c074b6a191fa07bc5152d2c7d3e06780997b3996e3\",\"blob\":{\"blockOffset\":0,\"blockLength\":1,\"byteOffset\":0,\"byteLength\":10}}",
+      "value": null
+    },
+    {
+      "input": "{\"type\":\"announce\",\"id\":\"CLIP:abc\",\"title\":\"Title\",\"size\":10,\"sha256\":\"4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3\",\"blobs\":\"7198a8190771df59f73b80c074b6a191fa07bc5152d2c7d3e06780997b3996e3\",\"blob\":{\"blockOffset\":0,\"blockLength\":1,\"byteOffset\":0,\"byteLength\":10}}",
+      "value": null
+    },
+    {
+      "input": "{\"type\":\"announce\",\"id\":\"clip:abc\",\"title\":\"Title\",\"size\":10,\"sha256\":\"4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3\",\"blobs\":\"7198a8190771df59f73b80c074b6a191fa07bc5152d2c7d3e06780997b3996e3\",\"blob\":{\"blockOffset\":0,\"blockLength\":1,\"byteOffset\":0,\"byteLength\":10},\"extra\":{\"n\":1000,\"list\":[1,2,{\"x\":true}]}}",
+      "value": {
+        "type": "announce",
+        "id": "clip:abc",
+        "title": "Title",
+        "size": 10,
+        "sha256": "4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3",
+        "blobs": "7198a8190771df59f73b80c074b6a191fa07bc5152d2c7d3e06780997b3996e3",
+        "blob": {
+          "blockOffset": 0,
+          "blockLength": 1,
+          "byteOffset": 0,
+          "byteLength": 10
+        },
+        "extra": {
+          "n": 1000,
+          "list": [
+            1,
+            2,
+            {
+              "x": true
+            }
+          ]
+        }
+      }
+    },
+    {
+      "input": "null",
+      "value": null
+    },
+    {
+      "input": "[]",
+      "value": null
+    },
+    {
+      "input": "\"str\"",
+      "value": null
+    },
+    {
+      "input": "123",
+      "value": null
+    },
+    {
+      "input": "true",
+      "value": null
+    },
+    {
+      "input": "nope",
+      "value": null
+    },
+    {
+      "input": "{\"type\":",
+      "value": null
+    },
+    {
+      "input": "{\"type\":\"announce\",\"id\":\"clip:abc\",\"title\":\"Title\",\"size\":10,\"sha256\":\"4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3\",\"blobs\":\"7198a8190771df59f73b80c074b6a191fa07bc5152d2c7d3e06780997b3996e3\",\"blob\":{\"blockOffset\":0,\"blockLength\":1,\"byteOffset\":0,\"byteLength\":10}}garbage",
+      "value": null
+    }
+  ],
+  "cleanText": [
+    {
+      "input": "",
+      "fallback": "fb",
+      "value": "fb"
+    },
+    {
+      "input": null,
+      "fallback": "fb",
+      "value": "fb"
+    },
+    {
+      "input": "hello",
+      "fallback": "",
+      "value": "hello"
+    },
+    {
+      "input": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "fallback": "",
+      "value": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    {
+      "input": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "fallback": "",
+      "value": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    {
+      "input": "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀",
+      "fallback": "",
+      "value": "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀"
+    },
+    {
+      "input": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa😀",
+      "fallback": "",
+      "value": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa�"
+    },
+    {
+      "input": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa😀b",
+      "fallback": "",
+      "value": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa😀"
+    },
+    {
+      "input": "   ",
+      "fallback": "fb",
+      "value": "   "
+    },
+    {
+      "input": "﻿hello﻿",
+      "fallback": "",
+      "value": "﻿hello﻿"
+    },
+    {
+      "input": "x",
+      "fallback": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "value": "x"
+    },
+    {
+      "input": "",
+      "fallback": "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀",
+      "value": "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀"
+    },
+    {
+      "input": "abc",
+      "fallback": null,
+      "value": "abc"
+    }
+  ],
+  "cleanName": [
+    {
+      "input": "  Hello  ",
+      "fallback": "",
+      "value": "Hello"
+    },
+    {
+      "input": "   ",
+      "fallback": "fb",
+      "value": "fb"
+    },
+    {
+      "input": "",
+      "fallback": "fb",
+      "value": "fb"
+    },
+    {
+      "input": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "fallback": "",
+      "value": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    {
+      "input": "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀",
+      "fallback": "",
+      "value": "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀"
+    },
+    {
+      "input": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa😀",
+      "fallback": "",
+      "value": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa�"
+    },
+    {
+      "input": null,
+      "fallback": "PearTube TV",
+      "value": "PearTube TV"
+    },
+    {
+      "input": "x",
+      "fallback": "",
+      "value": "x"
+    },
+    {
+      "input": " x ",
+      "fallback": "",
+      "value": "x"
+    }
+  ],
+  "formatAccessUri": [
+    {
+      "channel": "4282ADCC4AD5BD07D587C56B6C714BA373530D12CF50046B77B4AD31F76462E3",
+      "epoch": 1,
+      "epochKey": "7198A8190771DF59F73B80C074B6A191FA07BC5152D2C7D3E06780997B3996E3",
+      "value": "peartube://access/4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3:1:7198a8190771df59f73b80c074b6a191fa07bc5152d2c7d3e06780997b3996e3"
+    },
+    {
+      "channel": "4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3",
+      "epoch": 0,
+      "epochKey": "7198a8190771df59f73b80c074b6a191fa07bc5152d2c7d3e06780997b3996e3",
+      "value": "peartube://access/4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3:0:7198a8190771df59f73b80c074b6a191fa07bc5152d2c7d3e06780997b3996e3"
+    },
+    {
+      "channel": "4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3",
+      "epoch": 1234,
+      "epochKey": "4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3",
+      "value": "peartube://access/4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3:1234:4282adcc4ad5bd07d587c56b6c714ba373530d12cf50046b77b4ad31f76462e3"
+    }
+  ],
+  "describeEntry": [
+    {
+      "id": "series:show:s01e02",
+      "title": "Episode Title",
+      "value": {
+        "season": 1,
+        "episode": 2,
+        "seriesKey": "series:show",
+        "baseTitle": "Episode Title",
+        "year": null
+      }
+    },
+    {
+      "id": "series:show:s01e234",
+      "title": "Dune (2021)",
+      "value": {
+        "season": 1,
+        "episode": 234,
+        "seriesKey": "series:show",
+        "baseTitle": "Dune",
+        "year": "2021"
+      }
+    },
+    {
+      "id": "clip:abc",
+      "title": "Dune 2021",
+      "value": {
+        "season": null,
+        "episode": null,
+        "seriesKey": "dune 2021",
+        "baseTitle": "Dune",
+        "year": "2021"
+      }
+    },
+    {
+      "id": "clip:abc",
+      "title": "  Dune  (2021) ",
+      "value": {
+        "season": null,
+        "episode": null,
+        "seriesKey": "dune  (2021)",
+        "baseTitle": "Dune",
+        "year": "2021"
+      }
+    },
+    {
+      "id": "clip:abc",
+      "title": "1917",
+      "value": {
+        "season": null,
+        "episode": null,
+        "seriesKey": "1917",
+        "baseTitle": "1917",
+        "year": null
+      }
+    },
+    {
+      "id": "clip:abc",
+      "title": "Movie (1885)",
+      "value": {
+        "season": null,
+        "episode": null,
+        "seriesKey": "movie (1885)",
+        "baseTitle": "Movie (1885)",
+        "year": null
+      }
+    },
+    {
+      "id": "clip:abc",
+      "title": "A (1999) extra",
+      "value": {
+        "season": null,
+        "episode": null,
+        "seriesKey": "a (1999) extra",
+        "baseTitle": "A (1999) extra",
+        "year": null
+      }
+    },
+    {
+      "id": "clip:abc",
+      "title": "A (2021)",
+      "value": {
+        "season": null,
+        "episode": null,
+        "seriesKey": "a (2021)",
+        "baseTitle": "A",
+        "year": "2021"
+      }
+    },
+    {
+      "id": "clip:abc",
+      "title": "A (2021))",
+      "value": {
+        "season": null,
+        "episode": null,
+        "seriesKey": "a (2021))",
+        "baseTitle": "A (2021))",
+        "year": null
+      }
+    },
+    {
+      "id": "show:id:s01e02",
+      "title": "",
+      "value": {
+        "season": 1,
+        "episode": 2,
+        "seriesKey": "show:id",
+        "baseTitle": "",
+        "year": null
+      }
+    },
+    {
+      "id": "ABC:s01e02",
+      "title": "x",
+      "value": {
+        "season": 1,
+        "episode": 2,
+        "seriesKey": "abc",
+        "baseTitle": "x",
+        "year": null
+      }
+    },
+    {
+      "id": "show:s01e02",
+      "title": "T",
+      "value": {
+        "season": 1,
+        "episode": 2,
+        "seriesKey": "show",
+        "baseTitle": "T",
+        "year": null
+      }
+    },
+    {
+      "id": "a:b:s01e2",
+      "title": "T",
+      "value": {
+        "season": null,
+        "episode": null,
+        "seriesKey": "t",
+        "baseTitle": "T",
+        "year": null
+      }
+    },
+    {
+      "id": "clip:abc",
+      "title": "Dune\n(2021)",
+      "value": {
+        "season": null,
+        "episode": null,
+        "seriesKey": "dune\n(2021)",
+        "baseTitle": "Dune",
+        "year": "2021"
+      }
+    },
+    {
+      "id": "clip:abc",
+      "title": "Dune\r(2021)",
+      "value": {
+        "season": null,
+        "episode": null,
+        "seriesKey": "dune\r(2021)",
+        "baseTitle": "Dune",
+        "year": "2021"
+      }
+    },
+    {
+      "id": "clip:abc",
+      "title": "😀 (2020)",
+      "value": {
+        "season": null,
+        "episode": null,
+        "seriesKey": "😀 (2020)",
+        "baseTitle": "😀",
+        "year": "2020"
+      }
+    }
+  ],
+  "isUniform512": [
+    {
+      "input": null,
+      "value": false
+    },
+    {
+      "input": {
+        "byteLength": 0,
+        "blockLength": 0
+      },
+      "value": true
+    },
+    {
+      "input": {
+        "byteLength": 1,
+        "blockLength": 1
+      },
+      "value": true
+    },
+    {
+      "input": {
+        "byteLength": 524288,
+        "blockLength": 1
+      },
+      "value": true
+    },
+    {
+      "input": {
+        "byteLength": 524289,
+        "blockLength": 1
+      },
+      "value": false
+    },
+    {
+      "input": {
+        "byteLength": 524289,
+        "blockLength": 2
+      },
+      "value": true
+    },
+    {
+      "input": {
+        "byteLength": 1,
+        "blockLength": 0
+      },
+      "value": false
+    },
+    {
+      "input": {
+        "byteLength": 1048576,
+        "blockLength": 2
+      },
+      "value": true
+    },
+    {
+      "input": {
+        "byteLength": 1048577,
+        "blockLength": 2
+      },
+      "value": false
+    }
+  ],
+  "isSystemViewKey": [
+    {
+      "key": "peer/x",
+      "value": true
+    },
+    {
+      "key": "source/x",
+      "value": true
+    },
+    {
+      "key": "meta/x",
+      "value": true
+    },
+    {
+      "key": "writer/x",
+      "value": true
+    },
+    {
+      "key": "revoked/x",
+      "value": true
+    },
+    {
+      "key": "clip/x",
+      "value": false
+    },
+    {
+      "key": "",
+      "value": false
+    },
+    {
+      "key": "Peer/x",
+      "value": false
+    }
+  ],
+  "mediaFile": [
+    {
+      "name": "film.mp4",
+      "value": true
+    },
+    {
+      "name": "FILM.MKV",
+      "value": true
+    },
+    {
+      "name": "song.flac",
+      "value": true
+    },
+    {
+      "name": "notes.txt",
+      "value": false
+    },
+    {
+      "name": "noext",
+      "value": false
+    },
+    {
+      "name": "a.mp4.txt",
+      "value": false
+    },
+    {
+      "name": "x.m2ts",
+      "value": true
+    }
+  ]
+}
