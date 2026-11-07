@@ -73,6 +73,10 @@ of walking each view twice; sleeping sources still use their merged snapshot.
 Snapshot refresh notifies only when the merged records actually change, avoiding
 an update/refresh loop when the offline snapshot contains more rows than the live
 view; unchanged rows keep their existing JSON allocation.
+The primary channel caches a successful complete scan by applied view head (key
+and length), shared by status, full-list and id lookups. A changed head or failed
+walk forces another scan; a polling host does not repeatedly decode unchanged
+metadata. This does not disable the eager system/view history mirror on landing.
 Blob wake observers do not retain sessions: Corestore's peer/session-aware GC
 can reclaim an owned or cached core after its last reader and peer leave.
 

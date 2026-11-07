@@ -64,6 +64,7 @@ pub trait CatalogBlobs: Send + Sync {
 struct PrimaryCache {
     entries: Vec<Item>,
     discovered: Vec<super::api::DiscoveredSource>,
+    head: Option<hyperbee::Head>,
 }
 
 /// A record the catalog has not yet turned into an `Entry`.
@@ -99,13 +100,16 @@ impl Catalog {
         })
     }
 
-    async fn scan(&self, view: &Bee, via: &str) -> (Vec<Item>, Vec<super::api::DiscoveredSource>) {
+    async fn scan(
+        &self,
+        view: &Bee,
+        via: &str,
+    ) -> hyperbee::Result<(Vec<Item>, Vec<super::api::DiscoveredSource>)> {
         let mut entries = Vec::new();
         let mut discovered = Vec::new();
         let mut stream = view.range(RangeOptions::default());
         loop {
-            let next = stream.next().await;
-            let Ok(Some(node)) = next else {
+            let Some(node) = stream.next().await? else {
                 break;
             };
             let sub = String::from_utf8_lossy(&node.key).into_owned();
@@ -135,7 +139,7 @@ impl Catalog {
                 entries.push(Item { sub, entry: op });
             }
         }
-        (entries, discovered)
+        Ok((entries, discovered))
     }
 
     /// `refreshPrimaryCache()`: replace, never merge.
@@ -153,12 +157,20 @@ impl Catalog {
         } else {
             self.channel.applied().await;
         }
-        let (entries, discovered) = self
+        let head = self.channel.view().head();
+        if head.is_some() && lock(&self.primary).head == head {
+            return;
+        }
+        if let Ok((entries, discovered)) = self
             .scan(self.channel.view(), &self.channel.primary_key())
-            .await;
-        let mut primary = lock(&self.primary);
-        primary.entries = entries;
-        primary.discovered = discovered;
+            .await
+        {
+            let mut primary = lock(&self.primary);
+            primary.entries = entries;
+            primary.discovered = discovered;
+            // A sparse/failed walk must be retried, and an apply during the walk invalidates it.
+            primary.head = head.filter(|head| Some(*head) == self.channel.view().head());
+        }
     }
 
     /// `search(id, { source, query, limit, offset })`.
@@ -179,11 +191,7 @@ impl Catalog {
             .collect();
         let primary_refresh = async {
             if primary_used && primary_wanted {
-                if id.is_some() {
-                    self.channel.applied().await;
-                } else {
-                    self.refresh_primary(false).await;
-                }
+                self.refresh_primary(false).await;
             }
         };
         let source_refresh = join_all(
@@ -196,16 +204,7 @@ impl Catalog {
         let mut raw: Vec<Raw> = Vec::new();
         let mut seen_keys: HashSet<String> = HashSet::new();
         if primary_used && primary_wanted {
-            // An id lookup reads the applied view directly: the cache only holds what a full
-            // listing walked, and a fresh follower has not walked anything yet.
-            let items = if id.is_some() {
-                let (entries, _) = self
-                    .scan(self.channel.view(), &self.channel.primary_key())
-                    .await;
-                entries
-            } else {
-                lock(&self.primary).entries.clone()
-            };
+            let items = lock(&self.primary).entries.clone();
             for item in items {
                 if seen_keys.insert(item.sub.clone()) {
                     raw.push(Raw {

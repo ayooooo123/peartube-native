@@ -1773,6 +1773,42 @@ mod tests {
     use super::*;
 
     #[tokio::test]
+    async fn primary_catalog_cache_tracks_applied_heads() {
+        let dir = tempfile::tempdir().unwrap();
+        let node = create_node(json!({
+            "storage": dir.path(), "bootstrap": ["127.0.0.1:9"], "worklet": true
+        }))
+        .await
+        .unwrap();
+        let announce = |title: &str| json!({
+            "type": "announce", "id": "imdb:tt0000001", "title": title, "size": 1,
+            "sha256": "33".repeat(32), "blobs": "22".repeat(32),
+            "blob": { "blockOffset": 0, "blockLength": 1, "byteOffset": 0, "byteLength": 1 }
+        });
+        node.append(announce("Original")).await.unwrap();
+        let options = SearchOptions::default();
+        let first = node.search(None, options.clone()).await.unwrap();
+        assert_eq!(first.len(), 1);
+        assert_eq!(first[0].title, "Original");
+        assert_eq!(
+            node.search(Some("imdb:tt0000001"), options.clone())
+                .await
+                .unwrap(),
+            first
+        );
+        node.append(announce("Changed")).await.unwrap();
+        let changed = node
+            .search(Some("imdb:tt0000001"), options.clone())
+            .await
+            .unwrap();
+        assert_eq!(changed.len(), 1);
+        assert_eq!(changed[0].title, "Changed");
+        node.remove(&changed[0].key).await.unwrap();
+        assert!(node.search(None, options).await.unwrap().is_empty());
+        node.close().await.unwrap();
+    }
+
+    #[tokio::test]
     async fn awake_source_does_not_resurrect_deleted_snapshot_entries() {
         let dir = tempfile::tempdir().unwrap();
         let source = "11".repeat(32);
