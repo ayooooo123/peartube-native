@@ -193,10 +193,10 @@ struct Node {
 }
 
 impl Node {
-    fn spawn(script: &PathBuf, config: &Value) -> Self {
+    fn spawn(script: &PathBuf, mode: &str, config: &Value) -> Self {
         let mut child = Command::new("node")
             .arg(script)
-            .arg("interop")
+            .arg(mode)
             .arg(config.to_string())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -304,7 +304,7 @@ fn mdns_interop_with_bonjour_service() {
         "topics": node_topics,
         "nonce": "n0d",
     });
-    let mut node = Node::spawn(&script, &config);
+    let mut node = Node::spawn(&script, "interop", &config);
 
     let adapter = SelfAddressAdapter::with_rebrowse(
         peartube_native::lan::mdns::BonjourAdapter::new(),
@@ -388,5 +388,89 @@ fn mdns_interop_with_bonjour_service() {
     });
 
     browse.stop();
+    node.send("exit");
+}
+
+#[test]
+#[ignore = "requires loopback mDNS and the JS app checkout (PEARTUBE_APP)"]
+fn late_browsers_receive_every_advertisement_shard() {
+    use peartube_native::lan::mdns::BonjourAdapter;
+    use sha2::{Digest, Sha256};
+
+    let app = std::env::var("PEARTUBE_APP").unwrap_or_else(|_| {
+        format!(
+            "{}/projects/peartube",
+            std::env::var("HOME").unwrap_or_default()
+        )
+    });
+    assert!(
+        PathBuf::from(&app).join("src/lan.js").is_file(),
+        "set PEARTUBE_APP to the JS app checkout with its installed modules"
+    );
+    let host = Ipv4Addr::LOCALHOST;
+    let peer_key = hex(&Sha256::digest(b"peartube-late-multishard-browser"));
+    let mut tokens: Vec<String> = (0..64)
+        .map(|n| topic_token(format!("late-multishard-{n}").as_bytes()))
+        .collect();
+    tokens.sort_unstable();
+    let port = 19446;
+    let records = create_records_with(&peer_key, port, &tokens, "msh");
+    assert!(records.len() >= 3);
+    let publisher = SelfAddressAdapter::new(BonjourAdapter::new(), host);
+    let _advertisements: Vec<_> = records
+        .iter()
+        .map(|record| publisher.advertise(record, None).unwrap())
+        .collect();
+    // mdns-sd announces immediately and resends after 1.1–1.15 seconds. Start late:
+    // neither browser may pass by seeing startup announcements instead of PTR replies.
+    std::thread::sleep(Duration::from_secs(3));
+
+    let (tx, events) = mpsc::channel();
+    let expected_key = peer_key.clone();
+    let on_up: ServiceSink = Arc::new(move |service| {
+        if let Some(parsed) = service.parse()
+            && parsed.peer_key_hex == expected_key
+        {
+            let _ = tx.send(parsed);
+        }
+    });
+    let browser = SelfAddressAdapter::with_rebrowse(BonjourAdapter::new(), host, None);
+    let _browse = browser.browse(on_up, None, None).unwrap();
+    let mut node = Node::spawn(
+        &manifest_dir().join("tests/js/lan-mdns.mjs"),
+        "browse-app",
+        &serde_json::json!({
+            "app": app,
+            "host": host.to_string(),
+            "peerKey": peer_key,
+            "names": records.iter().map(|record| &record.name).collect::<Vec<_>>()
+        }),
+    );
+    let packet = node.wait_for("one whole multi-shard PTR reply", |value| {
+        value["t"] == "packet"
+    });
+    assert_eq!(packet["srv"], true, "missing same-packet SRV: {packet}");
+    assert_eq!(packet["txt"], true, "missing same-packet TXT: {packet}");
+    let js = node.wait_for("every shard in the real JS app browser", |value| {
+        value["t"] == "complete"
+    });
+    assert_eq!(js["totalShards"].as_u64(), Some(records.len() as u64));
+    assert_eq!(js["port"].as_u64(), Some(u64::from(port)));
+    assert_eq!(tokens_of(&js["topics"]), tokens);
+
+    let deadline = Instant::now() + WAIT;
+    let mut shards = vec![None; records.len()];
+    while shards.iter().any(Option::is_none) {
+        let parsed = events
+            .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+            .expect("the Rust browser must receive every complete shard");
+        assert_eq!(parsed.total_shards, records.len());
+        assert_eq!(parsed.port, port);
+        assert!(parsed.shard < shards.len());
+        shards[parsed.shard] = Some(parsed.tokens);
+    }
+    let mut received: Vec<_> = shards.into_iter().flatten().flatten().collect();
+    received.sort_unstable();
+    assert_eq!(received, tokens);
     node.send("exit");
 }

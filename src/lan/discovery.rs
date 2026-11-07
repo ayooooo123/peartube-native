@@ -40,7 +40,13 @@ fn lock<T>(cell: &Mutex<T>) -> MutexGuard<'_, T> {
 }
 
 fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+    const DIGITS: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for &byte in bytes {
+        out.push(char::from(DIGITS[usize::from(byte >> 4)]));
+        out.push(char::from(DIGITS[usize::from(byte & 15)]));
+    }
+    out
 }
 
 /// A LAN binding failure the status line shows as `failed on <host>: <error>`.
@@ -90,8 +96,8 @@ struct Inner {
     swarm: SwarmHandle,
     port: AtomicU16,
     adapter: SelfAddressAdapter,
-    /// Joined topics, keyed by 64-hex topic, valued by their mDNS token.
-    topics: Mutex<HashMap<String, String>>,
+    /// Joined mDNS topic tokens, indexed directly for incoming advertisement lookups.
+    topics: Mutex<HashSet<String>>,
     peers: Mutex<HashMap<String, Peer>>,
     shards: Mutex<HashMap<String, Shards>>,
     /// One live connection per peer: id → its serial and mux. Both sides can dial each other at
@@ -158,7 +164,7 @@ impl LanDiscovery {
             swarm,
             port: AtomicU16::new(port),
             adapter,
-            topics: Mutex::new(HashMap::new()),
+            topics: Mutex::new(HashSet::new()),
             peers: Mutex::new(HashMap::new()),
             shards: Mutex::new(HashMap::new()),
             active: Mutex::new(HashMap::new()),
@@ -237,10 +243,7 @@ impl Inner {
             return false;
         }
         let topics = lock(&self.topics);
-        !topics.is_empty()
-            && tokens
-                .iter()
-                .any(|token| topics.values().any(|t| t == token))
+        !topics.is_empty() && tokens.iter().any(|token| topics.contains(token))
     }
 
     fn cancel(&self, id: &str) {
@@ -255,15 +258,16 @@ impl Inner {
         if self.destroyed.load(Ordering::Acquire) {
             return;
         }
+        // Ignore our own advertisement before allocating and validating its topic strings.
+        if super::mdns::txt_get(&service.txt, "peerKey").eq_ignore_ascii_case(&self.peer_key) {
+            return;
+        }
         let Some(record) = service.parse() else {
             return;
         };
         let Some(host) = service.ipv4() else {
             return;
         };
-        if record.peer_key_hex == self.peer_key {
-            return;
-        }
         let id = record.peer_key_hex.clone();
         let previous = lock(&self.peers).get(&id).map(|peer| peer.tokens.clone());
         let tokens = {
@@ -376,7 +380,7 @@ impl Inner {
         if self.destroyed.load(Ordering::Acquire) {
             return;
         }
-        let mut tokens: Vec<String> = lock(&self.topics).values().cloned().collect();
+        let mut tokens: Vec<String> = lock(&self.topics).iter().cloned().collect();
         tokens.sort_unstable();
         let port = self.port.load(Ordering::Acquire);
         let shape: Vec<Vec<(String, String)>> =
@@ -439,6 +443,10 @@ impl Inner {
             return;
         }
         let id = hex(&peer.public_key);
+        // A connected peer needs no dial decision or topic-intersection scan.
+        if lock(&self.active).contains_key(&id) {
+            return;
+        }
         let direct = lock(&self.direct).contains(&id);
         if !direct && !self.shares_topic(&peer.tokens) {
             self.cancel(&id);
@@ -715,13 +723,9 @@ fn unhex32(text: &str) -> Option<[u8; 32]> {
 
 impl LanBinding for LanDiscovery {
     fn join(&self, topic: [u8; 32]) {
-        let key = hex(&topic);
-        {
-            let mut topics = lock(&self.inner.topics);
-            if topics.contains_key(&key) {
-                return;
-            }
-            topics.insert(key.clone(), topic_token(&topic));
+        let token = topic_token(&topic);
+        if !lock(&self.inner.topics).insert(token) {
+            return;
         }
         let inner = self.inner.clone();
         self.inner
@@ -734,7 +738,8 @@ impl LanBinding for LanDiscovery {
     }
 
     fn leave(&self, topic: [u8; 32]) {
-        if lock(&self.inner.topics).remove(&hex(&topic)).is_none() {
+        let token = topic_token(&topic);
+        if !lock(&self.inner.topics).remove(&token) {
             return;
         }
         let inner = self.inner.clone();
@@ -811,6 +816,45 @@ impl LanBinding for LanDiscovery {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn key_hex_stays_lowercase_and_zero_padded() {
+        assert_eq!(hex(&[0, 1, 15, 16, 127, 255]), "00010f107fff");
+        assert_eq!(hex(&[0xab; 32]), "ab".repeat(32));
+        assert_eq!(hex(&[]), "");
+    }
+
+    #[tokio::test]
+    async fn topic_membership_is_idempotent_and_removable() {
+        use crate::lan::host::HostAdapter;
+        use crate::lan::mdns::Adapter;
+
+        let adapter = SelfAddressAdapter::with_adapter(
+            Adapter::Host(Arc::new(HostAdapter::new(|_| {}))),
+            Ipv4Addr::LOCALHOST,
+        );
+        let lan = LanDiscovery::open_with_adapter(adapter, KeyPair::generate())
+            .await
+            .unwrap();
+        let a = [7; 32];
+        let b = [8; 32];
+        let a_token = topic_token(&a);
+        let b_token = topic_token(&b);
+        lan.join(a);
+        lan.join(a);
+        lan.join(b);
+        assert_eq!(lan.stats().unwrap()["topics"], 2);
+        assert!(lan.inner.shares_topic(std::slice::from_ref(&a_token)));
+        lan.leave(a);
+        lan.leave(a);
+        assert_eq!(lan.stats().unwrap()["topics"], 1);
+        assert!(!lan.inner.shares_topic(std::slice::from_ref(&a_token)));
+        assert!(lan.inner.shares_topic(std::slice::from_ref(&b_token)));
+        lan.leave(b);
+        assert_eq!(lan.stats().unwrap()["topics"], 0);
+        assert!(!lan.inner.shares_topic(&[a_token, b_token]));
+        lan.destroy().await;
+    }
 
     #[tokio::test]
     async fn larger_key_dials_after_the_fallback_delay() {
@@ -905,7 +949,7 @@ mod tests {
             .unwrap();
         assert_eq!(initial["record"]["txt"]["tc"], "0");
         let topic = [9; 32];
-        lock(&lan.inner.topics).insert(hex(&topic), topic_token(&topic));
+        lock(&lan.inner.topics).insert(topic_token(&topic));
         let update = tokio::spawn(Inner::sync_ads(lan.inner.clone()));
         let overlap = tokio::time::timeout(Duration::from_millis(100), records.recv()).await;
         let overtook = overlap.is_ok();

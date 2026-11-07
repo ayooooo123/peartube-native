@@ -8,9 +8,13 @@
 // Usage:
 //   node lan-mdns.mjs fixtures            -> JSON fixture on stdout
 //   node lan-mdns.mjs interop '<json>'    -> NDJSON events, stdin drives lifecycle
+//   node lan-mdns.mjs browse-app '<json>' -> real src/lan.js browser, stdin exits
 import { createHash } from 'node:crypto'
+import { createRequire } from 'node:module'
 import { isIPv4 } from 'node:net'
 import { createInterface } from 'node:readline'
+import { join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { Bonjour } from 'bonjour-service'
 
 const SERVICE_TYPE = 'hyperdht-mdns'
@@ -206,12 +210,64 @@ async function interop (cfg) {
   process.exit(0)
 }
 
+async function browseApp (cfg) {
+  const appLan = pathToFileURL(join(cfg.app, 'src/lan.js'))
+  const { BonjourAdapter, selfAddressAdapter } = await import(appLan.href)
+  const { Bonjour: AppBonjour } = createRequire(appLan)('bonjour-service')
+  const expected = cfg.names.map(name => `${name}._${SERVICE_TYPE}._${SERVICE_PROTOCOL}.local`.toLowerCase())
+  const inner = new BonjourAdapter({
+    createBonjour (onError) {
+      const bonjour = new AppBonjour({ interface: cfg.host, bind: '0.0.0.0' }, onError)
+      bonjour.server.mdns.on('response', packet => {
+        if (!expected.every(name => packet.answers.some(record =>
+          record.type === 'PTR' && record.data.toLowerCase() === name
+        ))) return
+        const records = [...packet.answers, ...packet.additionals]
+        emit({
+          t: 'packet',
+          srv: expected.every(name => records.some(record => record.type === 'SRV' && record.name.toLowerCase() === name)),
+          txt: expected.every(name => records.some(record => record.type === 'TXT' && record.name.toLowerCase() === name))
+        })
+      })
+      return bonjour
+    }
+  })
+  const shards = new Map()
+  const browser = selfAddressAdapter(cfg.host, inner).browse(
+    { type: SERVICE_TYPE, protocol: SERVICE_PROTOCOL },
+    {
+      onService (service) {
+        const parsed = parseRecord(service)
+        if (!parsed || parsed.peerKeyHex !== cfg.peerKey) return
+        shards.set(parsed.shard, parsed.tokens)
+        if (shards.size === parsed.totalShards) {
+          emit({
+            t: 'complete',
+            totalShards: parsed.totalShards,
+            port: parsed.port,
+            topics: [...shards.values()].flat().sort()
+          })
+        }
+      },
+      onError: err => emit({ t: 'error', message: String(err?.message || err) })
+    }
+  )
+  const rl = createInterface({ input: process.stdin })
+  for await (const line of rl) {
+    if (line.trim() === 'exit') break
+  }
+  await browser.stop()
+  process.exit(0)
+}
+
 const [mode, arg] = process.argv.slice(2)
 if (mode === 'fixtures') {
   process.stdout.write(JSON.stringify(fixtures()) + '\n')
 } else if (mode === 'interop') {
   await interop(JSON.parse(arg))
+} else if (mode === 'browse-app') {
+  await browseApp(JSON.parse(arg))
 } else {
-  process.stderr.write('usage: lan-mdns.mjs fixtures|interop <json>\n')
+  process.stderr.write('usage: lan-mdns.mjs fixtures|interop|browse-app <json>\n')
   process.exit(2)
 }

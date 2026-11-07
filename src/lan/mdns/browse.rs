@@ -1,6 +1,6 @@
 //! bonjour-service's packet-local browser: one PTR query per rebrowse, no resolver/cache crawl.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, hash_map::Entry};
 use std::io;
 use std::net::{Ipv4Addr, SocketAddrV4};
 use std::sync::{Arc, atomic::Ordering};
@@ -10,11 +10,16 @@ use mio::{Events, Interest, Poll, Token, Waker};
 use simple_dns::{CLASS, Name, Packet, PacketFlag, Question, TYPE, rdata::RData};
 use socket2::{Domain, Protocol, Socket, Type};
 
-use super::{BrowseState, DiscoveredService, Inner, SERVICE_DOMAIN, subscribers};
+use super::{BrowseState, DiscoveredService, Inner, SERVICE_DOMAIN, Sub, subscribers};
 
 const GROUP: Ipv4Addr = Ipv4Addr::new(224, 0, 0, 251);
 const PORT: u16 = 5353;
 const MEMBERSHIP_POLL: Duration = Duration::from_secs(5);
+
+struct KnownService {
+    service: DiscoveredService,
+    notified: Vec<u64>,
+}
 
 pub(super) struct Listener {
     poll: Poll,
@@ -120,28 +125,11 @@ impl Listener {
                 loop {
                     match self.socket.recv_from(&mut bytes) {
                         Ok((len, std::net::SocketAddr::V4(source))) => {
-                            let _ =
-                                visit(&bytes[..len], *source.ip(), |name, service| match service {
-                                    Some(service) => {
-                                        let entry = known
-                                            .entry(name.to_ascii_lowercase())
-                                            .insert_entry(service);
-                                        for sub in subscribers(&state) {
-                                            (sub.up)(entry.get());
-                                        }
-                                    }
-                                    None => {
-                                        if let Some(service) =
-                                            known.remove(&name.to_ascii_lowercase())
-                                        {
-                                            for sub in subscribers(&state) {
-                                                if let Some(down) = sub.down {
-                                                    down(&service);
-                                                }
-                                            }
-                                        }
-                                    }
-                                });
+                            let mut packet_subs = None;
+                            let _ = visit(&bytes[..len], *source.ip(), |name, service| {
+                                let subs = packet_subs.get_or_insert_with(|| subscribers(&state));
+                                deliver(&mut known, subs, name, service);
+                            });
                         }
                         Ok(_) => {}
                         Err(error) if error.kind() == io::ErrorKind::WouldBlock => break,
@@ -150,6 +138,48 @@ impl Listener {
                             inner.report(&error.to_string());
                             return;
                         }
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn deliver(
+    known: &mut HashMap<String, KnownService>,
+    subs: &[Sub],
+    name: &str,
+    service: Option<DiscoveredService>,
+) {
+    let name = name.to_ascii_lowercase();
+    match service {
+        Some(service) => {
+            let entry = match known.entry(name) {
+                Entry::Occupied(mut entry) => {
+                    entry.get_mut().service = service;
+                    entry.into_mut()
+                }
+                Entry::Vacant(entry) => entry.insert(KnownService {
+                    service,
+                    notified: Vec::new(),
+                }),
+            };
+            // bonjour-service updates its cached SRV/TXT but emits `up` only once per browser.
+            // Track each subscriber, including one added after the first response arrived.
+            for sub in subs {
+                if !entry.notified.contains(&sub.id) {
+                    entry.notified.push(sub.id);
+                    (sub.up)(&entry.service);
+                }
+            }
+        }
+        None => {
+            if let Some(entry) = known.remove(&name) {
+                for sub in subs {
+                    if entry.notified.contains(&sub.id)
+                        && let Some(down) = &sub.down
+                    {
+                        down(&entry.service);
                     }
                 }
             }
@@ -173,6 +203,10 @@ fn visit(
     source: Ipv4Addr,
     mut found: impl FnMut(&str, Option<DiscoveredService>),
 ) -> simple_dns::Result<()> {
+    // Queries cannot produce browser events. Skip their packet and name allocations.
+    if bytes.len() >= 12 && bytes[2] & 0x80 == 0 {
+        return Ok(());
+    }
     let packet = Packet::parse(bytes)?;
     if !packet.has_flags(PacketFlag::RESPONSE) {
         return Ok(());
@@ -256,6 +290,72 @@ mod tests {
         CLASS, ResourceRecord,
         rdata::{A, PTR, SRV, TXT},
     };
+    use std::sync::Mutex;
+
+    type Changes = Arc<Mutex<Vec<(&'static str, u64, u16)>>>;
+
+    fn subscriber(id: u64, changes: &Changes) -> Sub {
+        let up = changes.clone();
+        let down = changes.clone();
+        Sub {
+            id,
+            up: Arc::new(move |service| up.lock().unwrap().push(("up", id, service.port))),
+            down: Some(Arc::new(move |service| {
+                down.lock().unwrap().push(("down", id, service.port));
+            })),
+        }
+    }
+
+    #[test]
+    fn browser_emits_up_once_and_keeps_latest_service_for_down() {
+        let changes = Changes::default();
+        let subs = [subscriber(1, &changes)];
+        let mut known = HashMap::new();
+        let mut service = services(&response()).pop().unwrap().unwrap();
+        deliver(&mut known, &subs, "PEER.local", Some(service.clone()));
+        deliver(&mut known, &subs, "peer.local", Some(service.clone()));
+        service.port = 4344;
+        deliver(&mut known, &subs, "peer.local", Some(service.clone()));
+        assert_eq!(*changes.lock().unwrap(), [("up", 1, 4343)]);
+        deliver(&mut known, &subs, "PEER.local", None);
+        deliver(&mut known, &subs, "peer.local", None);
+        assert_eq!(
+            *changes.lock().unwrap(),
+            [("up", 1, 4343), ("down", 1, 4344)]
+        );
+        deliver(&mut known, &subs, "peer.local", Some(service.clone()));
+        known.clear(); // A ten-second rebrowse starts a fresh bonjour-service browser.
+        deliver(&mut known, &subs, "peer.local", Some(service));
+        assert_eq!(changes.lock().unwrap().len(), 4);
+    }
+
+    #[test]
+    fn newly_attached_subscriber_receives_its_own_up_event() {
+        let changes = Changes::default();
+        let mut subs = vec![subscriber(10, &changes)];
+        let mut known = HashMap::new();
+        let service = services(&response()).pop().unwrap().unwrap();
+        deliver(&mut known, &subs, "peer.local", Some(service.clone()));
+        // IDs may be allocated before another thread acquires the subscription lock.
+        subs.push(subscriber(5, &changes));
+        deliver(&mut known, &subs, "peer.local", Some(service.clone()));
+        deliver(&mut known, &subs, "peer.local", Some(service));
+        assert_eq!(
+            *changes.lock().unwrap(),
+            [("up", 10, 4343), ("up", 5, 4343)]
+        );
+        subs.push(subscriber(11, &changes));
+        deliver(&mut known, &subs, "peer.local", None);
+        assert_eq!(
+            *changes.lock().unwrap(),
+            [
+                ("up", 10, 4343),
+                ("up", 5, 4343),
+                ("down", 10, 4343),
+                ("down", 5, 4343)
+            ]
+        );
+    }
 
     fn response() -> Packet<'static> {
         let mut packet = Packet::new_reply(0);

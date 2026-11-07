@@ -1,6 +1,10 @@
 //! mDNS half of the app's `src/lan.js`: PearTube's `hyperdht-mdns` record, its TXT sharding, the
 //! parser, and the refcounted bonjour adapter. `mdns-sd` advertises; the packet-local IPv4
 //! browser follows `bonjour-service` without resolving stale cached advertisement generations.
+//! Repeated responses update the browser's service snapshot without repeating `up`; a fresh
+//! ten-second rebrowse permits one new `up` per service, matching `bonjour-service`.
+//! Owned IPv4 advertisers allow RFC-sized packets, so typical multi-shard PTR/SRV/TXT
+//! replies stay together as they do in `bonjour-service`.
 
 use std::collections::HashMap;
 use std::fmt;
@@ -105,7 +109,7 @@ fn is_token(t: &str) -> bool {
 }
 
 /// Case-insensitive TXT lookup; mDNS keys are case-insensitive and `mdns-sd` resolves them so.
-fn txt_get<'a>(txt: &'a [(String, String)], key: &str) -> &'a str {
+pub(super) fn txt_get<'a>(txt: &'a [(String, String)], key: &str) -> &'a str {
     txt.iter()
         .find(|(k, _)| k.eq_ignore_ascii_case(key))
         .map_or("", |(_, v)| v.as_str())
@@ -650,6 +654,9 @@ impl BonjourAdapter {
         let daemon = match ServiceDaemon::new().and_then(|daemon| {
             // bonjour-service's multicast-dns uses udp4; IPv6 adds no LAN peers.
             daemon.disable_interface(IfKind::IPv6)?;
+            // Packet-local JS browsers cannot join TXT-only continuation datagrams.
+            // Use mdns-sd's RFC packet limit instead of splitting replies at Ethernet MTU.
+            daemon.set_max_packet_size(IfKind::IPv4, 8952)?;
             Ok(daemon)
         }) {
             Ok(daemon) => daemon,
@@ -798,11 +805,16 @@ impl SelfAddressAdapter {
         on_error: Option<ErrorSink>,
     ) -> Result<Browse, MdnsError> {
         let up: ServiceSink = Arc::new(move |service: &DiscoveredService| {
-            let mut service = service.clone();
-            if let Ok(h) = txt_get(&service.txt, "h").parse::<Ipv4Addr>() {
-                service.addresses = vec![h];
+            if let Ok(h) = txt_get(&service.txt, "h").parse::<Ipv4Addr>()
+                && service.addresses != [h]
+            {
+                let mut stamped = service.clone();
+                stamped.addresses.clear();
+                stamped.addresses.push(h);
+                on_up(&stamped);
+            } else {
+                on_up(service);
             }
-            on_up(&service);
         });
         match &self.inner {
             Adapter::Daemon(bonjour) => bonjour
@@ -873,6 +885,52 @@ mod tests {
                 assert_eq!(record.tokens.as_slice(), std::slice::from_ref(&token));
                 received[side] = true;
             }
+        }
+    }
+
+    #[test]
+    fn self_address_preserves_resolved_addresses_without_a_valid_override() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let host = Arc::new(HostAdapter::new(move |event| {
+            tx.send(event).unwrap();
+        }));
+        let adapter =
+            SelfAddressAdapter::with_adapter(Adapter::Host(host.clone()), Ipv4Addr::LOCALHOST);
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let sink = seen.clone();
+        let _browse = adapter
+            .browse(
+                Arc::new(move |service| sink.lock().unwrap().push(service.addresses.clone())),
+                None,
+                None,
+            )
+            .unwrap();
+        let handle = rx.recv().unwrap()["handle"].as_u64().unwrap();
+        for (hint, addresses, expected) in [
+            ("10.0.0.7", vec!["10.0.0.7"], vec!["10.0.0.7"]),
+            ("10.0.0.7", vec!["10.0.0.8", "10.0.0.9"], vec!["10.0.0.7"]),
+            (
+                "invalid",
+                vec!["10.0.0.8", "10.0.0.9"],
+                vec!["10.0.0.8", "10.0.0.9"],
+            ),
+            ("", vec!["10.0.0.8"], vec!["10.0.0.8"]),
+        ] {
+            host.dispatch(&serde_json::json!({
+                "handle": handle,
+                "action": "up",
+                "service": {
+                    "name": "peer",
+                    "port": 4242,
+                    "txt": { "h": hint },
+                    "addresses": addresses
+                }
+            }));
+            let expected: Vec<Ipv4Addr> = expected
+                .iter()
+                .map(|address| address.parse().unwrap())
+                .collect();
+            assert_eq!(seen.lock().unwrap().last().unwrap(), &expected);
         }
     }
 
