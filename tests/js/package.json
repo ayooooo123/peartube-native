@@ -1,0 +1,12 @@
+{
+  "name": "peartube-native-lan-mdns-tests",
+  "private": true,
+  "type": "module",
+  "description": "mDNS interop fixtures for the Rust LAN port; pinned to the version the app uses.",
+  "dependencies": {
+    "@hyperswarm/secret-stream": "6.9.2",
+    "bonjour-service": "1.4.4",
+    "compact-encoding": "3.5.2",
+    "protomux": "3.13.0"
+  }
+}

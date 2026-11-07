@@ -1,0 +1,2279 @@
+{
+  "identityFiles": [
+    {
+      "name": "fresh writable channel",
+      "initial": null,
+      "mnemonic": null,
+      "channel": {
+        "primaryKey": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "localKey": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "writers": [
+          {
+            "key": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "role": "owner",
+            "alias": "primary",
+            "self": true
+          },
+          {
+            "key": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
+            "role": "writer",
+            "alias": "phone",
+            "self": false
+          }
+        ]
+      },
+      "steps": [
+        {
+          "op": "foundedKey",
+          "ok": ""
+        },
+        {
+          "op": "idVault",
+          "ok": null
+        },
+        {
+          "op": "accessKeys",
+          "ok": {}
+        },
+        {
+          "op": "identity",
+          "ok": {
+            "channel": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "writer": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "role": null,
+            "writable": true,
+            "mnemonicSet": false,
+            "writers": [
+              {
+                "key": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                "role": "owner",
+                "alias": "primary",
+                "self": true
+              },
+              {
+                "key": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
+                "role": "writer",
+                "alias": "phone",
+                "self": false
+              }
+            ],
+            "epoch": 1
+          }
+        }
+      ],
+      "finalFile": null,
+      "finalMode": null,
+      "reloadedView": null
+    },
+    {
+      "name": "fresh read-only writer",
+      "initial": null,
+      "mnemonic": null,
+      "channel": {
+        "primaryKey": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "writable": false,
+        "localKey": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
+        "role": "mod"
+      },
+      "steps": [
+        {
+          "op": "identity",
+          "ok": {
+            "channel": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "writer": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
+            "role": "mod",
+            "writable": false,
+            "mnemonicSet": false,
+            "writers": [],
+            "epoch": 1
+          }
+        }
+      ],
+      "finalFile": null,
+      "finalMode": null,
+      "reloadedView": null
+    },
+    {
+      "name": "owner role on a read-only core",
+      "initial": null,
+      "mnemonic": null,
+      "channel": {
+        "primaryKey": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "writable": false,
+        "localKey": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
+        "role": "owner"
+      },
+      "steps": [
+        {
+          "op": "identity",
+          "ok": {
+            "channel": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "writer": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
+            "role": "owner",
+            "writable": true,
+            "mnemonicSet": false,
+            "writers": [],
+            "epoch": 1
+          }
+        }
+      ],
+      "finalFile": null,
+      "finalMode": null,
+      "reloadedView": null
+    },
+    {
+      "name": "saved phrase",
+      "initial": "{\n  \"mnemonic\": \"abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about\",\n  \"founded\": \"\",\n  \"accessKeys\": {}\n}",
+      "mnemonic": null,
+      "channel": {
+        "primaryKey": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      },
+      "steps": [
+        {
+          "op": "idVault",
+          "ok": {
+            "channelKey": "e44795e4446ef14ae85595220ac288a02c520b49263d71f40b978c5890999395",
+            "ownerPublicKey": "322bfd1b1fd51d5dcd6af75943b3a60721574705ff1a8c003a1fe081b116befc",
+            "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
+          }
+        },
+        {
+          "op": "identity",
+          "ok": {
+            "channel": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "writer": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "role": null,
+            "writable": true,
+            "mnemonicSet": true,
+            "writers": [],
+            "epoch": 1
+          }
+        },
+        {
+          "op": "identity",
+          "revealMnemonic": true,
+          "ok": {
+            "channel": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "writer": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "role": null,
+            "writable": true,
+            "mnemonicSet": true,
+            "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+            "writers": [],
+            "epoch": 1
+          }
+        },
+        {
+          "op": "save",
+          "ok": null
+        },
+        {
+          "op": "appends",
+          "ok": []
+        }
+      ],
+      "finalFile": "{\n  \"mnemonic\": \"abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about\",\n  \"founded\": \"\",\n  \"accessKeys\": {}\n}",
+      "finalMode": "600",
+      "reloadedView": {
+        "view": {
+          "channel": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "writer": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "role": null,
+          "writable": true,
+          "mnemonicSet": true,
+          "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+          "writers": [],
+          "epoch": 1
+        },
+        "accessKeys": {}
+      }
+    },
+    {
+      "name": "saved phrase messy",
+      "initial": "{\n  \"mnemonic\": \"  ABANDON   ABANDON   ABANDON   ABANDON   ABANDON   ABANDON   ABANDON   ABANDON   ABANDON   ABANDON   ABANDON   ABOUT  \",\n  \"founded\": \"\",\n  \"accessKeys\": {}\n}",
+      "mnemonic": null,
+      "channel": {
+        "primaryKey": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      },
+      "steps": [
+        {
+          "op": "idVault",
+          "ok": {
+            "channelKey": "e44795e4446ef14ae85595220ac288a02c520b49263d71f40b978c5890999395",
+            "ownerPublicKey": "322bfd1b1fd51d5dcd6af75943b3a60721574705ff1a8c003a1fe081b116befc",
+            "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
+          }
+        },
+        {
+          "op": "identity",
+          "revealMnemonic": true,
+          "ok": {
+            "channel": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "writer": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "role": null,
+            "writable": true,
+            "mnemonicSet": true,
+            "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+            "writers": [],
+            "epoch": 1
+          }
+        }
+      ],
+      "finalFile": "{\n  \"mnemonic\": \"  ABANDON   ABANDON   ABANDON   ABANDON   ABANDON   ABANDON   ABANDON   ABANDON   ABANDON   ABANDON   ABANDON   ABOUT  \",\n  \"founded\": \"\",\n  \"accessKeys\": {}\n}",
+      "finalMode": "600",
+      "reloadedView": {
+        "view": {
+          "channel": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "writer": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "role": null,
+          "writable": true,
+          "mnemonicSet": true,
+          "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+          "writers": [],
+          "epoch": 1
+        },
+        "accessKeys": {}
+      }
+    },
+    {
+      "name": "saved 24-word phrase",
+      "initial": "{\n  \"mnemonic\": \"abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon art\",\n  \"founded\": \"\",\n  \"accessKeys\": {}\n}",
+      "mnemonic": null,
+      "channel": {
+        "primaryKey": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      },
+      "steps": [
+        {
+          "op": "idVault",
+          "ok": {
+            "channelKey": "1f6009ab592e18e462fbab63b84be72f1dd97bc4892ebe4cae0db40172ee4e2a",
+            "ownerPublicKey": "4cd873a574eae2c60e842583e9275ea4ea702567ce0a5901e1ce96ff7354c47b",
+            "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon art"
+          }
+        },
+        {
+          "op": "identity",
+          "revealMnemonic": true,
+          "ok": {
+            "channel": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "writer": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "role": null,
+            "writable": true,
+            "mnemonicSet": true,
+            "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon art",
+            "writers": [],
+            "epoch": 1
+          }
+        }
+      ],
+      "finalFile": "{\n  \"mnemonic\": \"abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon art\",\n  \"founded\": \"\",\n  \"accessKeys\": {}\n}",
+      "finalMode": "600",
+      "reloadedView": {
+        "view": {
+          "channel": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "writer": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "role": null,
+          "writable": true,
+          "mnemonicSet": true,
+          "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon art",
+          "writers": [],
+          "epoch": 1
+        },
+        "accessKeys": {}
+      }
+    },
+    {
+      "name": "saved phrase invalid",
+      "initial": "{\n  \"mnemonic\": \"abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon\",\n  \"founded\": \"\",\n  \"accessKeys\": {}\n}",
+      "mnemonic": null,
+      "channel": {
+        "primaryKey": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      },
+      "steps": [
+        {
+          "op": "idVault",
+          "ok": null
+        },
+        {
+          "op": "identity",
+          "revealMnemonic": true,
+          "ok": {
+            "channel": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "writer": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "role": null,
+            "writable": true,
+            "mnemonicSet": false,
+            "mnemonic": "",
+            "writers": [],
+            "epoch": 1
+          }
+        },
+        {
+          "op": "save",
+          "ok": null
+        }
+      ],
+      "finalFile": "{\n  \"mnemonic\": \"\",\n  \"founded\": \"\",\n  \"accessKeys\": {}\n}",
+      "finalMode": "600",
+      "reloadedView": {
+        "view": {
+          "channel": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "writer": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "role": null,
+          "writable": true,
+          "mnemonicSet": false,
+          "mnemonic": "",
+          "writers": [],
+          "epoch": 1
+        },
+        "accessKeys": {}
+      }
+    },
+    {
+      "name": "saved phrase short",
+      "initial": "{\n  \"mnemonic\": \"abandon abandon abandon\",\n  \"founded\": \"\",\n  \"accessKeys\": {}\n}",
+      "mnemonic": null,
+      "channel": {
+        "primaryKey": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      },
+      "steps": [
+        {
+          "op": "identity",
+          "ok": {
+            "channel": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "writer": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "role": null,
+            "writable": true,
+            "mnemonicSet": false,
+            "writers": [],
+            "epoch": 1
+          }
+        }
+      ],
+      "finalFile": "{\n  \"mnemonic\": \"abandon abandon abandon\",\n  \"founded\": \"\",\n  \"accessKeys\": {}\n}",
+      "finalMode": "600",
+      "reloadedView": {
+        "view": {
+          "channel": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "writer": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "role": null,
+          "writable": true,
+          "mnemonicSet": false,
+          "mnemonic": "",
+          "writers": [],
+          "epoch": 1
+        },
+        "accessKeys": {}
+      }
+    },
+    {
+      "name": "saved phrase is a number",
+      "initial": "{\"mnemonic\":123,\"founded\":\"\",\"accessKeys\":{}}",
+      "mnemonic": null,
+      "channel": {
+        "primaryKey": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      },
+      "steps": [
+        {
+          "op": "identity",
+          "revealMnemonic": true,
+          "ok": {
+            "channel": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "writer": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "role": null,
+            "writable": true,
+            "mnemonicSet": false,
+            "mnemonic": "",
+            "writers": [],
+            "epoch": 1
+          }
+        },
+        {
+          "op": "save",
+          "ok": null
+        }
+      ],
+      "finalFile": "{\n  \"mnemonic\": \"\",\n  \"founded\": \"\",\n  \"accessKeys\": {}\n}",
+      "finalMode": "600",
+      "reloadedView": {
+        "view": {
+          "channel": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "writer": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "role": null,
+          "writable": true,
+          "mnemonicSet": false,
+          "mnemonic": "",
+          "writers": [],
+          "epoch": 1
+        },
+        "accessKeys": {}
+      }
+    },
+    {
+      "name": "saved phrase is a boolean",
+      "initial": "{\"mnemonic\":true}",
+      "mnemonic": null,
+      "channel": {
+        "primaryKey": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      },
+      "steps": [
+        {
+          "op": "identity",
+          "ok": {
+            "channel": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "writer": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "role": null,
+            "writable": true,
+            "mnemonicSet": false,
+            "writers": [],
+            "epoch": 1
+          }
+        }
+      ],
+      "finalFile": "{\"mnemonic\":true}",
+      "finalMode": "600",
+      "reloadedView": {
+        "view": {
+          "channel": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "writer": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "role": null,
+          "writable": true,
+          "mnemonicSet": false,
+          "mnemonic": "",
+          "writers": [],
+          "epoch": 1
+        },
+        "accessKeys": {}
+      }
+    },
+    {
+      "name": "corrupt file",
+      "initial": "{ not json",
+      "mnemonic": null,
+      "channel": {
+        "primaryKey": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      },
+      "steps": [
+        {
+          "op": "identity",
+          "ok": {
+            "channel": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "writer": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "role": null,
+            "writable": true,
+            "mnemonicSet": false,
+            "writers": [],
+            "epoch": 1
+          }
+        },
+        {
+          "op": "save",
+          "ok": null
+        },
+        {
+          "op": "accessKeys",
+          "ok": {}
+        }
+      ],
+      "finalFile": "{\n  \"mnemonic\": \"\",\n  \"founded\": \"\",\n  \"accessKeys\": {}\n}",
+      "finalMode": "600",
+      "reloadedView": {
+        "view": {
+          "channel": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "writer": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "role": null,
+          "writable": true,
+          "mnemonicSet": false,
+          "mnemonic": "",
+          "writers": [],
+          "epoch": 1
+        },
+        "accessKeys": {}
+      }
+    },
+    {
+      "name": "truncated file",
+      "initial": "{\"mnemonic\":\"abandon abandon",
+      "mnemonic": null,
+      "channel": {
+        "primaryKey": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      },
+      "steps": [
+        {
+          "op": "identity",
+          "ok": {
+            "channel": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "writer": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "role": null,
+            "writable": true,
+            "mnemonicSet": false,
+            "writers": [],
+            "epoch": 1
+          }
+        },
+        {
+          "op": "foundedKey",
+          "ok": ""
+        }
+      ],
+      "finalFile": "{\"mnemonic\":\"abandon abandon",
+      "finalMode": "600",
+      "reloadedView": {
+        "view": {
+          "channel": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "writer": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "role": null,
+          "writable": true,
+          "mnemonicSet": false,
+          "mnemonic": "",
+          "writers": [],
+          "epoch": 1
+        },
+        "accessKeys": {}
+      }
+    },
+    {
+      "name": "file is json null",
+      "initial": "null",
+      "mnemonic": null,
+      "channel": {
+        "primaryKey": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      },
+      "steps": [
+        {
+          "op": "identity",
+          "ok": {
+            "channel": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "writer": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "role": null,
+            "writable": true,
+            "mnemonicSet": false,
+            "writers": [],
+            "epoch": 1
+          }
+        },
+        {
+          "op": "save",
+          "ok": null
+        }
+      ],
+      "finalFile": "{\n  \"mnemonic\": \"\",\n  \"founded\": \"\",\n  \"accessKeys\": {}\n}",
+      "finalMode": "600",
+      "reloadedView": {
+        "view": {
+          "channel": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "writer": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "role": null,
+          "writable": true,
+          "mnemonicSet": false,
+          "mnemonic": "",
+          "writers": [],
+          "epoch": 1
+        },
+        "accessKeys": {}
+      }
+    },
+    {
+      "name": "file is an array",
+      "initial": "[\"x\",\"y\"]",
+      "mnemonic": null,
+      "channel": {
+        "primaryKey": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      },
+      "steps": [
+        {
+          "op": "identity",
+          "ok": {
+            "channel": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "writer": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "role": null,
+            "writable": true,
+            "mnemonicSet": false,
+            "writers": [],
+            "epoch": 1
+          }
+        },
+        {
+          "op": "save",
+          "ok": null
+        }
+      ],
+      "finalFile": "{\n  \"mnemonic\": \"\",\n  \"founded\": \"\",\n  \"accessKeys\": {}\n}",
+      "finalMode": "600",
+      "reloadedView": {
+        "view": {
+          "channel": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "writer": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "role": null,
+          "writable": true,
+          "mnemonicSet": false,
+          "mnemonic": "",
+          "writers": [],
+          "epoch": 1
+        },
+        "accessKeys": {}
+      }
+    },
+    {
+      "name": "empty object",
+      "initial": "{}",
+      "mnemonic": null,
+      "channel": {
+        "primaryKey": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      },
+      "steps": [
+        {
+          "op": "identity",
+          "ok": {
+            "channel": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "writer": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "role": null,
+            "writable": true,
+            "mnemonicSet": false,
+            "writers": [],
+            "epoch": 1
+          }
+        },
+        {
+          "op": "save",
+          "ok": null
+        }
+      ],
+      "finalFile": "{\n  \"mnemonic\": \"\",\n  \"founded\": \"\",\n  \"accessKeys\": {}\n}",
+      "finalMode": "600",
+      "reloadedView": {
+        "view": {
+          "channel": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "writer": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "role": null,
+          "writable": true,
+          "mnemonicSet": false,
+          "mnemonic": "",
+          "writers": [],
+          "epoch": 1
+        },
+        "accessKeys": {}
+      }
+    },
+    {
+      "name": "access keys uppercase and junk",
+      "initial": "{\n  \"mnemonic\": \"\",\n  \"founded\": \"\",\n  \"accessKeys\": {\n    \"0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF:2\": \"FEDCBA9876543210FEDCBA9876543210FEDCBA9876543210FEDCBA9876543210\",\n    \"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef:3\": \"9abcdef0123456789abcdef0123456789abcdef0123456789abcdef01234567\",\n    \"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef:4\": 42,\n    \"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef:5\": null,\n    \"nokey\": \"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\"\n  }\n}",
+      "mnemonic": null,
+      "channel": {
+        "primaryKey": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      },
+      "steps": [
+        {
+          "op": "accessKeys",
+          "ok": {
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef:2": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
+            "nokey": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+          }
+        },
+        {
+          "op": "save",
+          "ok": null
+        }
+      ],
+      "finalFile": "{\n  \"mnemonic\": \"\",\n  \"founded\": \"\",\n  \"accessKeys\": {\n    \"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef:2\": \"fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210\",\n    \"nokey\": \"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\"\n  }\n}",
+      "finalMode": "600",
+      "reloadedView": {
+        "view": {
+          "channel": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "writer": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "role": null,
+          "writable": true,
+          "mnemonicSet": false,
+          "mnemonic": "",
+          "writers": [],
+          "epoch": 1
+        },
+        "accessKeys": {
+          "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef:2": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
+          "nokey": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        }
+      }
+    },
+    {
+      "name": "access keys keep insertion order",
+      "initial": "{\"accessKeys\":{\"fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210:1\":\"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\",\"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef:1\":\"fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210\"}}",
+      "mnemonic": null,
+      "channel": {
+        "primaryKey": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      },
+      "steps": [
+        {
+          "op": "accessKeys",
+          "ok": {
+            "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210:1": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef:1": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
+          }
+        },
+        {
+          "op": "save",
+          "ok": null
+        }
+      ],
+      "finalFile": "{\n  \"mnemonic\": \"\",\n  \"founded\": \"\",\n  \"accessKeys\": {\n    \"fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210:1\": \"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\",\n    \"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef:1\": \"fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210\"\n  }\n}",
+      "finalMode": "600",
+      "reloadedView": {
+        "view": {
+          "channel": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "writer": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "role": null,
+          "writable": true,
+          "mnemonicSet": false,
+          "mnemonic": "",
+          "writers": [],
+          "epoch": 1
+        },
+        "accessKeys": {
+          "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210:1": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef:1": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
+        }
+      }
+    },
+    {
+      "name": "access keys is a string",
+      "initial": "{\"accessKeys\":\"abcdef\"}",
+      "mnemonic": null,
+      "channel": {
+        "primaryKey": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      },
+      "steps": [
+        {
+          "op": "accessKeys",
+          "ok": {}
+        },
+        {
+          "op": "save",
+          "ok": null
+        }
+      ],
+      "finalFile": "{\n  \"mnemonic\": \"\",\n  \"founded\": \"\",\n  \"accessKeys\": {}\n}",
+      "finalMode": "600",
+      "reloadedView": {
+        "view": {
+          "channel": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "writer": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "role": null,
+          "writable": true,
+          "mnemonicSet": false,
+          "mnemonic": "",
+          "writers": [],
+          "epoch": 1
+        },
+        "accessKeys": {}
+      }
+    },
+    {
+      "name": "access keys is a number",
+      "initial": "{\"accessKeys\":7}",
+      "mnemonic": null,
+      "channel": {
+        "primaryKey": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      },
+      "steps": [
+        {
+          "op": "accessKeys",
+          "ok": {}
+        }
+      ],
+      "finalFile": "{\"accessKeys\":7}",
+      "finalMode": "600",
+      "reloadedView": {
+        "view": {
+          "channel": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "writer": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "role": null,
+          "writable": true,
+          "mnemonicSet": false,
+          "mnemonic": "",
+          "writers": [],
+          "epoch": 1
+        },
+        "accessKeys": {}
+      }
+    },
+    {
+      "name": "founded uppercase is ignored",
+      "initial": "{\n  \"mnemonic\": \"abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about\",\n  \"founded\": \"E44795E4446EF14AE85595220AC288A02C520B49263D71F40B978C5890999395\",\n  \"accessKeys\": {}\n}",
+      "mnemonic": null,
+      "channel": {
+        "primaryKey": "e44795e4446ef14ae85595220ac288a02c520b49263d71f40b978c5890999395"
+      },
+      "steps": [
+        {
+          "op": "foundedKey",
+          "ok": ""
+        },
+        {
+          "op": "identity",
+          "ok": {
+            "channel": "e44795e4446ef14ae85595220ac288a02c520b49263d71f40b978c5890999395",
+            "writer": "e44795e4446ef14ae85595220ac288a02c520b49263d71f40b978c5890999395",
+            "role": null,
+            "writable": true,
+            "mnemonicSet": true,
+            "writers": [],
+            "epoch": 1,
+            "epochKey": "5293118103e314f45fed62314c77c87a6ed3705bd5794b90ce900a6305540d72",
+            "accessUri": "peartube://access/e44795e4446ef14ae85595220ac288a02c520b49263d71f40b978c5890999395:1:5293118103e314f45fed62314c77c87a6ed3705bd5794b90ce900a6305540d72"
+          }
+        }
+      ],
+      "finalFile": "{\n  \"mnemonic\": \"abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about\",\n  \"founded\": \"E44795E4446EF14AE85595220AC288A02C520B49263D71F40B978C5890999395\",\n  \"accessKeys\": {}\n}",
+      "finalMode": "600",
+      "reloadedView": {
+        "view": {
+          "channel": "e44795e4446ef14ae85595220ac288a02c520b49263d71f40b978c5890999395",
+          "writer": "e44795e4446ef14ae85595220ac288a02c520b49263d71f40b978c5890999395",
+          "role": null,
+          "writable": true,
+          "mnemonicSet": true,
+          "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+          "writers": [],
+          "epoch": 1,
+          "epochKey": "5293118103e314f45fed62314c77c87a6ed3705bd5794b90ce900a6305540d72",
+          "accessUri": "peartube://access/e44795e4446ef14ae85595220ac288a02c520b49263d71f40b978c5890999395:1:5293118103e314f45fed62314c77c87a6ed3705bd5794b90ce900a6305540d72"
+        },
+        "accessKeys": {}
+      }
+    },
+    {
+      "name": "founded marks this channel even for another phrase",
+      "initial": "{\n  \"mnemonic\": \"abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about\",\n  \"founded\": \"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\",\n  \"accessKeys\": {}\n}",
+      "mnemonic": null,
+      "channel": {
+        "primaryKey": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "epoch": 3
+      },
+      "steps": [
+        {
+          "op": "foundedKey",
+          "ok": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        },
+        {
+          "op": "identity",
+          "ok": {
+            "channel": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "writer": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "role": null,
+            "writable": true,
+            "mnemonicSet": true,
+            "writers": [],
+            "epoch": 3,
+            "epochKey": "327f5961e828c865d53ef17221fea8f7d12c8e7c2fb3c64d590dd3f2048b1f95",
+            "accessUri": "peartube://access/0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef:3:327f5961e828c865d53ef17221fea8f7d12c8e7c2fb3c64d590dd3f2048b1f95"
+          }
+        }
+      ],
+      "finalFile": "{\n  \"mnemonic\": \"abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about\",\n  \"founded\": \"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\",\n  \"accessKeys\": {}\n}",
+      "finalMode": "600",
+      "reloadedView": {
+        "view": {
+          "channel": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "writer": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "role": null,
+          "writable": true,
+          "mnemonicSet": true,
+          "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+          "writers": [],
+          "epoch": 3,
+          "epochKey": "327f5961e828c865d53ef17221fea8f7d12c8e7c2fb3c64d590dd3f2048b1f95",
+          "accessUri": "peartube://access/0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef:3:327f5961e828c865d53ef17221fea8f7d12c8e7c2fb3c64d590dd3f2048b1f95"
+        },
+        "accessKeys": {}
+      }
+    },
+    {
+      "name": "vault channel is this channel",
+      "initial": "{\n  \"mnemonic\": \"abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about\",\n  \"founded\": \"fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210\",\n  \"accessKeys\": {}\n}",
+      "mnemonic": null,
+      "channel": {
+        "primaryKey": "e44795e4446ef14ae85595220ac288a02c520b49263d71f40b978c5890999395",
+        "epoch": 4
+      },
+      "steps": [
+        {
+          "op": "identity",
+          "ok": {
+            "channel": "e44795e4446ef14ae85595220ac288a02c520b49263d71f40b978c5890999395",
+            "writer": "e44795e4446ef14ae85595220ac288a02c520b49263d71f40b978c5890999395",
+            "role": null,
+            "writable": true,
+            "mnemonicSet": true,
+            "writers": [],
+            "epoch": 4,
+            "epochKey": "94ebe4da19e82595202b4a37c875fc2135f66a34544f67d09d93d6109d5d5a60",
+            "accessUri": "peartube://access/e44795e4446ef14ae85595220ac288a02c520b49263d71f40b978c5890999395:4:94ebe4da19e82595202b4a37c875fc2135f66a34544f67d09d93d6109d5d5a60"
+          }
+        },
+        {
+          "op": "identity",
+          "revealMnemonic": true,
+          "ok": {
+            "channel": "e44795e4446ef14ae85595220ac288a02c520b49263d71f40b978c5890999395",
+            "writer": "e44795e4446ef14ae85595220ac288a02c520b49263d71f40b978c5890999395",
+            "role": null,
+            "writable": true,
+            "mnemonicSet": true,
+            "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+            "writers": [],
+            "epoch": 4,
+            "epochKey": "94ebe4da19e82595202b4a37c875fc2135f66a34544f67d09d93d6109d5d5a60",
+            "accessUri": "peartube://access/e44795e4446ef14ae85595220ac288a02c520b49263d71f40b978c5890999395:4:94ebe4da19e82595202b4a37c875fc2135f66a34544f67d09d93d6109d5d5a60"
+          }
+        }
+      ],
+      "finalFile": "{\n  \"mnemonic\": \"abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about\",\n  \"founded\": \"fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210\",\n  \"accessKeys\": {}\n}",
+      "finalMode": "600",
+      "reloadedView": {
+        "view": {
+          "channel": "e44795e4446ef14ae85595220ac288a02c520b49263d71f40b978c5890999395",
+          "writer": "e44795e4446ef14ae85595220ac288a02c520b49263d71f40b978c5890999395",
+          "role": null,
+          "writable": true,
+          "mnemonicSet": true,
+          "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+          "writers": [],
+          "epoch": 4,
+          "epochKey": "94ebe4da19e82595202b4a37c875fc2135f66a34544f67d09d93d6109d5d5a60",
+          "accessUri": "peartube://access/e44795e4446ef14ae85595220ac288a02c520b49263d71f40b978c5890999395:4:94ebe4da19e82595202b4a37c875fc2135f66a34544f67d09d93d6109d5d5a60"
+        },
+        "accessKeys": {}
+      }
+    },
+    {
+      "name": "foreign vault gets no epoch key",
+      "initial": "{\n  \"mnemonic\": \"abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about\",\n  \"founded\": \"89abcdef0123456789abcdef0123456789abcdef0123456789abcdef01234567\",\n  \"accessKeys\": {}\n}",
+      "mnemonic": null,
+      "channel": {
+        "primaryKey": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "epoch": 2,
+        "writable": false,
+        "role": "writer"
+      },
+      "steps": [
+        {
+          "op": "identity",
+          "ok": {
+            "channel": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "writer": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "role": "writer",
+            "writable": false,
+            "mnemonicSet": true,
+            "writers": [],
+            "epoch": 2
+          }
+        }
+      ],
+      "finalFile": "{\n  \"mnemonic\": \"abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about\",\n  \"founded\": \"89abcdef0123456789abcdef0123456789abcdef0123456789abcdef01234567\",\n  \"accessKeys\": {}\n}",
+      "finalMode": "600",
+      "reloadedView": {
+        "view": {
+          "channel": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "writer": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "role": "writer",
+          "writable": false,
+          "mnemonicSet": true,
+          "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+          "writers": [],
+          "epoch": 2
+        },
+        "accessKeys": {}
+      }
+    },
+    {
+      "name": "founded unset and vault foreign",
+      "initial": "{\"mnemonic\":\"abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about\",\"accessKeys\":{}}",
+      "mnemonic": null,
+      "channel": {
+        "primaryKey": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      },
+      "steps": [
+        {
+          "op": "identity",
+          "ok": {
+            "channel": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "writer": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "role": null,
+            "writable": true,
+            "mnemonicSet": true,
+            "writers": [],
+            "epoch": 1
+          }
+        },
+        {
+          "op": "foundedKey",
+          "ok": ""
+        }
+      ],
+      "finalFile": "{\"mnemonic\":\"abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about\",\"accessKeys\":{}}",
+      "finalMode": "600",
+      "reloadedView": {
+        "view": {
+          "channel": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "writer": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "role": null,
+          "writable": true,
+          "mnemonicSet": true,
+          "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+          "writers": [],
+          "epoch": 1
+        },
+        "accessKeys": {}
+      }
+    },
+    {
+      "name": "option wins over saved phrase",
+      "initial": "{\n  \"mnemonic\": \"abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about\",\n  \"founded\": \"\",\n  \"accessKeys\": {}\n}",
+      "mnemonic": "legal winner thank year wave sausage worth useful legal winner thank yellow",
+      "channel": {
+        "primaryKey": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      },
+      "steps": [
+        {
+          "op": "idVault",
+          "ok": {
+            "channelKey": "45483c3b8c4c91aa85c2c70cbc9a7c1fa5b742a776b2d215e2238605ab0ee8e9",
+            "ownerPublicKey": "011f008950b7d9150f37c0a4f3e521ba551b84227d80afb90447da380c2ad817",
+            "mnemonic": "legal winner thank year wave sausage worth useful legal winner thank yellow"
+          }
+        },
+        {
+          "op": "identity",
+          "revealMnemonic": true,
+          "ok": {
+            "channel": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "writer": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "role": null,
+            "writable": true,
+            "mnemonicSet": true,
+            "mnemonic": "legal winner thank year wave sausage worth useful legal winner thank yellow",
+            "writers": [],
+            "epoch": 1
+          }
+        },
+        {
+          "op": "save",
+          "ok": null
+        }
+      ],
+      "finalFile": "{\n  \"mnemonic\": \"legal winner thank year wave sausage worth useful legal winner thank yellow\",\n  \"founded\": \"\",\n  \"accessKeys\": {}\n}",
+      "finalMode": "600",
+      "reloadedView": {
+        "view": {
+          "channel": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "writer": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "role": null,
+          "writable": true,
+          "mnemonicSet": true,
+          "mnemonic": "legal winner thank year wave sausage worth useful legal winner thank yellow",
+          "writers": [],
+          "epoch": 1
+        },
+        "accessKeys": {}
+      }
+    },
+    {
+      "name": "empty option falls back to the file",
+      "initial": "{\n  \"mnemonic\": \"abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about\",\n  \"founded\": \"\",\n  \"accessKeys\": {}\n}",
+      "mnemonic": "",
+      "channel": {
+        "primaryKey": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      },
+      "steps": [
+        {
+          "op": "idVault",
+          "ok": {
+            "channelKey": "e44795e4446ef14ae85595220ac288a02c520b49263d71f40b978c5890999395",
+            "ownerPublicKey": "322bfd1b1fd51d5dcd6af75943b3a60721574705ff1a8c003a1fe081b116befc",
+            "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
+          }
+        }
+      ],
+      "finalFile": "{\n  \"mnemonic\": \"abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about\",\n  \"founded\": \"\",\n  \"accessKeys\": {}\n}",
+      "finalMode": "600",
+      "reloadedView": {
+        "view": {
+          "channel": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "writer": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "role": null,
+          "writable": true,
+          "mnemonicSet": true,
+          "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+          "writers": [],
+          "epoch": 1
+        },
+        "accessKeys": {}
+      }
+    },
+    {
+      "name": "invalid option throws",
+      "initial": null,
+      "mnemonic": "not a phrase",
+      "channel": {
+        "primaryKey": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      },
+      "steps": [],
+      "finalFile": null,
+      "finalMode": null,
+      "reloadedView": null,
+      "createErr": "Invalid 12- or 24-word recovery phrase"
+    },
+    {
+      "name": "invalid option checksum throws",
+      "initial": null,
+      "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon zoo",
+      "channel": {
+        "primaryKey": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      },
+      "steps": [],
+      "finalFile": null,
+      "finalMode": null,
+      "reloadedView": null,
+      "createErr": "Invalid 12- or 24-word recovery phrase"
+    },
+    {
+      "name": "invalid 24-word option throws",
+      "initial": null,
+      "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon zoo",
+      "channel": {
+        "primaryKey": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      },
+      "steps": [],
+      "finalFile": null,
+      "finalMode": null,
+      "reloadedView": null,
+      "createErr": "Invalid 12- or 24-word recovery phrase"
+    },
+    {
+      "name": "claim on the matching writable channel",
+      "initial": null,
+      "mnemonic": null,
+      "channel": {
+        "primaryKey": "e44795e4446ef14ae85595220ac288a02c520b49263d71f40b978c5890999395",
+        "writable": true,
+        "localKey": "e44795e4446ef14ae85595220ac288a02c520b49263d71f40b978c5890999395"
+      },
+      "steps": [
+        {
+          "op": "claim",
+          "phrase": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+          "alias": "My TV",
+          "ok": {
+            "claimed": true,
+            "reopenNeeded": false,
+            "channel": "e44795e4446ef14ae85595220ac288a02c520b49263d71f40b978c5890999395",
+            "writer": "e44795e4446ef14ae85595220ac288a02c520b49263d71f40b978c5890999395"
+          }
+        },
+        {
+          "op": "identity",
+          "ok": {
+            "channel": "e44795e4446ef14ae85595220ac288a02c520b49263d71f40b978c5890999395",
+            "writer": "e44795e4446ef14ae85595220ac288a02c520b49263d71f40b978c5890999395",
+            "role": null,
+            "writable": true,
+            "mnemonicSet": true,
+            "writers": [],
+            "epoch": 1,
+            "epochKey": "5293118103e314f45fed62314c77c87a6ed3705bd5794b90ce900a6305540d72",
+            "accessUri": "peartube://access/e44795e4446ef14ae85595220ac288a02c520b49263d71f40b978c5890999395:1:5293118103e314f45fed62314c77c87a6ed3705bd5794b90ce900a6305540d72"
+          }
+        },
+        {
+          "op": "appends",
+          "ok": []
+        },
+        {
+          "op": "idVault",
+          "ok": {
+            "channelKey": "e44795e4446ef14ae85595220ac288a02c520b49263d71f40b978c5890999395",
+            "ownerPublicKey": "322bfd1b1fd51d5dcd6af75943b3a60721574705ff1a8c003a1fe081b116befc",
+            "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
+          }
+        }
+      ],
+      "finalFile": "{\n  \"mnemonic\": \"abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about\",\n  \"founded\": \"\",\n  \"accessKeys\": {}\n}",
+      "finalMode": "600",
+      "reloadedView": {
+        "view": {
+          "channel": "e44795e4446ef14ae85595220ac288a02c520b49263d71f40b978c5890999395",
+          "writer": "e44795e4446ef14ae85595220ac288a02c520b49263d71f40b978c5890999395",
+          "role": null,
+          "writable": true,
+          "mnemonicSet": true,
+          "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+          "writers": [],
+          "epoch": 1,
+          "epochKey": "5293118103e314f45fed62314c77c87a6ed3705bd5794b90ce900a6305540d72",
+          "accessUri": "peartube://access/e44795e4446ef14ae85595220ac288a02c520b49263d71f40b978c5890999395:1:5293118103e314f45fed62314c77c87a6ed3705bd5794b90ce900a6305540d72"
+        },
+        "accessKeys": {}
+      }
+    },
+    {
+      "name": "claim on the matching read-only channel",
+      "initial": null,
+      "mnemonic": null,
+      "channel": {
+        "primaryKey": "e44795e4446ef14ae85595220ac288a02c520b49263d71f40b978c5890999395",
+        "writable": false,
+        "localKey": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
+        "role": "writer"
+      },
+      "steps": [
+        {
+          "op": "claim",
+          "phrase": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+          "alias": "  My \n TV  ",
+          "ok": {
+            "claimed": true,
+            "reopenNeeded": false,
+            "channel": "e44795e4446ef14ae85595220ac288a02c520b49263d71f40b978c5890999395",
+            "writer": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
+          }
+        },
+        {
+          "op": "identity",
+          "revealMnemonic": true,
+          "ok": {
+            "channel": "e44795e4446ef14ae85595220ac288a02c520b49263d71f40b978c5890999395",
+            "writer": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
+            "role": "writer",
+            "writable": false,
+            "mnemonicSet": true,
+            "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+            "writers": [],
+            "epoch": 1,
+            "epochKey": "5293118103e314f45fed62314c77c87a6ed3705bd5794b90ce900a6305540d72",
+            "accessUri": "peartube://access/e44795e4446ef14ae85595220ac288a02c520b49263d71f40b978c5890999395:1:5293118103e314f45fed62314c77c87a6ed3705bd5794b90ce900a6305540d72"
+          }
+        },
+        {
+          "op": "appends",
+          "ok": [
+            {
+              "type": "claim",
+              "sig": "b61b732d0e8fdb258f9183c8d1dde083eb42660d2951f745471a31420d6e62269a17099e5447237fcac4432e27ff6cec5cefceb2a828ac2e6917c633ec24cf0e",
+              "alias": "  My \n TV  "
+            }
+          ]
+        }
+      ],
+      "finalFile": "{\n  \"mnemonic\": \"abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about\",\n  \"founded\": \"\",\n  \"accessKeys\": {}\n}",
+      "finalMode": "600",
+      "reloadedView": {
+        "view": {
+          "channel": "e44795e4446ef14ae85595220ac288a02c520b49263d71f40b978c5890999395",
+          "writer": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
+          "role": "writer",
+          "writable": false,
+          "mnemonicSet": true,
+          "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+          "writers": [],
+          "epoch": 1,
+          "epochKey": "5293118103e314f45fed62314c77c87a6ed3705bd5794b90ce900a6305540d72",
+          "accessUri": "peartube://access/e44795e4446ef14ae85595220ac288a02c520b49263d71f40b978c5890999395:1:5293118103e314f45fed62314c77c87a6ed3705bd5794b90ce900a6305540d72"
+        },
+        "accessKeys": {}
+      }
+    },
+    {
+      "name": "claim on another channel",
+      "initial": "{\n  \"mnemonic\": \"legal winner thank year wave sausage worth useful legal winner thank yellow\",\n  \"founded\": \"\",\n  \"accessKeys\": {}\n}",
+      "mnemonic": null,
+      "channel": {
+        "primaryKey": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "writable": true,
+        "localKey": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      },
+      "steps": [
+        {
+          "op": "claim",
+          "phrase": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+          "ok": {
+            "claimed": false,
+            "reopenNeeded": true,
+            "channel": "e44795e4446ef14ae85595220ac288a02c520b49263d71f40b978c5890999395"
+          }
+        },
+        {
+          "op": "appends",
+          "ok": []
+        },
+        {
+          "op": "idVault",
+          "ok": {
+            "channelKey": "e44795e4446ef14ae85595220ac288a02c520b49263d71f40b978c5890999395",
+            "ownerPublicKey": "322bfd1b1fd51d5dcd6af75943b3a60721574705ff1a8c003a1fe081b116befc",
+            "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
+          }
+        }
+      ],
+      "finalFile": "{\n  \"mnemonic\": \"abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about\",\n  \"founded\": \"\",\n  \"accessKeys\": {}\n}",
+      "finalMode": "600",
+      "reloadedView": {
+        "view": {
+          "channel": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "writer": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "role": null,
+          "writable": true,
+          "mnemonicSet": true,
+          "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+          "writers": [],
+          "epoch": 1
+        },
+        "accessKeys": {}
+      }
+    },
+    {
+      "name": "claim invalid phrase",
+      "initial": null,
+      "mnemonic": null,
+      "channel": {
+        "primaryKey": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      },
+      "steps": [
+        {
+          "op": "claim",
+          "phrase": "abandon abandon abandon",
+          "err": "Invalid 12- or 24-word recovery phrase"
+        },
+        {
+          "op": "appends",
+          "ok": []
+        }
+      ],
+      "finalFile": null,
+      "finalMode": null,
+      "reloadedView": null
+    },
+    {
+      "name": "claim twice",
+      "initial": null,
+      "mnemonic": null,
+      "channel": {
+        "primaryKey": "e44795e4446ef14ae85595220ac288a02c520b49263d71f40b978c5890999395",
+        "writable": false,
+        "localKey": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
+      },
+      "steps": [
+        {
+          "op": "claim",
+          "phrase": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon art",
+          "ok": {
+            "claimed": false,
+            "reopenNeeded": true,
+            "channel": "1f6009ab592e18e462fbab63b84be72f1dd97bc4892ebe4cae0db40172ee4e2a"
+          }
+        },
+        {
+          "op": "claim",
+          "phrase": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+          "alias": "Studio",
+          "ok": {
+            "claimed": true,
+            "reopenNeeded": false,
+            "channel": "e44795e4446ef14ae85595220ac288a02c520b49263d71f40b978c5890999395",
+            "writer": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
+          }
+        },
+        {
+          "op": "appends",
+          "ok": [
+            {
+              "type": "claim",
+              "sig": "b61b732d0e8fdb258f9183c8d1dde083eb42660d2951f745471a31420d6e62269a17099e5447237fcac4432e27ff6cec5cefceb2a828ac2e6917c633ec24cf0e",
+              "alias": "Studio"
+            }
+          ]
+        }
+      ],
+      "finalFile": "{\n  \"mnemonic\": \"abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about\",\n  \"founded\": \"\",\n  \"accessKeys\": {}\n}",
+      "finalMode": "600",
+      "reloadedView": {
+        "view": {
+          "channel": "e44795e4446ef14ae85595220ac288a02c520b49263d71f40b978c5890999395",
+          "writer": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
+          "role": null,
+          "writable": false,
+          "mnemonicSet": true,
+          "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+          "writers": [],
+          "epoch": 1,
+          "epochKey": "5293118103e314f45fed62314c77c87a6ed3705bd5794b90ce900a6305540d72",
+          "accessUri": "peartube://access/e44795e4446ef14ae85595220ac288a02c520b49263d71f40b978c5890999395:1:5293118103e314f45fed62314c77c87a6ed3705bd5794b90ce900a6305540d72"
+        },
+        "accessKeys": {}
+      }
+    },
+    {
+      "name": "claim then rotate",
+      "initial": null,
+      "mnemonic": null,
+      "channel": {
+        "primaryKey": "e44795e4446ef14ae85595220ac288a02c520b49263d71f40b978c5890999395",
+        "writable": false,
+        "localKey": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
+        "epoch": 1
+      },
+      "steps": [
+        {
+          "op": "claim",
+          "phrase": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+          "alias": "Phone",
+          "ok": {
+            "claimed": true,
+            "reopenNeeded": false,
+            "channel": "e44795e4446ef14ae85595220ac288a02c520b49263d71f40b978c5890999395",
+            "writer": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
+          }
+        },
+        {
+          "op": "rotate",
+          "ok": {
+            "epoch": 2,
+            "epochKey": "a156923ab19939b669dc63ed141141edfa8fa6d5debb32ed441b743caae86ad2",
+            "accessUri": "peartube://access/e44795e4446ef14ae85595220ac288a02c520b49263d71f40b978c5890999395:2:a156923ab19939b669dc63ed141141edfa8fa6d5debb32ed441b743caae86ad2"
+          }
+        },
+        {
+          "op": "identity",
+          "ok": {
+            "channel": "e44795e4446ef14ae85595220ac288a02c520b49263d71f40b978c5890999395",
+            "writer": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
+            "role": null,
+            "writable": false,
+            "mnemonicSet": true,
+            "writers": [],
+            "epoch": 2,
+            "epochKey": "a156923ab19939b669dc63ed141141edfa8fa6d5debb32ed441b743caae86ad2",
+            "accessUri": "peartube://access/e44795e4446ef14ae85595220ac288a02c520b49263d71f40b978c5890999395:2:a156923ab19939b669dc63ed141141edfa8fa6d5debb32ed441b743caae86ad2"
+          }
+        },
+        {
+          "op": "appends",
+          "ok": [
+            {
+              "type": "claim",
+              "sig": "b61b732d0e8fdb258f9183c8d1dde083eb42660d2951f745471a31420d6e62269a17099e5447237fcac4432e27ff6cec5cefceb2a828ac2e6917c633ec24cf0e",
+              "alias": "Phone"
+            },
+            {
+              "type": "epoch",
+              "epoch": 2
+            }
+          ]
+        }
+      ],
+      "finalFile": "{\n  \"mnemonic\": \"abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about\",\n  \"founded\": \"\",\n  \"accessKeys\": {}\n}",
+      "finalMode": "600",
+      "reloadedView": {
+        "view": {
+          "channel": "e44795e4446ef14ae85595220ac288a02c520b49263d71f40b978c5890999395",
+          "writer": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
+          "role": null,
+          "writable": false,
+          "mnemonicSet": true,
+          "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+          "writers": [],
+          "epoch": 1,
+          "epochKey": "5293118103e314f45fed62314c77c87a6ed3705bd5794b90ce900a6305540d72",
+          "accessUri": "peartube://access/e44795e4446ef14ae85595220ac288a02c520b49263d71f40b978c5890999395:1:5293118103e314f45fed62314c77c87a6ed3705bd5794b90ce900a6305540d72"
+        },
+        "accessKeys": {}
+      }
+    },
+    {
+      "name": "rotate without a vault",
+      "initial": null,
+      "mnemonic": null,
+      "channel": {
+        "primaryKey": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      },
+      "steps": [
+        {
+          "op": "rotate",
+          "err": "12-word recovery vault required to rotate subscriber epochs"
+        },
+        {
+          "op": "appends",
+          "ok": []
+        }
+      ],
+      "finalFile": null,
+      "finalMode": null,
+      "reloadedView": null
+    },
+    {
+      "name": "rotate once",
+      "initial": "{\n  \"mnemonic\": \"abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about\",\n  \"founded\": \"e44795e4446ef14ae85595220ac288a02c520b49263d71f40b978c5890999395\",\n  \"accessKeys\": {}\n}",
+      "mnemonic": null,
+      "channel": {
+        "primaryKey": "e44795e4446ef14ae85595220ac288a02c520b49263d71f40b978c5890999395",
+        "epoch": 1
+      },
+      "steps": [
+        {
+          "op": "rotate",
+          "ok": {
+            "epoch": 2,
+            "epochKey": "a156923ab19939b669dc63ed141141edfa8fa6d5debb32ed441b743caae86ad2",
+            "accessUri": "peartube://access/e44795e4446ef14ae85595220ac288a02c520b49263d71f40b978c5890999395:2:a156923ab19939b669dc63ed141141edfa8fa6d5debb32ed441b743caae86ad2"
+          }
+        },
+        {
+          "op": "epochState",
+          "ok": 2
+        },
+        {
+          "op": "identity",
+          "ok": {
+            "channel": "e44795e4446ef14ae85595220ac288a02c520b49263d71f40b978c5890999395",
+            "writer": "e44795e4446ef14ae85595220ac288a02c520b49263d71f40b978c5890999395",
+            "role": null,
+            "writable": true,
+            "mnemonicSet": true,
+            "writers": [],
+            "epoch": 2,
+            "epochKey": "a156923ab19939b669dc63ed141141edfa8fa6d5debb32ed441b743caae86ad2",
+            "accessUri": "peartube://access/e44795e4446ef14ae85595220ac288a02c520b49263d71f40b978c5890999395:2:a156923ab19939b669dc63ed141141edfa8fa6d5debb32ed441b743caae86ad2"
+          }
+        },
+        {
+          "op": "appends",
+          "ok": [
+            {
+              "type": "epoch",
+              "epoch": 2
+            }
+          ]
+        }
+      ],
+      "finalFile": "{\n  \"mnemonic\": \"abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about\",\n  \"founded\": \"e44795e4446ef14ae85595220ac288a02c520b49263d71f40b978c5890999395\",\n  \"accessKeys\": {}\n}",
+      "finalMode": "600",
+      "reloadedView": {
+        "view": {
+          "channel": "e44795e4446ef14ae85595220ac288a02c520b49263d71f40b978c5890999395",
+          "writer": "e44795e4446ef14ae85595220ac288a02c520b49263d71f40b978c5890999395",
+          "role": null,
+          "writable": true,
+          "mnemonicSet": true,
+          "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+          "writers": [],
+          "epoch": 1,
+          "epochKey": "5293118103e314f45fed62314c77c87a6ed3705bd5794b90ce900a6305540d72",
+          "accessUri": "peartube://access/e44795e4446ef14ae85595220ac288a02c520b49263d71f40b978c5890999395:1:5293118103e314f45fed62314c77c87a6ed3705bd5794b90ce900a6305540d72"
+        },
+        "accessKeys": {}
+      }
+    },
+    {
+      "name": "rotate twice",
+      "initial": "{\n  \"mnemonic\": \"abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about\",\n  \"founded\": \"e44795e4446ef14ae85595220ac288a02c520b49263d71f40b978c5890999395\",\n  \"accessKeys\": {}\n}",
+      "mnemonic": null,
+      "channel": {
+        "primaryKey": "e44795e4446ef14ae85595220ac288a02c520b49263d71f40b978c5890999395",
+        "epoch": 5
+      },
+      "steps": [
+        {
+          "op": "rotate",
+          "ok": {
+            "epoch": 6,
+            "epochKey": "ecbddd095c7c34d8fac722715d9bcac723aa06555e874a36dd74a64e2b08dda5",
+            "accessUri": "peartube://access/e44795e4446ef14ae85595220ac288a02c520b49263d71f40b978c5890999395:6:ecbddd095c7c34d8fac722715d9bcac723aa06555e874a36dd74a64e2b08dda5"
+          }
+        },
+        {
+          "op": "rotate",
+          "ok": {
+            "epoch": 7,
+            "epochKey": "a864cf30a5a3b0ad74107b0217c1328cee7073a6d48793003d623bf1e260e358",
+            "accessUri": "peartube://access/e44795e4446ef14ae85595220ac288a02c520b49263d71f40b978c5890999395:7:a864cf30a5a3b0ad74107b0217c1328cee7073a6d48793003d623bf1e260e358"
+          }
+        },
+        {
+          "op": "identity",
+          "ok": {
+            "channel": "e44795e4446ef14ae85595220ac288a02c520b49263d71f40b978c5890999395",
+            "writer": "e44795e4446ef14ae85595220ac288a02c520b49263d71f40b978c5890999395",
+            "role": null,
+            "writable": true,
+            "mnemonicSet": true,
+            "writers": [],
+            "epoch": 7,
+            "epochKey": "a864cf30a5a3b0ad74107b0217c1328cee7073a6d48793003d623bf1e260e358",
+            "accessUri": "peartube://access/e44795e4446ef14ae85595220ac288a02c520b49263d71f40b978c5890999395:7:a864cf30a5a3b0ad74107b0217c1328cee7073a6d48793003d623bf1e260e358"
+          }
+        },
+        {
+          "op": "appends",
+          "ok": [
+            {
+              "type": "epoch",
+              "epoch": 6
+            },
+            {
+              "type": "epoch",
+              "epoch": 7
+            }
+          ]
+        }
+      ],
+      "finalFile": "{\n  \"mnemonic\": \"abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about\",\n  \"founded\": \"e44795e4446ef14ae85595220ac288a02c520b49263d71f40b978c5890999395\",\n  \"accessKeys\": {}\n}",
+      "finalMode": "600",
+      "reloadedView": {
+        "view": {
+          "channel": "e44795e4446ef14ae85595220ac288a02c520b49263d71f40b978c5890999395",
+          "writer": "e44795e4446ef14ae85595220ac288a02c520b49263d71f40b978c5890999395",
+          "role": null,
+          "writable": true,
+          "mnemonicSet": true,
+          "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+          "writers": [],
+          "epoch": 5,
+          "epochKey": "ad3656d33baf6c74883f558088e5565ee08cfa775a91b21c97be74e61f23fe60",
+          "accessUri": "peartube://access/e44795e4446ef14ae85595220ac288a02c520b49263d71f40b978c5890999395:5:ad3656d33baf6c74883f558088e5565ee08cfa775a91b21c97be74e61f23fe60"
+        },
+        "accessKeys": {}
+      }
+    },
+    {
+      "name": "add access key",
+      "initial": null,
+      "mnemonic": null,
+      "channel": {
+        "primaryKey": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      },
+      "steps": [
+        {
+          "op": "addAccessKey",
+          "request": {
+            "channel": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
+            "epoch": 2,
+            "key": "89abcdef0123456789abcdef0123456789abcdef0123456789abcdef01234567"
+          },
+          "ok": {
+            "channel": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
+            "epoch": 2
+          }
+        },
+        {
+          "op": "accessKeys",
+          "ok": {
+            "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210:2": "89abcdef0123456789abcdef0123456789abcdef0123456789abcdef01234567"
+          }
+        }
+      ],
+      "finalFile": "{\n  \"mnemonic\": \"\",\n  \"founded\": \"\",\n  \"accessKeys\": {\n    \"fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210:2\": \"89abcdef0123456789abcdef0123456789abcdef0123456789abcdef01234567\"\n  }\n}",
+      "finalMode": "600",
+      "reloadedView": {
+        "view": {
+          "channel": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "writer": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "role": null,
+          "writable": true,
+          "mnemonicSet": false,
+          "mnemonic": "",
+          "writers": [],
+          "epoch": 1
+        },
+        "accessKeys": {
+          "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210:2": "89abcdef0123456789abcdef0123456789abcdef0123456789abcdef01234567"
+        }
+      }
+    },
+    {
+      "name": "add access key uppercase and spaces",
+      "initial": null,
+      "mnemonic": null,
+      "channel": {
+        "primaryKey": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      },
+      "steps": [
+        {
+          "op": "addAccessKey",
+          "request": {
+            "channel": " 0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF ",
+            "epoch": 1,
+            "key": " FEDCBA9876543210FEDCBA9876543210FEDCBA9876543210FEDCBA9876543210 "
+          },
+          "ok": {
+            "channel": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "epoch": 1
+          }
+        },
+        {
+          "op": "accessKeys",
+          "ok": {
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef:1": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
+          }
+        }
+      ],
+      "finalFile": "{\n  \"mnemonic\": \"\",\n  \"founded\": \"\",\n  \"accessKeys\": {\n    \"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef:1\": \"fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210\"\n  }\n}",
+      "finalMode": "600",
+      "reloadedView": {
+        "view": {
+          "channel": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "writer": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "role": null,
+          "writable": true,
+          "mnemonicSet": false,
+          "mnemonic": "",
+          "writers": [],
+          "epoch": 1
+        },
+        "accessKeys": {
+          "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef:1": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
+        }
+      }
+    },
+    {
+      "name": "add access key numeric strings",
+      "initial": null,
+      "mnemonic": null,
+      "channel": {
+        "primaryKey": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      },
+      "steps": [
+        {
+          "op": "addAccessKey",
+          "request": {
+            "channel": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "epoch": "2",
+            "key": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
+          },
+          "ok": {
+            "channel": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "epoch": 2
+          }
+        },
+        {
+          "op": "addAccessKey",
+          "request": {
+            "channel": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "epoch": true,
+            "key": "89abcdef0123456789abcdef0123456789abcdef0123456789abcdef01234567"
+          },
+          "ok": {
+            "channel": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "epoch": 1
+          }
+        }
+      ],
+      "finalFile": "{\n  \"mnemonic\": \"\",\n  \"founded\": \"\",\n  \"accessKeys\": {\n    \"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef:2\": \"fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210\",\n    \"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef:1\": \"89abcdef0123456789abcdef0123456789abcdef0123456789abcdef01234567\"\n  }\n}",
+      "finalMode": "600",
+      "reloadedView": {
+        "view": {
+          "channel": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "writer": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "role": null,
+          "writable": true,
+          "mnemonicSet": false,
+          "mnemonic": "",
+          "writers": [],
+          "epoch": 1
+        },
+        "accessKeys": {
+          "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef:2": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
+          "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef:1": "89abcdef0123456789abcdef0123456789abcdef0123456789abcdef01234567"
+        }
+      }
+    },
+    {
+      "name": "add access key fractional epoch",
+      "initial": null,
+      "mnemonic": null,
+      "channel": {
+        "primaryKey": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      },
+      "steps": [
+        {
+          "op": "addAccessKey",
+          "request": {
+            "channel": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "epoch": 1.5,
+            "key": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
+          },
+          "err": "Invalid subscriber access key"
+        },
+        {
+          "op": "accessKeys",
+          "ok": {}
+        }
+      ],
+      "finalFile": null,
+      "finalMode": null,
+      "reloadedView": null
+    },
+    {
+      "name": "add access key epoch zero",
+      "initial": null,
+      "mnemonic": null,
+      "channel": {
+        "primaryKey": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      },
+      "steps": [
+        {
+          "op": "addAccessKey",
+          "request": {
+            "channel": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "epoch": 0,
+            "key": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
+          },
+          "err": "Invalid subscriber access key"
+        }
+      ],
+      "finalFile": null,
+      "finalMode": null,
+      "reloadedView": null
+    },
+    {
+      "name": "add access key negative epoch",
+      "initial": null,
+      "mnemonic": null,
+      "channel": {
+        "primaryKey": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      },
+      "steps": [
+        {
+          "op": "addAccessKey",
+          "request": {
+            "channel": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "epoch": -2,
+            "key": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
+          },
+          "err": "Invalid subscriber access key"
+        }
+      ],
+      "finalFile": null,
+      "finalMode": null,
+      "reloadedView": null
+    },
+    {
+      "name": "add access key epoch null",
+      "initial": null,
+      "mnemonic": null,
+      "channel": {
+        "primaryKey": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      },
+      "steps": [
+        {
+          "op": "addAccessKey",
+          "request": {
+            "channel": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "epoch": null,
+            "key": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
+          },
+          "err": "Invalid subscriber access key"
+        }
+      ],
+      "finalFile": null,
+      "finalMode": null,
+      "reloadedView": null
+    },
+    {
+      "name": "add access key missing epoch",
+      "initial": null,
+      "mnemonic": null,
+      "channel": {
+        "primaryKey": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      },
+      "steps": [
+        {
+          "op": "addAccessKey",
+          "request": {
+            "channel": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "key": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
+          },
+          "err": "Invalid subscriber access key"
+        }
+      ],
+      "finalFile": null,
+      "finalMode": null,
+      "reloadedView": null
+    },
+    {
+      "name": "add access key short hex",
+      "initial": null,
+      "mnemonic": null,
+      "channel": {
+        "primaryKey": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      },
+      "steps": [
+        {
+          "op": "addAccessKey",
+          "request": {
+            "channel": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "epoch": 1,
+            "key": "edcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
+          },
+          "err": "Invalid subscriber access key"
+        }
+      ],
+      "finalFile": null,
+      "finalMode": null,
+      "reloadedView": null
+    },
+    {
+      "name": "add access key missing key",
+      "initial": null,
+      "mnemonic": null,
+      "channel": {
+        "primaryKey": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      },
+      "steps": [
+        {
+          "op": "addAccessKey",
+          "request": {
+            "channel": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "epoch": 1
+          },
+          "err": "Invalid subscriber access key"
+        }
+      ],
+      "finalFile": null,
+      "finalMode": null,
+      "reloadedView": null
+    },
+    {
+      "name": "add access key replaces a value in place",
+      "initial": "{\n  \"mnemonic\": \"abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about\",\n  \"founded\": \"\",\n  \"accessKeys\": {\n    \"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef:2\": \"fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210\",\n    \"fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210:1\": \"89abcdef0123456789abcdef0123456789abcdef0123456789abcdef01234567\"\n  }\n}",
+      "mnemonic": null,
+      "channel": {
+        "primaryKey": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      },
+      "steps": [
+        {
+          "op": "addAccessKey",
+          "request": {
+            "channel": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "epoch": 2,
+            "key": "89abcdef0123456789abcdef0123456789abcdef0123456789abcdef01234567"
+          },
+          "ok": {
+            "channel": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "epoch": 2
+          }
+        },
+        {
+          "op": "accessKeys",
+          "ok": {
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef:2": "89abcdef0123456789abcdef0123456789abcdef0123456789abcdef01234567",
+            "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210:1": "89abcdef0123456789abcdef0123456789abcdef0123456789abcdef01234567"
+          }
+        },
+        {
+          "op": "save",
+          "ok": null
+        }
+      ],
+      "finalFile": "{\n  \"mnemonic\": \"abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about\",\n  \"founded\": \"\",\n  \"accessKeys\": {\n    \"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef:2\": \"89abcdef0123456789abcdef0123456789abcdef0123456789abcdef01234567\",\n    \"fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210:1\": \"89abcdef0123456789abcdef0123456789abcdef0123456789abcdef01234567\"\n  }\n}",
+      "finalMode": "600",
+      "reloadedView": {
+        "view": {
+          "channel": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "writer": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "role": null,
+          "writable": true,
+          "mnemonicSet": true,
+          "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+          "writers": [],
+          "epoch": 1
+        },
+        "accessKeys": {
+          "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef:2": "89abcdef0123456789abcdef0123456789abcdef0123456789abcdef01234567",
+          "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210:1": "89abcdef0123456789abcdef0123456789abcdef0123456789abcdef01234567"
+        }
+      }
+    },
+    {
+      "name": "add access key persists across restart",
+      "initial": null,
+      "mnemonic": null,
+      "channel": {
+        "primaryKey": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      },
+      "steps": [
+        {
+          "op": "addAccessKey",
+          "request": {
+            "channel": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
+            "epoch": 7,
+            "key": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+          },
+          "ok": {
+            "channel": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
+            "epoch": 7
+          }
+        },
+        {
+          "op": "save",
+          "ok": null
+        }
+      ],
+      "finalFile": "{\n  \"mnemonic\": \"\",\n  \"founded\": \"\",\n  \"accessKeys\": {\n    \"fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210:7\": \"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\"\n  }\n}",
+      "finalMode": "600",
+      "reloadedView": {
+        "view": {
+          "channel": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "writer": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "role": null,
+          "writable": true,
+          "mnemonicSet": false,
+          "mnemonic": "",
+          "writers": [],
+          "epoch": 1
+        },
+        "accessKeys": {
+          "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210:7": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        }
+      }
+    },
+    {
+      "name": "ensure vault returns the saved one",
+      "initial": "{\n  \"mnemonic\": \"abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about\",\n  \"founded\": \"\",\n  \"accessKeys\": {}\n}",
+      "mnemonic": null,
+      "channel": {
+        "primaryKey": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      },
+      "steps": [
+        {
+          "op": "ensureVault",
+          "ok": {
+            "channelKey": "e44795e4446ef14ae85595220ac288a02c520b49263d71f40b978c5890999395",
+            "ownerPublicKey": "322bfd1b1fd51d5dcd6af75943b3a60721574705ff1a8c003a1fe081b116befc",
+            "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
+          }
+        },
+        {
+          "op": "save",
+          "ok": null
+        }
+      ],
+      "finalFile": "{\n  \"mnemonic\": \"abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about\",\n  \"founded\": \"\",\n  \"accessKeys\": {}\n}",
+      "finalMode": "600",
+      "reloadedView": {
+        "view": {
+          "channel": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "writer": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "role": null,
+          "writable": true,
+          "mnemonicSet": true,
+          "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+          "writers": [],
+          "epoch": 1
+        },
+        "accessKeys": {}
+      }
+    },
+    {
+      "name": "mark founded",
+      "initial": "{\"mnemonic\":\"abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about\",\"founded\":\"\",\"accessKeys\":{}}",
+      "mnemonic": null,
+      "channel": {
+        "primaryKey": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      },
+      "steps": [
+        {
+          "op": "markFounded",
+          "key": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "ok": null
+        },
+        {
+          "op": "foundedKey",
+          "ok": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        },
+        {
+          "op": "identity",
+          "ok": {
+            "channel": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "writer": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "role": null,
+            "writable": true,
+            "mnemonicSet": true,
+            "writers": [],
+            "epoch": 1,
+            "epochKey": "aebfc88176259cc5c302daa63f16b774d8fb4b64534a7d1f495013d566e6d0db",
+            "accessUri": "peartube://access/0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef:1:aebfc88176259cc5c302daa63f16b774d8fb4b64534a7d1f495013d566e6d0db"
+          }
+        },
+        {
+          "op": "save",
+          "ok": null
+        }
+      ],
+      "finalFile": "{\n  \"mnemonic\": \"abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about\",\n  \"founded\": \"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\",\n  \"accessKeys\": {}\n}",
+      "finalMode": "600",
+      "reloadedView": {
+        "view": {
+          "channel": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "writer": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "role": null,
+          "writable": true,
+          "mnemonicSet": true,
+          "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+          "writers": [],
+          "epoch": 1,
+          "epochKey": "aebfc88176259cc5c302daa63f16b774d8fb4b64534a7d1f495013d566e6d0db",
+          "accessUri": "peartube://access/0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef:1:aebfc88176259cc5c302daa63f16b774d8fb4b64534a7d1f495013d566e6d0db"
+        },
+        "accessKeys": {}
+      }
+    },
+    {
+      "name": "mark founded then restart",
+      "initial": null,
+      "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+      "channel": {
+        "primaryKey": "e44795e4446ef14ae85595220ac288a02c520b49263d71f40b978c5890999395"
+      },
+      "steps": [
+        {
+          "op": "markFounded",
+          "key": "e44795e4446ef14ae85595220ac288a02c520b49263d71f40b978c5890999395",
+          "ok": null
+        },
+        {
+          "op": "save",
+          "ok": null
+        },
+        {
+          "op": "epochState",
+          "ok": 1
+        }
+      ],
+      "finalFile": "{\n  \"mnemonic\": \"abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about\",\n  \"founded\": \"e44795e4446ef14ae85595220ac288a02c520b49263d71f40b978c5890999395\",\n  \"accessKeys\": {}\n}",
+      "finalMode": "600",
+      "reloadedView": {
+        "view": {
+          "channel": "e44795e4446ef14ae85595220ac288a02c520b49263d71f40b978c5890999395",
+          "writer": "e44795e4446ef14ae85595220ac288a02c520b49263d71f40b978c5890999395",
+          "role": null,
+          "writable": true,
+          "mnemonicSet": true,
+          "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+          "writers": [],
+          "epoch": 1,
+          "epochKey": "5293118103e314f45fed62314c77c87a6ed3705bd5794b90ce900a6305540d72",
+          "accessUri": "peartube://access/e44795e4446ef14ae85595220ac288a02c520b49263d71f40b978c5890999395:1:5293118103e314f45fed62314c77c87a6ed3705bd5794b90ce900a6305540d72"
+        },
+        "accessKeys": {}
+      }
+    },
+    {
+      "name": "save with nothing set",
+      "initial": null,
+      "mnemonic": null,
+      "channel": {
+        "primaryKey": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      },
+      "steps": [
+        {
+          "op": "save",
+          "ok": null
+        },
+        {
+          "op": "identity",
+          "ok": {
+            "channel": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "writer": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "role": null,
+            "writable": true,
+            "mnemonicSet": false,
+            "writers": [],
+            "epoch": 1
+          }
+        },
+        {
+          "op": "accessKeys",
+          "ok": {}
+        }
+      ],
+      "finalFile": "{\n  \"mnemonic\": \"\",\n  \"founded\": \"\",\n  \"accessKeys\": {}\n}",
+      "finalMode": "600",
+      "reloadedView": {
+        "view": {
+          "channel": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "writer": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "role": null,
+          "writable": true,
+          "mnemonicSet": false,
+          "mnemonic": "",
+          "writers": [],
+          "epoch": 1
+        },
+        "accessKeys": {}
+      }
+    },
+    {
+      "name": "identity before and after a save",
+      "initial": "{\n  \"mnemonic\": \"abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about\",\n  \"founded\": \"e44795e4446ef14ae85595220ac288a02c520b49263d71f40b978c5890999395\",\n  \"accessKeys\": {}\n}",
+      "mnemonic": null,
+      "channel": {
+        "primaryKey": "e44795e4446ef14ae85595220ac288a02c520b49263d71f40b978c5890999395",
+        "writable": false,
+        "localKey": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
+        "role": "mod",
+        "epoch": 9
+      },
+      "steps": [
+        {
+          "op": "identity",
+          "ok": {
+            "channel": "e44795e4446ef14ae85595220ac288a02c520b49263d71f40b978c5890999395",
+            "writer": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
+            "role": "mod",
+            "writable": false,
+            "mnemonicSet": true,
+            "writers": [],
+            "epoch": 9,
+            "epochKey": "ff565177b2ae462491f533ba6504de5504a24e8863a273a4f2460ca3fabbecc7",
+            "accessUri": "peartube://access/e44795e4446ef14ae85595220ac288a02c520b49263d71f40b978c5890999395:9:ff565177b2ae462491f533ba6504de5504a24e8863a273a4f2460ca3fabbecc7"
+          }
+        },
+        {
+          "op": "save",
+          "ok": null
+        },
+        {
+          "op": "identity",
+          "revealMnemonic": true,
+          "ok": {
+            "channel": "e44795e4446ef14ae85595220ac288a02c520b49263d71f40b978c5890999395",
+            "writer": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
+            "role": "mod",
+            "writable": false,
+            "mnemonicSet": true,
+            "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+            "writers": [],
+            "epoch": 9,
+            "epochKey": "ff565177b2ae462491f533ba6504de5504a24e8863a273a4f2460ca3fabbecc7",
+            "accessUri": "peartube://access/e44795e4446ef14ae85595220ac288a02c520b49263d71f40b978c5890999395:9:ff565177b2ae462491f533ba6504de5504a24e8863a273a4f2460ca3fabbecc7"
+          }
+        }
+      ],
+      "finalFile": "{\n  \"mnemonic\": \"abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about\",\n  \"founded\": \"e44795e4446ef14ae85595220ac288a02c520b49263d71f40b978c5890999395\",\n  \"accessKeys\": {}\n}",
+      "finalMode": "600",
+      "reloadedView": {
+        "view": {
+          "channel": "e44795e4446ef14ae85595220ac288a02c520b49263d71f40b978c5890999395",
+          "writer": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
+          "role": "mod",
+          "writable": false,
+          "mnemonicSet": true,
+          "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+          "writers": [],
+          "epoch": 9,
+          "epochKey": "ff565177b2ae462491f533ba6504de5504a24e8863a273a4f2460ca3fabbecc7",
+          "accessUri": "peartube://access/e44795e4446ef14ae85595220ac288a02c520b49263d71f40b978c5890999395:9:ff565177b2ae462491f533ba6504de5504a24e8863a273a4f2460ca3fabbecc7"
+        },
+        "accessKeys": {}
+      }
+    }
+  ]
+}

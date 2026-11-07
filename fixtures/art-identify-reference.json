@@ -1,0 +1,2921 @@
+{
+  "source": "fixtures/gen/art-identify.mjs from src/art.js and src/identify.js",
+  "parseName": [
+    {
+      "input": "The.Matrix.1999.1080p.BluRay.x264-GROUP.mkv",
+      "out": {
+        "title": "The Matrix",
+        "year": 1999,
+        "season": null,
+        "episode": null,
+        "resolution": "1080p",
+        "codec": "x264",
+        "audio": "",
+        "ext": "mkv"
+      }
+    },
+    {
+      "input": "Charlotte's Web 2006 720p.mp4",
+      "out": {
+        "title": "Charlotte's Web",
+        "year": 2006,
+        "season": null,
+        "episode": null,
+        "resolution": "720p",
+        "codec": "",
+        "audio": "",
+        "ext": "mp4"
+      }
+    },
+    {
+      "input": "some_show_S01E02_1080p.mkv",
+      "out": {
+        "title": "some show",
+        "year": null,
+        "season": 1,
+        "episode": 2,
+        "resolution": "1080p",
+        "codec": "",
+        "audio": "",
+        "ext": "mkv"
+      }
+    },
+    {
+      "input": "Show.1x02.HDTV.avi",
+      "out": {
+        "title": "Show",
+        "year": null,
+        "season": 1,
+        "episode": 2,
+        "resolution": "",
+        "codec": "",
+        "audio": "",
+        "ext": "avi"
+      }
+    },
+    {
+      "input": "movie.2020.mkv.mp4",
+      "out": {
+        "title": "movie",
+        "year": 2020,
+        "season": null,
+        "episode": null,
+        "resolution": "",
+        "codec": "",
+        "audio": "",
+        "ext": "mp4"
+      }
+    },
+    {
+      "input": "https://example.com/a/b/The%20Big%20Film%202019%20720p.mkv?x=1",
+      "out": {
+        "title": "The Big Film",
+        "year": 2019,
+        "season": null,
+        "episode": null,
+        "resolution": "720p",
+        "codec": "",
+        "audio": "",
+        "ext": "mkv"
+      }
+    },
+    {
+      "input": "",
+      "out": {
+        "title": "",
+        "year": null,
+        "season": null,
+        "episode": null,
+        "resolution": "",
+        "codec": "",
+        "audio": "",
+        "ext": ""
+      }
+    },
+    {
+      "input": "1080p.mkv",
+      "out": {
+        "title": "1080p",
+        "year": null,
+        "season": null,
+        "episode": null,
+        "resolution": "1080p",
+        "codec": "",
+        "audio": "",
+        "ext": "mkv"
+      }
+    },
+    {
+      "input": "Movie (2019) [1080p] [x265].mkv",
+      "out": {
+        "title": "Movie",
+        "year": 2019,
+        "season": null,
+        "episode": null,
+        "resolution": "1080p",
+        "codec": "x265",
+        "audio": "",
+        "ext": "mkv"
+      }
+    },
+    {
+      "input": "Movie.2019.2160p.WEB-DL.DDP5.1.Atmos.HEVC.mkv",
+      "out": {
+        "title": "Movie",
+        "year": 2019,
+        "season": null,
+        "episode": null,
+        "resolution": "2160p",
+        "codec": "hevc",
+        "audio": "atmos",
+        "ext": "mkv"
+      }
+    },
+    {
+      "input": "Show S1 E2.mp4",
+      "out": {
+        "title": "Show",
+        "year": null,
+        "season": 1,
+        "episode": 2,
+        "resolution": "",
+        "codec": "",
+        "audio": "",
+        "ext": "mp4"
+      }
+    },
+    {
+      "input": "ShowS01E02.mkv",
+      "out": {
+        "title": "ShowS01E02",
+        "year": null,
+        "season": null,
+        "episode": null,
+        "resolution": "",
+        "codec": "",
+        "audio": "",
+        "ext": "mkv"
+      }
+    },
+    {
+      "input": "A Film 1998 480p AAC.mp3",
+      "out": {
+        "title": "A Film",
+        "year": 1998,
+        "season": null,
+        "episode": null,
+        "resolution": "480p",
+        "codec": "",
+        "audio": "aac",
+        "ext": "mp3"
+      }
+    },
+    {
+      "input": "Amélie.2001.1080p.mkv",
+      "out": {
+        "title": "Amélie",
+        "year": 2001,
+        "season": null,
+        "episode": null,
+        "resolution": "1080p",
+        "codec": "",
+        "audio": "",
+        "ext": "mkv"
+      }
+    },
+    {
+      "input": "1920x1080.mkv",
+      "out": {
+        "title": "1920x1080",
+        "year": null,
+        "season": null,
+        "episode": null,
+        "resolution": "",
+        "codec": "",
+        "audio": "",
+        "ext": "mkv"
+      }
+    },
+    {
+      "input": "The.Show.S10E100.720p.mkv",
+      "out": {
+        "title": "The Show",
+        "year": null,
+        "season": 10,
+        "episode": 100,
+        "resolution": "720p",
+        "codec": "",
+        "audio": "",
+        "ext": "mkv"
+      }
+    },
+    {
+      "input": "file.MKV",
+      "out": {
+        "title": "file",
+        "year": null,
+        "season": null,
+        "episode": null,
+        "resolution": "",
+        "codec": "",
+        "audio": "",
+        "ext": "mkv"
+      }
+    },
+    {
+      "input": "x265.only.mkv",
+      "out": {
+        "title": "x265 only",
+        "year": null,
+        "season": null,
+        "episode": null,
+        "resolution": "",
+        "codec": "x265",
+        "audio": "",
+        "ext": "mkv"
+      }
+    },
+    {
+      "input": "Movie.2019.1080p.eac3.x265.mkv",
+      "out": {
+        "title": "Movie",
+        "year": 2019,
+        "season": null,
+        "episode": null,
+        "resolution": "1080p",
+        "codec": "x265",
+        "audio": "eac3",
+        "ext": "mkv"
+      }
+    },
+    {
+      "input": "https%3A%2F%2Fexample.com%2Fa%2FFilm%202021.mp4",
+      "out": {
+        "title": "https%3A%2F%2Fexample com%2Fa%2FFilm%202021",
+        "year": null,
+        "season": null,
+        "episode": null,
+        "resolution": "",
+        "codec": "",
+        "audio": "",
+        "ext": "mp4"
+      }
+    },
+    {
+      "input": "trailing.dots..",
+      "out": {
+        "title": "trailing dots",
+        "year": null,
+        "season": null,
+        "episode": null,
+        "resolution": "",
+        "codec": "",
+        "audio": "",
+        "ext": ""
+      }
+    },
+    {
+      "input": "Movie.1948.480p.DivX.mp3",
+      "out": {
+        "title": "Movie",
+        "year": 1948,
+        "season": null,
+        "episode": null,
+        "resolution": "480p",
+        "codec": "divx",
+        "audio": "",
+        "ext": "mp3"
+      }
+    },
+    {
+      "input": "https://example.com/a/%zz.mkv",
+      "out": {
+        "title": "https://example com/a/%zz",
+        "year": null,
+        "season": null,
+        "episode": null,
+        "resolution": "",
+        "codec": "",
+        "audio": "",
+        "ext": "mkv"
+      }
+    },
+    {
+      "input": "https://example.com/",
+      "out": {
+        "title": "https://example com/",
+        "year": null,
+        "season": null,
+        "episode": null,
+        "resolution": "",
+        "codec": "",
+        "audio": "",
+        "ext": ""
+      }
+    },
+    {
+      "input": "https://example.com/a/Film.2020.mkv?token=1",
+      "out": {
+        "title": "Film",
+        "year": 2020,
+        "season": null,
+        "episode": null,
+        "resolution": "",
+        "codec": "",
+        "audio": "",
+        "ext": "mkv"
+      }
+    }
+  ],
+  "fileName": [
+    {
+      "url": "https://cdn.example/dld/abc?filename=Film.2020.1080p.mkv",
+      "headers": {},
+      "out": "Film.2020.1080p.mkv"
+    },
+    {
+      "url": "https://cdn.example/dld/abc",
+      "headers": {
+        "content-disposition": "attachment; filename*=UTF-8''Film%20Name.mkv"
+      },
+      "out": "Film Name.mkv"
+    },
+    {
+      "url": "https://cdn.example/dld/abc",
+      "headers": {
+        "content-disposition": "attachment; filename=\"film.mkv\""
+      },
+      "out": "film.mkv"
+    },
+    {
+      "url": "https://cdn.example/dld/abc",
+      "headers": {},
+      "out": "abc"
+    },
+    {
+      "url": "https://cdn.example/dld/abc?filename=notes.txt",
+      "headers": {
+        "content-disposition": "attachment; filename*=UTF-8''Real.mkv"
+      },
+      "out": "Real.mkv"
+    },
+    {
+      "url": "https://cdn.example/a/My%20Film.mkv",
+      "headers": {},
+      "out": "My Film.mkv"
+    },
+    {
+      "url": "https://cdn.example/dld/abc?filename=A+B.mkv",
+      "headers": {},
+      "out": "A B.mkv"
+    },
+    {
+      "url": "https://cdn.example/a/%zz.mkv",
+      "headers": {},
+      "error": "URI malformed"
+    },
+    {
+      "url": "not a url",
+      "headers": {},
+      "error": "Invalid URL"
+    },
+    {
+      "url": "https://cdn.example/dld/abc",
+      "headers": {
+        "content-disposition": "attachment; filename*=utf-8''Lower.MKV"
+      },
+      "out": "Lower.MKV"
+    }
+  ],
+  "norm": [
+    {
+      "input": "The Matrix",
+      "out": "matrix"
+    },
+    {
+      "input": "the matrix",
+      "out": "matrix"
+    },
+    {
+      "input": "AN American Werewolf",
+      "out": "american werewolf"
+    },
+    {
+      "input": "Amélie",
+      "out": "ame lie"
+    },
+    {
+      "input": "  Æon Flux! ",
+      "out": "on flux"
+    },
+    {
+      "input": "A",
+      "out": "a"
+    },
+    {
+      "input": "an",
+      "out": "an"
+    },
+    {
+      "input": "The  Matrix  1999",
+      "out": "matrix 1999"
+    },
+    {
+      "input": "Das Boot (1981)",
+      "out": "das boot 1981"
+    },
+    {
+      "input": "Movie: Part 2",
+      "out": "movie part 2"
+    },
+    {
+      "input": "theatre",
+      "out": "theatre"
+    },
+    {
+      "input": "THE THE",
+      "out": "the"
+    }
+  ],
+  "strong": [
+    {
+      "candidate": {
+        "imdb": "tt0133093",
+        "type": "movie",
+        "name": "The Matrix",
+        "year": 1999,
+        "poster": "https://p.jpg"
+      },
+      "parsed": {
+        "title": "The Matrix",
+        "year": 1999,
+        "season": null,
+        "episode": null,
+        "resolution": "",
+        "codec": "",
+        "audio": "",
+        "ext": ""
+      },
+      "out": true
+    },
+    {
+      "candidate": {
+        "imdb": "tt0133093",
+        "type": "movie",
+        "name": "The Matrix",
+        "year": 1999,
+        "poster": "https://p.jpg"
+      },
+      "parsed": {
+        "title": "The Matrix",
+        "year": 2003,
+        "season": null,
+        "episode": null,
+        "resolution": "",
+        "codec": "",
+        "audio": "",
+        "ext": ""
+      },
+      "out": false
+    },
+    {
+      "candidate": {
+        "imdb": "tt0133093",
+        "type": "movie",
+        "name": "The Matrix",
+        "year": 1999,
+        "poster": "https://p.jpg"
+      },
+      "parsed": {
+        "title": "The Matrix",
+        "year": null,
+        "season": 2,
+        "episode": 5,
+        "resolution": "",
+        "codec": "",
+        "audio": "",
+        "ext": ""
+      },
+      "out": true
+    },
+    {
+      "candidate": {
+        "imdb": "tt0133093",
+        "type": "movie",
+        "name": "The Matrix",
+        "year": 1999,
+        "poster": "https://p.jpg"
+      },
+      "parsed": {
+        "title": "Something Else",
+        "year": null,
+        "season": null,
+        "episode": null,
+        "resolution": "",
+        "codec": "",
+        "audio": "",
+        "ext": ""
+      },
+      "out": false
+    },
+    {
+      "candidate": {
+        "imdb": "tt0234215",
+        "type": "movie",
+        "name": "The Matrix Reloaded",
+        "year": 2003,
+        "poster": null
+      },
+      "parsed": {
+        "title": "The Matrix",
+        "year": 1999,
+        "season": null,
+        "episode": null,
+        "resolution": "",
+        "codec": "",
+        "audio": "",
+        "ext": ""
+      },
+      "out": false
+    },
+    {
+      "candidate": {
+        "imdb": "tt0234215",
+        "type": "movie",
+        "name": "The Matrix Reloaded",
+        "year": 2003,
+        "poster": null
+      },
+      "parsed": {
+        "title": "The Matrix",
+        "year": 2003,
+        "season": null,
+        "episode": null,
+        "resolution": "",
+        "codec": "",
+        "audio": "",
+        "ext": ""
+      },
+      "out": false
+    },
+    {
+      "candidate": {
+        "imdb": "tt0234215",
+        "type": "movie",
+        "name": "The Matrix Reloaded",
+        "year": 2003,
+        "poster": null
+      },
+      "parsed": {
+        "title": "The Matrix",
+        "year": null,
+        "season": 2,
+        "episode": 5,
+        "resolution": "",
+        "codec": "",
+        "audio": "",
+        "ext": ""
+      },
+      "out": false
+    },
+    {
+      "candidate": {
+        "imdb": "tt0234215",
+        "type": "movie",
+        "name": "The Matrix Reloaded",
+        "year": 2003,
+        "poster": null
+      },
+      "parsed": {
+        "title": "Something Else",
+        "year": null,
+        "season": null,
+        "episode": null,
+        "resolution": "",
+        "codec": "",
+        "audio": "",
+        "ext": ""
+      },
+      "out": false
+    },
+    {
+      "candidate": {
+        "imdb": "tt0106062",
+        "type": "series",
+        "name": "Matrix",
+        "year": 1993,
+        "poster": null
+      },
+      "parsed": {
+        "title": "The Matrix",
+        "year": 1999,
+        "season": null,
+        "episode": null,
+        "resolution": "",
+        "codec": "",
+        "audio": "",
+        "ext": ""
+      },
+      "out": true
+    },
+    {
+      "candidate": {
+        "imdb": "tt0106062",
+        "type": "series",
+        "name": "Matrix",
+        "year": 1993,
+        "poster": null
+      },
+      "parsed": {
+        "title": "The Matrix",
+        "year": 2003,
+        "season": null,
+        "episode": null,
+        "resolution": "",
+        "codec": "",
+        "audio": "",
+        "ext": ""
+      },
+      "out": true
+    },
+    {
+      "candidate": {
+        "imdb": "tt0106062",
+        "type": "series",
+        "name": "Matrix",
+        "year": 1993,
+        "poster": null
+      },
+      "parsed": {
+        "title": "The Matrix",
+        "year": null,
+        "season": 2,
+        "episode": 5,
+        "resolution": "",
+        "codec": "",
+        "audio": "",
+        "ext": ""
+      },
+      "out": true
+    },
+    {
+      "candidate": {
+        "imdb": "tt0106062",
+        "type": "series",
+        "name": "Matrix",
+        "year": 1993,
+        "poster": null
+      },
+      "parsed": {
+        "title": "Something Else",
+        "year": null,
+        "season": null,
+        "episode": null,
+        "resolution": "",
+        "codec": "",
+        "audio": "",
+        "ext": ""
+      },
+      "out": false
+    },
+    {
+      "candidate": {
+        "imdb": "tt9999999",
+        "type": "movie",
+        "name": "The Matrix",
+        "year": null,
+        "poster": null
+      },
+      "parsed": {
+        "title": "The Matrix",
+        "year": 1999,
+        "season": null,
+        "episode": null,
+        "resolution": "",
+        "codec": "",
+        "audio": "",
+        "ext": ""
+      },
+      "out": false
+    },
+    {
+      "candidate": {
+        "imdb": "tt9999999",
+        "type": "movie",
+        "name": "The Matrix",
+        "year": null,
+        "poster": null
+      },
+      "parsed": {
+        "title": "The Matrix",
+        "year": 2003,
+        "season": null,
+        "episode": null,
+        "resolution": "",
+        "codec": "",
+        "audio": "",
+        "ext": ""
+      },
+      "out": false
+    },
+    {
+      "candidate": {
+        "imdb": "tt9999999",
+        "type": "movie",
+        "name": "The Matrix",
+        "year": null,
+        "poster": null
+      },
+      "parsed": {
+        "title": "The Matrix",
+        "year": null,
+        "season": 2,
+        "episode": 5,
+        "resolution": "",
+        "codec": "",
+        "audio": "",
+        "ext": ""
+      },
+      "out": true
+    },
+    {
+      "candidate": {
+        "imdb": "tt9999999",
+        "type": "movie",
+        "name": "The Matrix",
+        "year": null,
+        "poster": null
+      },
+      "parsed": {
+        "title": "Something Else",
+        "year": null,
+        "season": null,
+        "episode": null,
+        "resolution": "",
+        "codec": "",
+        "audio": "",
+        "ext": ""
+      },
+      "out": false
+    }
+  ],
+  "candidateEntry": [
+    {
+      "candidate": {
+        "imdb": "tt0133093",
+        "type": "movie",
+        "name": "The Matrix",
+        "year": 1999,
+        "poster": "https://p.jpg"
+      },
+      "parsed": {
+        "title": "The Matrix",
+        "year": 1999,
+        "season": null,
+        "episode": null,
+        "resolution": "",
+        "codec": "",
+        "audio": "",
+        "ext": ""
+      },
+      "out": {
+        "id": "imdb:tt0133093",
+        "title": "The Matrix 1999"
+      }
+    },
+    {
+      "candidate": {
+        "imdb": "tt0133093",
+        "type": "movie",
+        "name": "The Matrix",
+        "year": 1999,
+        "poster": "https://p.jpg"
+      },
+      "parsed": {
+        "title": "The Matrix",
+        "year": 2003,
+        "season": null,
+        "episode": null,
+        "resolution": "",
+        "codec": "",
+        "audio": "",
+        "ext": ""
+      },
+      "out": {
+        "id": "imdb:tt0133093",
+        "title": "The Matrix 1999"
+      }
+    },
+    {
+      "candidate": {
+        "imdb": "tt0133093",
+        "type": "movie",
+        "name": "The Matrix",
+        "year": 1999,
+        "poster": "https://p.jpg"
+      },
+      "parsed": {
+        "title": "The Matrix",
+        "year": null,
+        "season": 2,
+        "episode": 5,
+        "resolution": "",
+        "codec": "",
+        "audio": "",
+        "ext": ""
+      },
+      "out": {
+        "id": "imdb:tt0133093",
+        "title": "The Matrix 1999"
+      }
+    },
+    {
+      "candidate": {
+        "imdb": "tt0133093",
+        "type": "movie",
+        "name": "The Matrix",
+        "year": 1999,
+        "poster": "https://p.jpg"
+      },
+      "parsed": {
+        "title": "Something Else",
+        "year": null,
+        "season": null,
+        "episode": null,
+        "resolution": "",
+        "codec": "",
+        "audio": "",
+        "ext": ""
+      },
+      "out": {
+        "id": "imdb:tt0133093",
+        "title": "The Matrix 1999"
+      }
+    },
+    {
+      "candidate": {
+        "imdb": "tt0234215",
+        "type": "movie",
+        "name": "The Matrix Reloaded",
+        "year": 2003,
+        "poster": null
+      },
+      "parsed": {
+        "title": "The Matrix",
+        "year": 1999,
+        "season": null,
+        "episode": null,
+        "resolution": "",
+        "codec": "",
+        "audio": "",
+        "ext": ""
+      },
+      "out": {
+        "id": "imdb:tt0234215",
+        "title": "The Matrix Reloaded 2003"
+      }
+    },
+    {
+      "candidate": {
+        "imdb": "tt0234215",
+        "type": "movie",
+        "name": "The Matrix Reloaded",
+        "year": 2003,
+        "poster": null
+      },
+      "parsed": {
+        "title": "The Matrix",
+        "year": 2003,
+        "season": null,
+        "episode": null,
+        "resolution": "",
+        "codec": "",
+        "audio": "",
+        "ext": ""
+      },
+      "out": {
+        "id": "imdb:tt0234215",
+        "title": "The Matrix Reloaded 2003"
+      }
+    },
+    {
+      "candidate": {
+        "imdb": "tt0234215",
+        "type": "movie",
+        "name": "The Matrix Reloaded",
+        "year": 2003,
+        "poster": null
+      },
+      "parsed": {
+        "title": "The Matrix",
+        "year": null,
+        "season": 2,
+        "episode": 5,
+        "resolution": "",
+        "codec": "",
+        "audio": "",
+        "ext": ""
+      },
+      "out": {
+        "id": "imdb:tt0234215",
+        "title": "The Matrix Reloaded 2003"
+      }
+    },
+    {
+      "candidate": {
+        "imdb": "tt0234215",
+        "type": "movie",
+        "name": "The Matrix Reloaded",
+        "year": 2003,
+        "poster": null
+      },
+      "parsed": {
+        "title": "Something Else",
+        "year": null,
+        "season": null,
+        "episode": null,
+        "resolution": "",
+        "codec": "",
+        "audio": "",
+        "ext": ""
+      },
+      "out": {
+        "id": "imdb:tt0234215",
+        "title": "The Matrix Reloaded 2003"
+      }
+    },
+    {
+      "candidate": {
+        "imdb": "tt0106062",
+        "type": "series",
+        "name": "Matrix",
+        "year": 1993,
+        "poster": null
+      },
+      "parsed": {
+        "title": "The Matrix",
+        "year": 1999,
+        "season": null,
+        "episode": null,
+        "resolution": "",
+        "codec": "",
+        "audio": "",
+        "ext": ""
+      },
+      "out": {
+        "id": "imdb:tt0106062",
+        "title": "Matrix 1993"
+      }
+    },
+    {
+      "candidate": {
+        "imdb": "tt0106062",
+        "type": "series",
+        "name": "Matrix",
+        "year": 1993,
+        "poster": null
+      },
+      "parsed": {
+        "title": "The Matrix",
+        "year": 2003,
+        "season": null,
+        "episode": null,
+        "resolution": "",
+        "codec": "",
+        "audio": "",
+        "ext": ""
+      },
+      "out": {
+        "id": "imdb:tt0106062",
+        "title": "Matrix 1993"
+      }
+    },
+    {
+      "candidate": {
+        "imdb": "tt0106062",
+        "type": "series",
+        "name": "Matrix",
+        "year": 1993,
+        "poster": null
+      },
+      "parsed": {
+        "title": "The Matrix",
+        "year": null,
+        "season": 2,
+        "episode": 5,
+        "resolution": "",
+        "codec": "",
+        "audio": "",
+        "ext": ""
+      },
+      "out": {
+        "id": "imdb:tt0106062:s02e05",
+        "title": "Matrix S02E05"
+      }
+    },
+    {
+      "candidate": {
+        "imdb": "tt0106062",
+        "type": "series",
+        "name": "Matrix",
+        "year": 1993,
+        "poster": null
+      },
+      "parsed": {
+        "title": "Something Else",
+        "year": null,
+        "season": null,
+        "episode": null,
+        "resolution": "",
+        "codec": "",
+        "audio": "",
+        "ext": ""
+      },
+      "out": {
+        "id": "imdb:tt0106062",
+        "title": "Matrix 1993"
+      }
+    },
+    {
+      "candidate": {
+        "imdb": "tt9999999",
+        "type": "movie",
+        "name": "The Matrix",
+        "year": null,
+        "poster": null
+      },
+      "parsed": {
+        "title": "The Matrix",
+        "year": 1999,
+        "season": null,
+        "episode": null,
+        "resolution": "",
+        "codec": "",
+        "audio": "",
+        "ext": ""
+      },
+      "out": {
+        "id": "imdb:tt9999999",
+        "title": "The Matrix"
+      }
+    },
+    {
+      "candidate": {
+        "imdb": "tt9999999",
+        "type": "movie",
+        "name": "The Matrix",
+        "year": null,
+        "poster": null
+      },
+      "parsed": {
+        "title": "The Matrix",
+        "year": 2003,
+        "season": null,
+        "episode": null,
+        "resolution": "",
+        "codec": "",
+        "audio": "",
+        "ext": ""
+      },
+      "out": {
+        "id": "imdb:tt9999999",
+        "title": "The Matrix"
+      }
+    },
+    {
+      "candidate": {
+        "imdb": "tt9999999",
+        "type": "movie",
+        "name": "The Matrix",
+        "year": null,
+        "poster": null
+      },
+      "parsed": {
+        "title": "The Matrix",
+        "year": null,
+        "season": 2,
+        "episode": 5,
+        "resolution": "",
+        "codec": "",
+        "audio": "",
+        "ext": ""
+      },
+      "out": {
+        "id": "imdb:tt9999999",
+        "title": "The Matrix"
+      }
+    },
+    {
+      "candidate": {
+        "imdb": "tt9999999",
+        "type": "movie",
+        "name": "The Matrix",
+        "year": null,
+        "poster": null
+      },
+      "parsed": {
+        "title": "Something Else",
+        "year": null,
+        "season": null,
+        "episode": null,
+        "resolution": "",
+        "codec": "",
+        "audio": "",
+        "ext": ""
+      },
+      "out": {
+        "id": "imdb:tt9999999",
+        "title": "The Matrix"
+      }
+    }
+  ],
+  "clipIds": [
+    {
+      "kind": "file",
+      "url": "https://example.com/Film.2020.mkv",
+      "pageId": null,
+      "out": "clip:155062bf2d5e678d"
+    },
+    {
+      "kind": "page",
+      "url": "https://example.com/watch?v=1",
+      "pageId": "https://vid.example/watch?v=1",
+      "out": "clip:1cdda0de3a29802c"
+    }
+  ],
+  "send": [
+    {
+      "name": "get with default user agent",
+      "url": "{BASE}/plain",
+      "routes": [
+        {
+          "path": "/plain",
+          "status": 200,
+          "headers": {
+            "content-type": "text/plain"
+          },
+          "body": "hello"
+        }
+      ],
+      "method": "GET",
+      "userAgent": "PearTube",
+      "maxBytes": null,
+      "timeoutMs": null,
+      "requests": [
+        {
+          "method": "GET",
+          "path": "/plain",
+          "userAgent": "PearTube"
+        }
+      ],
+      "out": {
+        "status": 200,
+        "urlPath": "/plain",
+        "contentType": "text/plain",
+        "body": "hello"
+      }
+    },
+    {
+      "name": "caller headers win over the default user agent",
+      "url": "{BASE}/hdr",
+      "routes": [
+        {
+          "path": "/hdr",
+          "status": 201,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{}"
+        }
+      ],
+      "method": "GET",
+      "userAgent": "Custom/1",
+      "maxBytes": null,
+      "timeoutMs": null,
+      "requests": [
+        {
+          "method": "GET",
+          "path": "/hdr",
+          "userAgent": "Custom/1"
+        }
+      ],
+      "out": {
+        "status": 201,
+        "urlPath": "/hdr",
+        "contentType": "application/json",
+        "body": "{}"
+      }
+    },
+    {
+      "name": "head discards the body",
+      "url": "{BASE}/head",
+      "routes": [
+        {
+          "path": "/head",
+          "status": 200,
+          "headers": {
+            "content-type": "video/mp4",
+            "content-length": "4"
+          },
+          "body": "body"
+        }
+      ],
+      "method": "HEAD",
+      "userAgent": "PearTube",
+      "maxBytes": null,
+      "timeoutMs": null,
+      "requests": [
+        {
+          "method": "HEAD",
+          "path": "/head",
+          "userAgent": "PearTube"
+        }
+      ],
+      "out": {
+        "status": 200,
+        "urlPath": "/head",
+        "contentType": "video/mp4",
+        "body": ""
+      }
+    },
+    {
+      "name": "follows five redirects",
+      "url": "{BASE}/r1",
+      "routes": [
+        {
+          "path": "/r1",
+          "status": 302,
+          "headers": {
+            "location": "/r2"
+          }
+        },
+        {
+          "path": "/r2",
+          "status": 302,
+          "headers": {
+            "location": "/r3"
+          }
+        },
+        {
+          "path": "/r3",
+          "status": 302,
+          "headers": {
+            "location": "/r4"
+          }
+        },
+        {
+          "path": "/r4",
+          "status": 302,
+          "headers": {
+            "location": "/r5"
+          }
+        },
+        {
+          "path": "/r5",
+          "status": 302,
+          "headers": {
+            "location": "/r6"
+          }
+        },
+        {
+          "path": "/r6",
+          "status": 200,
+          "headers": {
+            "content-type": "text/plain"
+          },
+          "body": "end"
+        }
+      ],
+      "method": "GET",
+      "userAgent": "PearTube",
+      "maxBytes": null,
+      "timeoutMs": null,
+      "requests": [
+        {
+          "method": "GET",
+          "path": "/r1",
+          "userAgent": "PearTube"
+        },
+        {
+          "method": "GET",
+          "path": "/r2",
+          "userAgent": "PearTube"
+        },
+        {
+          "method": "GET",
+          "path": "/r3",
+          "userAgent": "PearTube"
+        },
+        {
+          "method": "GET",
+          "path": "/r4",
+          "userAgent": "PearTube"
+        },
+        {
+          "method": "GET",
+          "path": "/r5",
+          "userAgent": "PearTube"
+        },
+        {
+          "method": "GET",
+          "path": "/r6",
+          "userAgent": "PearTube"
+        }
+      ],
+      "out": {
+        "status": 200,
+        "urlPath": "/r6",
+        "contentType": "text/plain",
+        "body": "end"
+      }
+    },
+    {
+      "name": "stops after five redirects",
+      "url": "{BASE}/s1",
+      "routes": [
+        {
+          "path": "/s1",
+          "status": 302,
+          "headers": {
+            "location": "/s2"
+          }
+        },
+        {
+          "path": "/s2",
+          "status": 302,
+          "headers": {
+            "location": "/s3"
+          }
+        },
+        {
+          "path": "/s3",
+          "status": 302,
+          "headers": {
+            "location": "/s4"
+          }
+        },
+        {
+          "path": "/s4",
+          "status": 302,
+          "headers": {
+            "location": "/s5"
+          }
+        },
+        {
+          "path": "/s5",
+          "status": 302,
+          "headers": {
+            "location": "/s6"
+          }
+        },
+        {
+          "path": "/s6",
+          "status": 302,
+          "headers": {
+            "location": "/s7"
+          }
+        }
+      ],
+      "method": "GET",
+      "userAgent": "PearTube",
+      "maxBytes": null,
+      "timeoutMs": null,
+      "requests": [
+        {
+          "method": "GET",
+          "path": "/s1",
+          "userAgent": "PearTube"
+        },
+        {
+          "method": "GET",
+          "path": "/s2",
+          "userAgent": "PearTube"
+        },
+        {
+          "method": "GET",
+          "path": "/s3",
+          "userAgent": "PearTube"
+        },
+        {
+          "method": "GET",
+          "path": "/s4",
+          "userAgent": "PearTube"
+        },
+        {
+          "method": "GET",
+          "path": "/s5",
+          "userAgent": "PearTube"
+        },
+        {
+          "method": "GET",
+          "path": "/s6",
+          "userAgent": "PearTube"
+        }
+      ],
+      "out": {
+        "status": 302,
+        "urlPath": "/s6",
+        "contentType": null,
+        "body": ""
+      }
+    },
+    {
+      "name": "times out",
+      "url": "{BASE}/slow",
+      "routes": [
+        {
+          "path": "/slow",
+          "status": 200,
+          "body": "late",
+          "delayMs": 2000
+        }
+      ],
+      "method": "GET",
+      "userAgent": "PearTube",
+      "maxBytes": null,
+      "timeoutMs": 120,
+      "requests": [
+        {
+          "method": "GET",
+          "path": "/slow",
+          "userAgent": "PearTube"
+        }
+      ],
+      "error": {
+        "message": "Timed out",
+        "status": null,
+        "code": null
+      }
+    },
+    {
+      "name": "rejects a non-http scheme",
+      "url": "ftp://example.com/x",
+      "routes": [],
+      "method": "GET",
+      "userAgent": "PearTube",
+      "maxBytes": null,
+      "timeoutMs": null,
+      "requests": [],
+      "error": {
+        "message": "Only http(s) links can be added",
+        "status": null,
+        "code": null
+      }
+    },
+    {
+      "name": "rejects a bad link",
+      "url": "not a url",
+      "routes": [],
+      "method": "GET",
+      "userAgent": "PearTube",
+      "maxBytes": null,
+      "timeoutMs": null,
+      "requests": [],
+      "error": {
+        "message": "Not a valid link",
+        "status": null,
+        "code": null
+      }
+    }
+  ],
+  "cinemeta": [
+    {
+      "name": "movie search ranks the exact title and year first",
+      "title": "The Matrix",
+      "year": 1999,
+      "season": null,
+      "hasBase": true,
+      "status": 200,
+      "body": "{\"metas\":[{\"imdb_id\":\"tt0133093\",\"name\":\"The Matrix\",\"releaseInfo\":\"1999-03-31\",\"poster\":\"https://p.jpg\"},{\"imdb_id\":\"tt0234215\",\"name\":\"The Matrix Reloaded\",\"releaseInfo\":\"2003-05-15\",\"poster\":\"https://p2.jpg\"},{\"imdb_id\":\"tt0106062\",\"name\":\"Matrix\",\"releaseInfo\":\"1993-01-01\"},{\"id\":\"tt10838180\",\"name\":\"The Matrix Resurrections\",\"year\":\"2021\",\"poster\":42},{\"imdb_id\":\"tt0111161\",\"name\":\"The Shawshank Redemption\",\"releaseInfo\":\"1994-09-22\"},{\"imdb_id\":\"bad\",\"name\":\"The Matrix\",\"releaseInfo\":\"1999-01-01\"},{\"imdb_id\":\"tt0317219\",\"name\":\"Cars\",\"releaseInfo\":\"2006-06-09\"},{\"imdb_id\":\"tt3606756\",\"name\":\"Incredibles 2\",\"releaseInfo\":\"2018-06-15\"},{\"name\":\"no id\"}]}",
+      "requests": [
+        {
+          "method": "GET",
+          "path": "/catalog/movie/top/search=The%20Matrix.json",
+          "userAgent": "PearTube"
+        }
+      ],
+      "out": [
+        {
+          "imdb": "tt0133093",
+          "type": "movie",
+          "name": "The Matrix",
+          "year": 1999,
+          "poster": "https://p.jpg"
+        },
+        {
+          "imdb": "tt0106062",
+          "type": "movie",
+          "name": "Matrix",
+          "year": 1993,
+          "poster": null
+        },
+        {
+          "imdb": "tt0234215",
+          "type": "movie",
+          "name": "The Matrix Reloaded",
+          "year": 2003,
+          "poster": "https://p2.jpg"
+        },
+        {
+          "imdb": "tt10838180",
+          "type": "movie",
+          "name": "The Matrix Resurrections",
+          "year": 2021,
+          "poster": null
+        }
+      ]
+    },
+    {
+      "name": "a season makes it a series search",
+      "title": "The Matrix",
+      "year": null,
+      "season": 2,
+      "hasBase": true,
+      "status": 200,
+      "body": "{\"metas\":[{\"imdb_id\":\"tt0133093\",\"name\":\"The Matrix\",\"releaseInfo\":\"1999-03-31\",\"poster\":\"https://p.jpg\"},{\"imdb_id\":\"tt0234215\",\"name\":\"The Matrix Reloaded\",\"releaseInfo\":\"2003-05-15\",\"poster\":\"https://p2.jpg\"},{\"imdb_id\":\"tt0106062\",\"name\":\"Matrix\",\"releaseInfo\":\"1993-01-01\"},{\"id\":\"tt10838180\",\"name\":\"The Matrix Resurrections\",\"year\":\"2021\",\"poster\":42},{\"imdb_id\":\"tt0111161\",\"name\":\"The Shawshank Redemption\",\"releaseInfo\":\"1994-09-22\"},{\"imdb_id\":\"bad\",\"name\":\"The Matrix\",\"releaseInfo\":\"1999-01-01\"},{\"imdb_id\":\"tt0317219\",\"name\":\"Cars\",\"releaseInfo\":\"2006-06-09\"},{\"imdb_id\":\"tt3606756\",\"name\":\"Incredibles 2\",\"releaseInfo\":\"2018-06-15\"},{\"name\":\"no id\"}]}",
+      "requests": [
+        {
+          "method": "GET",
+          "path": "/catalog/series/top/search=The%20Matrix.json",
+          "userAgent": "PearTube"
+        }
+      ],
+      "out": [
+        {
+          "imdb": "tt0133093",
+          "type": "series",
+          "name": "The Matrix",
+          "year": 1999,
+          "poster": "https://p.jpg"
+        },
+        {
+          "imdb": "tt0106062",
+          "type": "series",
+          "name": "Matrix",
+          "year": 1993,
+          "poster": null
+        },
+        {
+          "imdb": "tt0234215",
+          "type": "series",
+          "name": "The Matrix Reloaded",
+          "year": 2003,
+          "poster": "https://p2.jpg"
+        },
+        {
+          "imdb": "tt10838180",
+          "type": "series",
+          "name": "The Matrix Resurrections",
+          "year": 2021,
+          "poster": null
+        }
+      ]
+    },
+    {
+      "name": "a non-200 answer is no candidates",
+      "title": "The Matrix",
+      "year": 1999,
+      "season": null,
+      "hasBase": true,
+      "status": 500,
+      "body": "boom",
+      "requests": [
+        {
+          "method": "GET",
+          "path": "/catalog/movie/top/search=The%20Matrix.json",
+          "userAgent": "PearTube"
+        }
+      ],
+      "out": []
+    },
+    {
+      "name": "broken json is no candidates",
+      "title": "The Matrix",
+      "year": 1999,
+      "season": null,
+      "hasBase": true,
+      "status": 200,
+      "body": "not json",
+      "requests": [
+        {
+          "method": "GET",
+          "path": "/catalog/movie/top/search=The%20Matrix.json",
+          "userAgent": "PearTube"
+        }
+      ],
+      "out": []
+    },
+    {
+      "name": "no base is no candidates",
+      "title": "The Matrix",
+      "year": 1999,
+      "season": null,
+      "hasBase": false,
+      "status": null,
+      "body": null,
+      "requests": [],
+      "out": []
+    },
+    {
+      "name": "no title is no candidates",
+      "title": "",
+      "year": 1999,
+      "season": null,
+      "hasBase": true,
+      "status": null,
+      "body": null,
+      "requests": [],
+      "out": []
+    }
+  ],
+  "meta": [
+    {
+      "name": "a movie poster is enough",
+      "imdb": "tt0111161",
+      "steps": [
+        {
+          "routes": [
+            {
+              "path": "/meta/movie/tt0111161.json",
+              "status": 200,
+              "body": "{\"meta\":{\"name\":\"The Shawshank Redemption\",\"poster\":\"https://img/p.jpg\",\"background\":\"https://img/b.jpg\"}}"
+            }
+          ],
+          "meta": {
+            "name": "The Shawshank Redemption",
+            "poster": "https://img/p.jpg",
+            "background": "https://img/b.jpg"
+          },
+          "poster": "https://img/p.jpg",
+          "backdrop": "https://img/b.jpg",
+          "requests": [
+            {
+              "method": "GET",
+              "path": "/meta/movie/tt0111161.json",
+              "userAgent": "PearTube"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "a posterless movie falls through to the series answer",
+      "imdb": "tt0106062",
+      "steps": [
+        {
+          "routes": [
+            {
+              "path": "/meta/movie/tt0106062.json",
+              "status": 200,
+              "body": "{\"meta\":{\"name\":\"Matrix\",\"poster\":\"\"}}"
+            },
+            {
+              "path": "/meta/series/tt0106062.json",
+              "status": 200,
+              "body": "{\"meta\":{\"name\":\"Matrix\",\"poster\":\"https://img/s.jpg\",\"background\":\"https://img/sb.jpg\"}}"
+            }
+          ],
+          "meta": {
+            "name": "Matrix",
+            "poster": "https://img/s.jpg",
+            "background": "https://img/sb.jpg"
+          },
+          "poster": "https://img/s.jpg",
+          "backdrop": "https://img/sb.jpg",
+          "requests": [
+            {
+              "method": "GET",
+              "path": "/meta/movie/tt0106062.json",
+              "userAgent": "PearTube"
+            },
+            {
+              "method": "GET",
+              "path": "/meta/series/tt0106062.json",
+              "userAgent": "PearTube"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "an empty meta falls through",
+      "imdb": "tt0209144",
+      "steps": [
+        {
+          "routes": [
+            {
+              "path": "/meta/movie/tt0209144.json",
+              "status": 200,
+              "body": "{\"meta\":null}"
+            },
+            {
+              "path": "/meta/series/tt0209144.json",
+              "status": 200,
+              "body": "{\"meta\":{\"name\":\"Memento\",\"poster\":\"https://img/m.jpg\"}}"
+            }
+          ],
+          "meta": {
+            "name": "Memento",
+            "poster": "https://img/m.jpg"
+          },
+          "poster": "https://img/m.jpg",
+          "backdrop": "https://img/m.jpg",
+          "requests": [
+            {
+              "method": "GET",
+              "path": "/meta/movie/tt0209144.json",
+              "userAgent": "PearTube"
+            },
+            {
+              "method": "GET",
+              "path": "/meta/series/tt0209144.json",
+              "userAgent": "PearTube"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "broken json and a 500 leave no meta and are cached as a failure",
+      "imdb": "tt1375666",
+      "steps": [
+        {
+          "routes": [],
+          "meta": null,
+          "poster": null,
+          "backdrop": null,
+          "requests": [
+            {
+              "method": "GET",
+              "path": "/meta/movie/tt1375666.json",
+              "userAgent": "PearTube"
+            },
+            {
+              "method": "GET",
+              "path": "/meta/series/tt1375666.json",
+              "userAgent": "PearTube"
+            }
+          ]
+        },
+        {
+          "routes": [
+            {
+              "path": "/meta/movie/tt1375666.json",
+              "status": 200,
+              "body": "{\"meta\":{\"poster\":\"https://img/late.jpg\"}}"
+            }
+          ],
+          "meta": null,
+          "poster": null,
+          "backdrop": null,
+          "requests": []
+        }
+      ]
+    },
+    {
+      "name": "an imdb id that is not tt-digits is never asked for",
+      "imdb": "tt12",
+      "steps": [
+        {
+          "routes": [],
+          "meta": null,
+          "poster": null,
+          "backdrop": null,
+          "requests": []
+        }
+      ]
+    },
+    {
+      "name": "a number poster is not art",
+      "imdb": "tt0816692",
+      "steps": [
+        {
+          "routes": [
+            {
+              "path": "/meta/movie/tt0816692.json",
+              "status": 200,
+              "body": "{\"meta\":{\"poster\":7,\"background\":\"https://img/i.jpg\"}}"
+            }
+          ],
+          "meta": {
+            "poster": 7,
+            "background": "https://img/i.jpg"
+          },
+          "poster": null,
+          "backdrop": "https://img/i.jpg",
+          "requests": [
+            {
+              "method": "GET",
+              "path": "/meta/movie/tt0816692.json",
+              "userAgent": "PearTube"
+            },
+            {
+              "method": "GET",
+              "path": "/meta/series/tt0816692.json",
+              "userAgent": "PearTube"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "ubitInfo": [
+    {
+      "name": "a readable page",
+      "url": "https://vid.example/watch?v=1",
+      "plan": {
+        "stdout": [
+          "{\"title\":\"A Clip\",\"formats\":[{\"height\":720}]}"
+        ],
+        "exit": 0
+      },
+      "out": {
+        "title": "A Clip",
+        "formats": [
+          {
+            "height": 720
+          }
+        ]
+      },
+      "observed": {
+        "argv": [
+          "info",
+          "https://vid.example/watch?v=1",
+          "--json"
+        ],
+        "configDir": null
+      }
+    },
+    {
+      "name": "DRM is refused",
+      "url": "https://vid.example/watch?v=drm",
+      "plan": {
+        "stdout": [
+          "{\"title\":\"Locked\",\"isDRM\":true}"
+        ],
+        "exit": 0
+      },
+      "error": {
+        "message": "This video is DRM-protected",
+        "status": 451,
+        "code": null
+      },
+      "observed": {
+        "argv": [
+          "info",
+          "https://vid.example/watch?v=drm",
+          "--json"
+        ],
+        "configDir": null
+      }
+    },
+    {
+      "name": "no metadata at all",
+      "url": "https://vid.example/bad",
+      "plan": {
+        "stdout": [
+          "not json"
+        ],
+        "exit": 0
+      },
+      "error": {
+        "message": "ubit returned no metadata",
+        "status": null,
+        "code": null
+      },
+      "observed": {
+        "argv": [
+          "info",
+          "https://vid.example/bad",
+          "--json"
+        ],
+        "configDir": null
+      }
+    },
+    {
+      "name": "an empty answer",
+      "url": "https://vid.example/empty",
+      "plan": {
+        "stdout": [],
+        "exit": 0
+      },
+      "error": {
+        "message": "ubit returned no metadata",
+        "status": null,
+        "code": null
+      },
+      "observed": {
+        "argv": [
+          "info",
+          "https://vid.example/empty",
+          "--json"
+        ],
+        "configDir": null
+      }
+    },
+    {
+      "name": "stderr carries the status",
+      "url": "https://vid.example/gone",
+      "plan": {
+        "stdout": [],
+        "stderr": [
+          "warning: starting\n",
+          "error: HTTP 404: not found\n"
+        ],
+        "exit": 1
+      },
+      "error": {
+        "message": "HTTP 404: not found",
+        "status": 404,
+        "code": null
+      },
+      "observed": {
+        "argv": [
+          "info",
+          "https://vid.example/gone",
+          "--json"
+        ],
+        "configDir": null
+      }
+    },
+    {
+      "name": "a DRM complaint is 451",
+      "url": "https://vid.example/drm2",
+      "plan": {
+        "stdout": [],
+        "stderr": [
+          "error: DRM protected stream\n"
+        ],
+        "exit": 1
+      },
+      "error": {
+        "message": "DRM protected stream",
+        "status": 451,
+        "code": null
+      },
+      "observed": {
+        "argv": [
+          "info",
+          "https://vid.example/drm2",
+          "--json"
+        ],
+        "configDir": null
+      }
+    },
+    {
+      "name": "a silent failure",
+      "url": "https://vid.example/silent",
+      "plan": {
+        "stdout": [],
+        "exit": 1
+      },
+      "error": {
+        "message": "This page has no video ubit can read",
+        "status": null,
+        "code": null
+      },
+      "observed": {
+        "argv": [
+          "info",
+          "https://vid.example/silent",
+          "--json"
+        ],
+        "configDir": null
+      }
+    },
+    {
+      "name": "a long message is cut to 200",
+      "url": "https://vid.example/long",
+      "plan": {
+        "stdout": [],
+        "stderr": [
+          "error: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n"
+        ],
+        "exit": 1
+      },
+      "error": {
+        "message": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "status": null,
+        "code": null
+      },
+      "observed": {
+        "argv": [
+          "info",
+          "https://vid.example/long",
+          "--json"
+        ],
+        "configDir": null
+      }
+    },
+    {
+      "name": "a config dir reaches the subprocess",
+      "url": "https://vid.example/conf",
+      "configDir": "/tmp/ubit-config",
+      "plan": {
+        "stdout": [
+          "{}"
+        ],
+        "exit": 0
+      },
+      "out": {},
+      "observed": {
+        "argv": [
+          "info",
+          "https://vid.example/conf",
+          "--json"
+        ],
+        "configDir": "/tmp/ubit-config"
+      }
+    },
+    {
+      "name": "ubit is not installed",
+      "url": "https://vid.example/absent",
+      "plan": null,
+      "argv": null,
+      "configDir": null,
+      "error": {
+        "message": "Install ubit to add page links",
+        "status": 501,
+        "code": "UBIT_MISSING"
+      }
+    }
+  ],
+  "download": [
+    {
+      "name": "progress, a split line and a done event",
+      "url": "https://vid.example/page",
+      "configDir": "",
+      "stallTimeout": 30000,
+      "cancelled": null,
+      "plan": {
+        "stdout": [
+          "{\"event\":\"progress\",\"downloaded\":10,\"total\":100}\n{\"event\":\"pro",
+          "cess\",\"stage\":\"mux\"}\n",
+          "not json at all\n",
+          "{\"event\":\"progress\",\"downloaded\":100,\"total\":0}\n",
+          "{\"event\":\"done\",\"path\":\"/out/Film.2020.mkv\",\"size\":1234}\n"
+        ],
+        "exit": 0
+      },
+      "progress": [
+        {
+          "bytes": 10,
+          "total": 100
+        },
+        {
+          "bytes": 100,
+          "total": null
+        }
+      ],
+      "out": {
+        "path": "/out/Film.2020.mkv",
+        "size": 1234
+      },
+      "observed": {
+        "argv": [
+          "get",
+          "{BASE}",
+          "--no-library",
+          "--no-playlist",
+          "--json",
+          "-o",
+          "{OUT}"
+        ],
+        "configDir": null
+      }
+    },
+    {
+      "name": "an error event outranks the exit code",
+      "url": "https://vid.example/page",
+      "configDir": "",
+      "stallTimeout": 30000,
+      "cancelled": null,
+      "plan": {
+        "stdout": [
+          "{\"event\":\"error\",\"error\":\"HTTP 403 forbidden\"}\n"
+        ],
+        "exit": 1
+      },
+      "progress": [],
+      "error": {
+        "message": "HTTP 403 forbidden",
+        "status": 403,
+        "code": null
+      },
+      "observed": {
+        "argv": [
+          "get",
+          "{BASE}",
+          "--no-library",
+          "--no-playlist",
+          "--json",
+          "-o",
+          "{OUT}"
+        ],
+        "configDir": null
+      }
+    },
+    {
+      "name": "stderr when no event explains it",
+      "url": "https://vid.example/page",
+      "configDir": "",
+      "stallTimeout": 30000,
+      "cancelled": null,
+      "plan": {
+        "stdout": [],
+        "stderr": [
+          "error: HTTP 410 gone\n"
+        ],
+        "exit": 1
+      },
+      "progress": [],
+      "error": {
+        "message": "HTTP 410 gone",
+        "status": 410,
+        "code": null
+      },
+      "observed": {
+        "argv": [
+          "get",
+          "{BASE}",
+          "--no-library",
+          "--no-playlist",
+          "--json",
+          "-o",
+          "{OUT}"
+        ],
+        "configDir": null
+      }
+    },
+    {
+      "name": "exit zero without a done path",
+      "url": "https://vid.example/page",
+      "configDir": "",
+      "stallTimeout": 30000,
+      "cancelled": null,
+      "plan": {
+        "stdout": [
+          "{\"event\":\"progress\",\"downloaded\":5}\n"
+        ],
+        "exit": 0
+      },
+      "progress": [
+        {
+          "bytes": 5,
+          "total": null
+        }
+      ],
+      "error": {
+        "message": "ubit failed to download this page",
+        "status": null,
+        "code": null
+      },
+      "observed": {
+        "argv": [
+          "get",
+          "{BASE}",
+          "--no-library",
+          "--no-playlist",
+          "--json",
+          "-o",
+          "{OUT}"
+        ],
+        "configDir": null
+      }
+    },
+    {
+      "name": "a fractional size is no size",
+      "url": "https://vid.example/page",
+      "configDir": "",
+      "stallTimeout": 30000,
+      "cancelled": null,
+      "plan": {
+        "stdout": [
+          "{\"event\":\"done\",\"path\":\"/out/a.mkv\",\"size\":12.5}\n"
+        ],
+        "exit": 0
+      },
+      "progress": [],
+      "out": {
+        "path": "/out/a.mkv",
+        "size": null
+      },
+      "observed": {
+        "argv": [
+          "get",
+          "{BASE}",
+          "--no-library",
+          "--no-playlist",
+          "--json",
+          "-o",
+          "{OUT}"
+        ],
+        "configDir": null
+      }
+    },
+    {
+      "name": "a zero size is a size",
+      "url": "https://vid.example/page",
+      "configDir": "",
+      "stallTimeout": 30000,
+      "cancelled": null,
+      "plan": {
+        "stdout": [
+          "{\"event\":\"done\",\"path\":\"/out/b.mkv\",\"size\":0}\n"
+        ],
+        "exit": 0
+      },
+      "progress": [],
+      "out": {
+        "path": "/out/b.mkv",
+        "size": 0
+      },
+      "observed": {
+        "argv": [
+          "get",
+          "{BASE}",
+          "--no-library",
+          "--no-playlist",
+          "--json",
+          "-o",
+          "{OUT}"
+        ],
+        "configDir": null
+      }
+    },
+    {
+      "name": "a done path that is not a string",
+      "url": "https://vid.example/page",
+      "configDir": "",
+      "stallTimeout": 30000,
+      "cancelled": null,
+      "plan": {
+        "stdout": [
+          "{\"event\":\"done\",\"path\":7,\"size\":3}\n"
+        ],
+        "exit": 0
+      },
+      "progress": [],
+      "error": {
+        "message": "ubit failed to download this page",
+        "status": null,
+        "code": null
+      },
+      "observed": {
+        "argv": [
+          "get",
+          "{BASE}",
+          "--no-library",
+          "--no-playlist",
+          "--json",
+          "-o",
+          "{OUT}"
+        ],
+        "configDir": null
+      }
+    },
+    {
+      "name": "a stall is Source stalled",
+      "url": "https://vid.example/page",
+      "configDir": "",
+      "stallTimeout": 120,
+      "cancelled": null,
+      "plan": {
+        "stdout": [
+          "{\"event\":\"progress\",\"downloaded\":1}\n"
+        ],
+        "hangAfterStdout": 1
+      },
+      "progress": [
+        {
+          "bytes": 1,
+          "total": null
+        }
+      ],
+      "error": {
+        "message": "Source stalled",
+        "status": null,
+        "code": null
+      },
+      "observed": {
+        "argv": [
+          "get",
+          "{BASE}",
+          "--no-library",
+          "--no-playlist",
+          "--json",
+          "-o",
+          "{OUT}"
+        ],
+        "configDir": null
+      }
+    },
+    {
+      "name": "cancel before the start",
+      "url": "https://vid.example/page",
+      "configDir": "",
+      "stallTimeout": 30000,
+      "cancelled": "before",
+      "plan": null,
+      "progress": [],
+      "error": {
+        "message": "Cancelled",
+        "status": null,
+        "code": null
+      },
+      "observed": {
+        "argv": null,
+        "configDir": null
+      }
+    },
+    {
+      "name": "cancel while running",
+      "url": "https://vid.example/page",
+      "configDir": "",
+      "stallTimeout": 30000,
+      "cancelled": "progress",
+      "plan": {
+        "stdout": [
+          "{\"event\":\"progress\",\"downloaded\":1}\n"
+        ],
+        "hangAfterStdout": 1
+      },
+      "progress": [
+        {
+          "bytes": 1,
+          "total": null
+        }
+      ],
+      "error": {
+        "message": "Cancelled",
+        "status": null,
+        "code": null
+      },
+      "observed": {
+        "argv": [
+          "get",
+          "{BASE}",
+          "--no-library",
+          "--no-playlist",
+          "--json",
+          "-o",
+          "{OUT}"
+        ],
+        "configDir": null
+      }
+    },
+    {
+      "name": "a config dir reaches the subprocess",
+      "url": "https://vid.example/page",
+      "configDir": "/tmp/ubit-config",
+      "stallTimeout": 30000,
+      "cancelled": null,
+      "plan": {
+        "stdout": [
+          "{\"event\":\"done\",\"path\":\"/out/c.mkv\",\"size\":1}\n"
+        ],
+        "exit": 0
+      },
+      "progress": [],
+      "out": {
+        "path": "/out/c.mkv",
+        "size": 1
+      },
+      "observed": {
+        "argv": [
+          "get",
+          "{BASE}",
+          "--no-library",
+          "--no-playlist",
+          "--json",
+          "-o",
+          "{OUT}"
+        ],
+        "configDir": "/tmp/ubit-config"
+      }
+    }
+  ],
+  "probe": [
+    {
+      "name": "a video content type is a file",
+      "url": "{BASE}/dld/Film.2020.1080p.mkv",
+      "headerRoutes": [
+        {
+          "path": "/dld/Film.2020.1080p.mkv",
+          "status": 200,
+          "headers": {
+            "content-type": "video/x-matroska",
+            "content-length": "12345"
+          }
+        }
+      ],
+      "plan": null,
+      "requests": [
+        {
+          "method": "HEAD",
+          "path": "/dld/Film.2020.1080p.mkv",
+          "userAgent": "PearTube"
+        }
+      ],
+      "out": {
+        "kind": "file",
+        "name": "Film.2020.1080p.mkv",
+        "size": 12345,
+        "contentType": "video/x-matroska"
+      },
+      "observed": {
+        "argv": null,
+        "configDir": null
+      }
+    },
+    {
+      "name": "a media name without a length",
+      "url": "{BASE}/dld/Film.mp4",
+      "headerRoutes": [
+        {
+          "path": "/dld/Film.mp4",
+          "status": 200,
+          "headers": {
+            "content-type": "application/octet-stream"
+          }
+        }
+      ],
+      "plan": null,
+      "requests": [
+        {
+          "method": "HEAD",
+          "path": "/dld/Film.mp4",
+          "userAgent": "PearTube"
+        }
+      ],
+      "out": {
+        "kind": "file",
+        "name": "Film.mp4",
+        "size": null,
+        "contentType": "application/octet-stream"
+      },
+      "observed": {
+        "argv": null,
+        "configDir": null
+      }
+    },
+    {
+      "name": "a 404 on a media name is an error",
+      "url": "{BASE}/dld/Film.mkv",
+      "headerRoutes": [
+        {
+          "path": "/dld/Film.mkv",
+          "status": 404,
+          "headers": {
+            "content-type": "text/plain"
+          }
+        }
+      ],
+      "plan": null,
+      "requests": [
+        {
+          "method": "HEAD",
+          "path": "/dld/Film.mkv",
+          "userAgent": "PearTube"
+        }
+      ],
+      "error": {
+        "message": "The link answered 404",
+        "status": null,
+        "code": null
+      },
+      "observed": {
+        "argv": null,
+        "configDir": null
+      }
+    },
+    {
+      "name": "an html page goes through ubit",
+      "url": "{BASE}/watch",
+      "headerRoutes": [
+        {
+          "path": "/watch",
+          "status": 200,
+          "headers": {
+            "content-type": "text/html"
+          },
+          "body": "<html></html>"
+        }
+      ],
+      "plan": {
+        "stdout": [
+          "{\"title\":\"The Matrix 1999\",\"webpageURL\":\"https://vid.example/watch?v=1\",\"site\":\"YouTube\",\"author\":\"uploader\",\"duration\":136.5,\"thumbnail\":\"https://img/t.jpg\",\"formats\":[{\"height\":720,\"filesize\":400},{\"height\":1080,\"filesize\":1234567}]}"
+        ],
+        "exit": 0
+      },
+      "requests": [
+        {
+          "method": "HEAD",
+          "path": "/watch",
+          "userAgent": "PearTube"
+        }
+      ],
+      "out": {
+        "kind": "page",
+        "name": "The Matrix 1999",
+        "site": "YouTube",
+        "uploader": "uploader",
+        "duration": 136.5,
+        "thumbnail": "https://img/t.jpg",
+        "size": 1234567,
+        "resolution": "1080p",
+        "pageId": "https://vid.example/watch?v=1"
+      },
+      "observed": {
+        "argv": [
+          "info",
+          "{BASE}/watch",
+          "--json"
+        ],
+        "configDir": null
+      }
+    },
+    {
+      "name": "text html with a media name still goes through ubit",
+      "url": "{BASE}/dld/Film.mkv",
+      "headerRoutes": [
+        {
+          "path": "/dld/Film.mkv",
+          "status": 200,
+          "headers": {
+            "content-type": "text/html; charset=utf-8"
+          }
+        }
+      ],
+      "plan": {
+        "stdout": [
+          "{\"title\":\"Film\"}"
+        ],
+        "exit": 0
+      },
+      "requests": [
+        {
+          "method": "HEAD",
+          "path": "/dld/Film.mkv",
+          "userAgent": "PearTube"
+        }
+      ],
+      "out": {
+        "kind": "page",
+        "name": "Film",
+        "site": "",
+        "uploader": "",
+        "duration": null,
+        "thumbnail": null,
+        "size": null,
+        "resolution": "",
+        "pageId": "{BASE}/dld/Film.mkv"
+      },
+      "observed": {
+        "argv": [
+          "info",
+          "{BASE}/dld/Film.mkv",
+          "--json"
+        ],
+        "configDir": null
+      }
+    },
+    {
+      "name": "a missing title leaves empty fields",
+      "url": "{BASE}/watch2",
+      "headerRoutes": [
+        {
+          "path": "/watch2",
+          "status": 200,
+          "headers": {
+            "content-type": "text/html"
+          }
+        }
+      ],
+      "plan": {
+        "stdout": [
+          "{\"formats\":[]}"
+        ],
+        "exit": 0
+      },
+      "requests": [
+        {
+          "method": "HEAD",
+          "path": "/watch2",
+          "userAgent": "PearTube"
+        }
+      ],
+      "out": {
+        "kind": "page",
+        "name": "",
+        "site": "",
+        "uploader": "",
+        "duration": null,
+        "thumbnail": null,
+        "size": null,
+        "resolution": "",
+        "pageId": "{BASE}/watch2"
+      },
+      "observed": {
+        "argv": [
+          "info",
+          "{BASE}/watch2",
+          "--json"
+        ],
+        "configDir": null
+      }
+    }
+  ],
+  "identify": [
+    {
+      "name": "a page with a year gets movie suggestions and a match",
+      "url": "{BASE}/watch",
+      "routes": [
+        {
+          "path": "/watch",
+          "status": 200,
+          "headers": {
+            "content-type": "text/html"
+          }
+        },
+        {
+          "path": "/catalog/movie/top/search=The%20Matrix.json",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"metas\":[{\"imdb_id\":\"tt0234215\",\"name\":\"The Matrix Reloaded\",\"releaseInfo\":\"2003-05-15\",\"poster\":\"https://p2.jpg\"},{\"imdb_id\":\"tt0133093\",\"name\":\"The Matrix\",\"releaseInfo\":\"1999-03-31\",\"poster\":\"https://p.jpg\"},{\"imdb_id\":\"tt0111161\",\"name\":\"The Shawshank Redemption\",\"releaseInfo\":\"1994-09-22\"}]}"
+        }
+      ],
+      "plan": {
+        "stdout": [
+          "{\"title\":\"The Matrix 1999\",\"webpageURL\":\"https://vid.example/watch?v=1\",\"site\":\"YouTube\",\"author\":\"uploader\",\"duration\":136.5,\"thumbnail\":\"https://img/t.jpg\",\"formats\":[{\"height\":720,\"filesize\":400},{\"height\":1080,\"filesize\":1234567}]}"
+        ],
+        "exit": 0
+      },
+      "stableId": true,
+      "requests": [
+        {
+          "method": "HEAD",
+          "path": "/watch",
+          "userAgent": "PearTube"
+        },
+        {
+          "method": "GET",
+          "path": "/catalog/movie/top/search=The%20Matrix.json",
+          "userAgent": "PearTube"
+        }
+      ],
+      "out": {
+        "link": {
+          "kind": "page",
+          "name": "The Matrix 1999",
+          "site": "YouTube",
+          "uploader": "uploader",
+          "duration": 136.5,
+          "thumbnail": "https://img/t.jpg",
+          "size": 1234567,
+          "resolution": "1080p"
+        },
+        "parsed": {
+          "title": "The Matrix",
+          "year": 1999,
+          "season": null,
+          "episode": null,
+          "resolution": "1080p",
+          "codec": "",
+          "audio": "",
+          "ext": ""
+        },
+        "candidates": [
+          {
+            "imdb": "tt0133093",
+            "type": "movie",
+            "name": "The Matrix",
+            "year": 1999,
+            "poster": "https://p.jpg",
+            "id": "imdb:tt0133093",
+            "title": "The Matrix 1999"
+          },
+          {
+            "imdb": "tt0234215",
+            "type": "movie",
+            "name": "The Matrix Reloaded",
+            "year": 2003,
+            "poster": "https://p2.jpg",
+            "id": "imdb:tt0234215",
+            "title": "The Matrix Reloaded 2003"
+          }
+        ],
+        "match": "imdb:tt0133093",
+        "plain": {
+          "id": "clip:1cdda0de3a29802c",
+          "title": "The Matrix 1999"
+        }
+      }
+    },
+    {
+      "name": "an episode is searched as a series and announced with sNNeNN",
+      "url": "{BASE}/watch",
+      "routes": [
+        {
+          "path": "/watch",
+          "status": 200,
+          "headers": {
+            "content-type": "text/html"
+          }
+        },
+        {
+          "path": "/catalog/series/top/search=Some%20Show.json",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"metas\":[{\"imdb_id\":\"tt0944947\",\"name\":\"Some Show\",\"releaseInfo\":\"2011-04-17\"}]}"
+        }
+      ],
+      "plan": {
+        "stdout": [
+          "{\"title\":\"Some Show S02E05 1080p\",\"webpageURL\":\"https://vid.example/watch?v=2\",\"formats\":[{\"height\":2160}]}"
+        ],
+        "exit": 0
+      },
+      "stableId": true,
+      "requests": [
+        {
+          "method": "HEAD",
+          "path": "/watch",
+          "userAgent": "PearTube"
+        },
+        {
+          "method": "GET",
+          "path": "/catalog/series/top/search=Some%20Show.json",
+          "userAgent": "PearTube"
+        }
+      ],
+      "out": {
+        "link": {
+          "kind": "page",
+          "name": "Some Show S02E05 1080p",
+          "site": "",
+          "uploader": "",
+          "duration": null,
+          "thumbnail": null,
+          "size": null,
+          "resolution": "2160p"
+        },
+        "parsed": {
+          "title": "Some Show",
+          "year": null,
+          "season": 2,
+          "episode": 5,
+          "resolution": "2160p",
+          "codec": "",
+          "audio": "",
+          "ext": ""
+        },
+        "candidates": [
+          {
+            "imdb": "tt0944947",
+            "type": "series",
+            "name": "Some Show",
+            "year": 2011,
+            "poster": null,
+            "id": "imdb:tt0944947:s02e05",
+            "title": "Some Show S02E05"
+          }
+        ],
+        "match": "imdb:tt0944947:s02e05",
+        "plain": {
+          "id": "clip:fe592f1b2e5b329e",
+          "title": "Some Show S02E05 1080p"
+        }
+      }
+    },
+    {
+      "name": "a page title without a year or episode gets no suggestions",
+      "url": "{BASE}/watch",
+      "routes": [
+        {
+          "path": "/watch",
+          "status": 200,
+          "headers": {
+            "content-type": "text/html"
+          }
+        }
+      ],
+      "plan": {
+        "stdout": [
+          "{\"title\":\"My Holiday Vlog\",\"webpageURL\":\"https://vid.example/watch?v=3\"}"
+        ],
+        "exit": 0
+      },
+      "stableId": true,
+      "requests": [
+        {
+          "method": "HEAD",
+          "path": "/watch",
+          "userAgent": "PearTube"
+        }
+      ],
+      "out": {
+        "link": {
+          "kind": "page",
+          "name": "My Holiday Vlog",
+          "site": "",
+          "uploader": "",
+          "duration": null,
+          "thumbnail": null,
+          "size": null,
+          "resolution": ""
+        },
+        "parsed": {
+          "title": "My Holiday Vlog",
+          "year": null,
+          "season": null,
+          "episode": null,
+          "resolution": "",
+          "codec": "",
+          "audio": "",
+          "ext": ""
+        },
+        "candidates": [],
+        "match": null,
+        "plain": {
+          "id": "clip:138610b565dbb589",
+          "title": "My Holiday Vlog"
+        }
+      }
+    },
+    {
+      "name": "a direct file is parsed and searched, hashing the link",
+      "url": "{BASE}/dld/The.Matrix.1999.1080p.mkv",
+      "routes": [
+        {
+          "path": "/dld/The.Matrix.1999.1080p.mkv",
+          "status": 200,
+          "headers": {
+            "content-type": "video/mp4",
+            "content-length": "99"
+          }
+        },
+        {
+          "path": "/catalog/movie/top/search=The%20Matrix.json",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"metas\":[{\"imdb_id\":\"tt0133093\",\"name\":\"The Matrix\",\"releaseInfo\":\"1999-03-31\"}]}"
+        }
+      ],
+      "plan": null,
+      "stableId": false,
+      "requests": [
+        {
+          "method": "HEAD",
+          "path": "/dld/The.Matrix.1999.1080p.mkv",
+          "userAgent": "PearTube"
+        },
+        {
+          "method": "GET",
+          "path": "/catalog/movie/top/search=The%20Matrix.json",
+          "userAgent": "PearTube"
+        }
+      ],
+      "out": {
+        "link": {
+          "kind": "file",
+          "name": "The.Matrix.1999.1080p.mkv",
+          "size": 99,
+          "contentType": "video/mp4"
+        },
+        "parsed": {
+          "title": "The Matrix",
+          "year": 1999,
+          "season": null,
+          "episode": null,
+          "resolution": "1080p",
+          "codec": "",
+          "audio": "",
+          "ext": "mkv"
+        },
+        "candidates": [
+          {
+            "imdb": "tt0133093",
+            "type": "movie",
+            "name": "The Matrix",
+            "year": 1999,
+            "poster": null,
+            "id": "imdb:tt0133093",
+            "title": "The Matrix 1999"
+          }
+        ],
+        "match": "imdb:tt0133093",
+        "plain": {
+          "id": "clip:1f10278b4ed4fc7f",
+          "title": "The Matrix"
+        }
+      }
+    }
+  ]
+}

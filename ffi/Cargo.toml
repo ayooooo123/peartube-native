@@ -1,0 +1,19 @@
+[package]
+name = "peartube-native-ffi"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.90"
+license = "MIT OR Apache-2.0"
+description = "C ABI for the PearTube native backend"
+keywords = ["peartube", "ffi", "jni", "backend"]
+publish = false
+
+[lib]
+name = "peartube_native_ffi"
+# `rlib` is required in addition to the two C artifacts: `tests/abi.rs` links
+# the crate as a Rust dependency before driving the exported C functions.
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[dependencies]
+peartube-native = { path = ".." }
+serde_json = { version = "1", features = ["preserve_order"] }

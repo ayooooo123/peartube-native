@@ -14,8 +14,43 @@ name = "peartube_native"
 [dependencies]
 compact-encoding-rs = { path = "../compact-encoding-rs" }
 hypercore-rs = { path = "../hypercore-rs" }
+hyperblobs-rs = { path = "../hyperblobs-rs" }
+corestore-rs = { path = "../corestore-rs" }
+hyperbee-rs = { path = "../hyperbee-rs" }
+autobee-rs = { path = "../autobee-rs" }
+peeroxide = { path = "../peeroxide/peeroxide" }
+libudx = { path = "../peeroxide/libudx" }
+byte-stream-rs = { path = "../byte-stream-rs" }
+mdns-sd = "0.21"
 rand = "0.8"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 sha2 = "0.10"
 xsalsa20poly1305 = "0.9"
+protomux-rs = { path = "../protomux-rs" }
+peeroxide-dht = "1.7.4"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "time", "io-util", "process", "sync"] }
+http-body-util = "0.1"
+bytes = "1"
+futures-util = "0.3"
+hyper = { version = "1", features = ["client", "http1", "server"] }
+hyper-rustls = { version = "0.27", default-features = false, features = ["http1", "ring", "tls12", "webpki-tokio"] }
+hyper-util = { version = "0.1", features = ["client-legacy", "http1", "tokio"] }
+unicode-normalization = "0.1"
+url = "2"
+
+[dev-dependencies]
+tempfile = "3"
+
+[workspace]
+members = ["ffi"]
+
+[features]
+default = []
+peeroxide-dht = []
+
+# Our fork: UDX write pipelining, C-compatible pacing and SACKs, reachability check (see ../peeroxide).
+[patch.crates-io]
+peeroxide = { path = "../peeroxide/peeroxide" }
+peeroxide-dht = { path = "../peeroxide/peeroxide-dht" }
+libudx = { path = "../peeroxide/libudx" }

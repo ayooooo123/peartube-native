@@ -1,0 +1,541 @@
+//! Thread-owned runtime and host-facing transport.
+
+use std::sync::Arc;
+use std::{
+    fmt,
+    sync::{Mutex, mpsc},
+    thread::{self, JoinHandle},
+};
+
+use serde_json::Value;
+use tokio::sync::mpsc as tokio_mpsc;
+
+use crate::ipc::Framer;
+use crate::lifecycle::{SystemClock, Worker};
+
+#[derive(Debug)]
+pub struct BackendError(String);
+
+impl BackendError {
+    /// An error the host shows as-is.
+    pub fn new(message: impl Into<String>) -> Self {
+        Self(message.into())
+    }
+}
+impl fmt::Display for BackendError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+impl std::error::Error for BackendError {}
+
+enum Command {
+    Input(String),
+    Suspend(u64),
+    Resume,
+    Shutdown,
+}
+
+/// Everything the worker drives: the node factory, the clock it schedules on, LAN discovery, the
+/// loopback API and the cast controller. `spawn_with` takes them; the FFI's `pt_init` passes the
+/// platform's own.
+pub struct Adapters<F, C, L, A, K> {
+    pub factory: Arc<F>,
+    pub clock: Arc<C>,
+    pub lan: Arc<L>,
+    pub api: Option<Arc<A>>,
+    pub cast: Option<Arc<K>>,
+}
+
+pub struct Backend {
+    commands: tokio_mpsc::UnboundedSender<Command>,
+    thread: Mutex<Option<JoinHandle<()>>>,
+}
+
+impl Backend {
+    /// A backend with no adapters configured: framing, envelopes and the settings helpers work,
+    /// anything that needs a node or a cast storage reports why it cannot.
+    pub fn spawn(
+        config: Value,
+        on_line: impl Fn(String) + Send + 'static,
+    ) -> Result<Self, BackendError> {
+        Self::spawn_with(
+            config,
+            Adapters {
+                factory: Arc::new(crate::node::factory::Factory),
+                clock: Arc::new(SystemClock),
+                lan: Arc::new(Unconfigured),
+                api: None::<Arc<Unconfigured>>,
+                cast: None::<Arc<Unconfigured>>,
+            },
+            on_line,
+        )
+    }
+
+    pub fn spawn_with<F, C, L, A, K>(
+        config: Value,
+        adapters: Adapters<F, C, L, A, K>,
+        on_line: impl Fn(String) + Send + 'static,
+    ) -> Result<Self, BackendError>
+    where
+        F: crate::node::api::NodeFactory + Send + Sync + 'static,
+        C: crate::node::api::Clock + Send + Sync + 'static,
+        L: crate::node::api::LanFactory<F::Node> + Send + Sync + 'static,
+        A: crate::node::api::ApiServer<F::Node> + Send + Sync + 'static,
+        K: crate::node::api::CastFactory<F::Node> + Send + Sync + 'static,
+        F::Node: 'static,
+    {
+        let _ = config;
+        let (commands, mut incoming) = tokio_mpsc::unbounded_channel();
+        let (ready_tx, ready_rx) = mpsc::sync_channel(1);
+        let thread = thread::Builder::new()
+            .name("peartube-backend".into())
+            .spawn(move || {
+                let runtime = match tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                {
+                    Ok(runtime) => {
+                        let _ = ready_tx.send(Ok(()));
+                        runtime
+                    }
+                    Err(err) => {
+                        let _ = ready_tx.send(Err(err.to_string()));
+                        return;
+                    }
+                };
+                let Adapters { factory, clock, lan, api, cast } = adapters;
+                runtime.block_on(async move {
+                    let (changes, mut change_rx) = tokio_mpsc::unbounded_channel();
+                    let sink = Mutex::new(on_line);
+                    let send: Arc<dyn Fn(String) + Send + Sync> = Arc::new(move |line: String| {
+                        let sink = sink.lock().unwrap_or_else(|error| error.into_inner());
+                        sink(line);
+                    });
+                    let mut worker = Worker::new(factory, clock.clone(), lan, api, cast, send, changes);
+                    let mut framing = Framer::new();
+                    let mut lines: Vec<String> = Vec::new();
+                    loop {
+                        while let Some(timer) = worker.take_due() {
+                            worker.timer(timer).await;
+                        }
+                        let deadline = worker.next_deadline();
+                        tokio::select! {
+                            command = incoming.recv() => match command {
+                                None => break,
+                                Some(Command::Input(text)) => {
+                                    lines.clear();
+                                    framing.push(text.as_bytes(), |line| lines.push(line.to_owned()));
+                                    for line in lines.drain(..) {
+                                        worker.input(&line).await;
+                                    }
+                                }
+                                Some(Command::Suspend(linger)) => worker.suspend(linger),
+                                Some(Command::Resume) => worker.resume().await,
+                                Some(Command::Shutdown) => break,
+                            },
+                            () = clock.wait_until(deadline.unwrap_or(u64::MAX)), if deadline.is_some() => {},
+                            Some(()) = change_rx.recv() => worker.changed(),
+                        }
+                    }
+                });
+            })
+            .map_err(|e| BackendError(e.to_string()))?;
+        ready_rx
+            .recv()
+            .map_err(|e| BackendError(e.to_string()))?
+            .map_err(BackendError)?;
+        Ok(Self {
+            commands,
+            thread: Mutex::new(Some(thread)),
+        })
+    }
+
+    pub fn send(&self, line: &str) -> Result<(), BackendError> {
+        let mut line = line.to_owned();
+        if !line.ends_with('\n') {
+            line.push('\n');
+        }
+        self.commands
+            .send(Command::Input(line))
+            .map_err(|_| BackendError("backend is shut down".into()))
+    }
+    pub fn suspend(&self, linger_ms: u64) {
+        let _ = self.commands.send(Command::Suspend(linger_ms));
+    }
+    pub fn resume(&self) {
+        let _ = self.commands.send(Command::Resume);
+    }
+    pub fn shutdown(&self) {
+        let _ = self.commands.send(Command::Shutdown);
+        if let Some(handle) = self.thread.lock().unwrap_or_else(|e| e.into_inner()).take()
+            && handle.thread().id() != thread::current().id()
+        {
+            let _ = handle.join();
+        }
+    }
+}
+
+impl Drop for Backend {
+    fn drop(&mut self) {
+        self.shutdown();
+    }
+}
+
+/// The adapters a bare `spawn` has: no node, no LAN, no API.
+pub struct Unconfigured;
+
+/// The node type of an unconfigured backend; it is never constructed.
+pub enum MissingNode {}
+
+impl crate::node::Node for MissingNode {
+    type Error = std::convert::Infallible;
+    type Store = ();
+    type Core = ();
+    type Channel = ();
+    type Swarm = MissingSwarm;
+    type Dht = ();
+    type Connection = ();
+    type ConnectionSubscription = ();
+    type Lan = ();
+    type BlobServer = ();
+    type PutSource = MissingPutSource;
+    type RechunkOptions = ();
+
+    fn store(&self) -> &Self::Store {
+        match *self {}
+    }
+    fn channel(&self) -> &Self::Channel {
+        match *self {}
+    }
+    fn swarm(&self) -> &Self::Swarm {
+        match *self {}
+    }
+    fn dht(&self) -> &Self::Dht {
+        match *self {}
+    }
+    fn blob_server(&self) -> &Self::BlobServer {
+        match *self {}
+    }
+    fn private_routing(&self) -> bool {
+        match *self {}
+    }
+    fn bootstrap(&self) -> Option<Value> {
+        match *self {}
+    }
+    fn relay_through(&self) -> Option<Value> {
+        match *self {}
+    }
+    fn peer_key(&self) -> String {
+        match *self {}
+    }
+    fn closing(&self) -> bool {
+        match *self {}
+    }
+    fn peer_connections(&self) -> Vec<Self::Connection> {
+        match *self {}
+    }
+    fn on_connection(
+        &self,
+        _callback: Box<dyn Fn(Self::Connection) + Send + Sync>,
+    ) -> Self::ConnectionSubscription {
+        match *self {}
+    }
+    fn onchange(&self) -> tokio::sync::watch::Receiver<u64> {
+        match *self {}
+    }
+    async fn find_entry(&self, _key: &str) -> Result<Option<Value>, Self::Error> {
+        match *self {}
+    }
+    async fn blob_core(&self, _key: &str) -> Result<Self::Core, Self::Error> {
+        match *self {}
+    }
+    async fn seedable_cores(
+        &self,
+        _include_cached: bool,
+    ) -> Result<Vec<crate::node::api::SeedableCore>, Self::Error> {
+        match *self {}
+    }
+    async fn has_lan(&self) -> bool {
+        match *self {}
+    }
+    async fn lan_endpoint(&self) -> Option<crate::node::api::LanEndpoint> {
+        match *self {}
+    }
+    async fn dial_lan_peer(&self, _endpoint: crate::node::api::LanEndpoint) {
+        match *self {}
+    }
+    async fn join_peer(&self, _key: &str, _lan_first: bool) {
+        match *self {}
+    }
+    async fn evict_behind(
+        &self,
+        _blobs: &str,
+        _blob: crate::node::api::Blob,
+        _options: Value,
+    ) -> Result<u64, Self::Error> {
+        match *self {}
+    }
+    async fn refresh_block_count(&self, _core: &Self::Core) -> Result<(), Self::Error> {
+        match *self {}
+    }
+    async fn search(
+        &self,
+        _id: Option<&str>,
+        _options: crate::node::api::SearchOptions,
+    ) -> Result<Vec<crate::node::api::Entry>, Self::Error> {
+        match *self {}
+    }
+    async fn put(
+        &self,
+        _meta: crate::node::api::PutMeta,
+        _source: Self::PutSource,
+    ) -> Result<crate::node::api::Announce, Self::Error> {
+        match *self {}
+    }
+    async fn drop_store(&self, _name: &str) -> Result<(), Self::Error> {
+        match *self {}
+    }
+    async fn append(&self, _op: Value) -> Result<(), Self::Error> {
+        match *self {}
+    }
+    async fn publish(
+        &self,
+        _meta: crate::node::api::PutMeta,
+        _source: Self::PutSource,
+    ) -> Result<crate::node::api::Published, Self::Error> {
+        match *self {}
+    }
+    async fn publish_channel(
+        &self,
+        _meta_or_op: Value,
+        _source: Option<Self::PutSource>,
+    ) -> Result<crate::node::api::Published, Self::Error> {
+        match *self {}
+    }
+    async fn remove(&self, _key: &str) -> Result<(), Self::Error> {
+        match *self {}
+    }
+    async fn publish_source(&self, _source_key: &str, _title: &str) -> Result<Value, Self::Error> {
+        match *self {}
+    }
+    async fn sync_local_channel(&self) -> Result<crate::node::api::SyncResult, Self::Error> {
+        match *self {}
+    }
+    async fn rechunk_legacy_blobs(
+        &self,
+        _options: Self::RechunkOptions,
+    ) -> Result<crate::node::api::RechunkResult, Self::Error> {
+        match *self {}
+    }
+    async fn unpublish_source(&self, _key: &str) -> Result<Value, Self::Error> {
+        match *self {}
+    }
+    async fn published_sources(
+        &self,
+    ) -> Result<Vec<crate::node::api::PublishedSource>, Self::Error> {
+        match *self {}
+    }
+    async fn add_source(
+        &self,
+        _spec: crate::node::api::SourceSpec,
+        _wake: bool,
+    ) -> Result<crate::node::api::Source, Self::Error> {
+        match *self {}
+    }
+    async fn remove_source(&self, _key: &str) -> Result<crate::node::api::Removed, Self::Error> {
+        match *self {}
+    }
+    async fn list_sources(&self) -> Vec<crate::node::api::Source> {
+        match *self {}
+    }
+    async fn focus_source(&self, _key: &str) -> Result<bool, Self::Error> {
+        match *self {}
+    }
+    async fn set_player_active(&self, _active: bool) -> crate::node::api::OkResult {
+        match *self {}
+    }
+    async fn active_source_count(&self) -> usize {
+        match *self {}
+    }
+    async fn overlay_topic_count(&self) -> usize {
+        match *self {}
+    }
+    async fn discovered_sources(
+        &self,
+    ) -> Result<Vec<crate::node::api::DiscoveredSource>, Self::Error> {
+        match *self {}
+    }
+    async fn open_uri(
+        &self,
+        _uri: &str,
+        _join_source: bool,
+    ) -> Result<crate::node::api::OpenUri, Self::Error> {
+        match *self {}
+    }
+    async fn warm(&self, _entry: &Value) -> Result<(), Self::Error> {
+        match *self {}
+    }
+    async fn identity(
+        &self,
+        _reveal_mnemonic: bool,
+    ) -> Result<crate::node::api::Identity, Self::Error> {
+        match *self {}
+    }
+    async fn grant_writer(
+        &self,
+        _writer: &str,
+        _role: &str,
+        _alias: &str,
+    ) -> Result<crate::node::api::Grant, Self::Error> {
+        match *self {}
+    }
+    async fn revoke_writer(
+        &self,
+        _writer: &str,
+        _purge_entries: bool,
+    ) -> Result<crate::node::api::Revoke, Self::Error> {
+        match *self {}
+    }
+    async fn claim_with_mnemonic(
+        &self,
+        _mnemonic: &str,
+        _alias: &str,
+    ) -> Result<crate::node::api::Claim, Self::Error> {
+        match *self {}
+    }
+    async fn rotate_epoch(&self) -> Result<crate::node::api::Epoch, Self::Error> {
+        match *self {}
+    }
+    async fn set_allowed_peers(&self, _peers: Option<Vec<String>>) -> Result<(), Self::Error> {
+        match *self {}
+    }
+    async fn clear_cache(
+        &self,
+        _key: Option<&str>,
+        _keep_blobs_hex: Option<&str>,
+    ) -> Result<crate::node::api::CacheCleared, Self::Error> {
+        match *self {}
+    }
+    async fn set_cache_max_bytes(&self, _bytes: f64) -> u64 {
+        match *self {}
+    }
+    async fn enforce_cache_ceiling(
+        &self,
+        _keep_hex: Option<&str>,
+    ) -> Result<crate::node::api::CacheCeiling, Self::Error> {
+        match *self {}
+    }
+    async fn gc_storage(
+        &self,
+        _full: bool,
+        _streaming: bool,
+    ) -> Result<crate::node::api::StorageGc, Self::Error> {
+        match *self {}
+    }
+    async fn status(&self) -> crate::node::api::Status {
+        match *self {}
+    }
+    async fn stream_url(&self, _entry: &crate::node::api::Announce) -> String {
+        match *self {}
+    }
+    async fn http_viewing(&self) -> bool {
+        match *self {}
+    }
+    async fn mark_bulk_peer(&self, _key: &str, _on: bool) {
+        match *self {}
+    }
+    async fn set_lan(&self, _lan: Option<Self::Lan>) -> Result<(), Self::Error> {
+        match *self {}
+    }
+    async fn lan_stats(&self) -> Option<Value> {
+        match *self {}
+    }
+    async fn close(&self) -> Result<(), Self::Error> {
+        match *self {}
+    }
+}
+
+pub enum MissingPutSource {}
+
+impl crate::node::PutSource for MissingPutSource {
+    type Error = std::convert::Infallible;
+    async fn open(
+        &mut self,
+        _offset: u64,
+        _meta: &mut crate::node::api::PutMeta,
+    ) -> Result<std::pin::Pin<Box<dyn tokio::io::AsyncRead + Send>>, Self::Error> {
+        match *self {}
+    }
+    fn on_data(&mut self, _bytes: u64) {
+        match *self {}
+    }
+    fn on_hash_state(&mut self, _state: &[u8], _bytes: u64) {
+        match *self {}
+    }
+}
+
+/// The swarm of a backend with no node factory; it is never constructed.
+pub enum MissingSwarm {}
+
+impl crate::node::api::Swarm for MissingSwarm {
+    type Error = std::convert::Infallible;
+    async fn suspend(&self) -> Result<(), Self::Error> {
+        match *self {}
+    }
+    async fn resume(&self) -> Result<(), Self::Error> {
+        match *self {}
+    }
+    fn on_update(&self, _callback: Arc<dyn Fn() + Send + Sync>) -> Box<dyn Fn() + Send + Sync> {
+        match *self {}
+    }
+}
+
+impl crate::node::api::NodeFactory for Unconfigured {
+    type Node = MissingNode;
+    type Error = BackendError;
+    async fn create(&self, _options: Value) -> Result<Arc<Self::Node>, Self::Error> {
+        Err(BackendError("Native node factory is not configured".into()))
+    }
+}
+
+impl<N: crate::node::Node> crate::node::api::LanFactory<N> for Unconfigured {
+    type Error = BackendError;
+    async fn interfaces(&self) -> Result<Vec<(String, std::net::IpAddr, bool)>, Self::Error> {
+        Err(BackendError("LAN adapters are not configured".into()))
+    }
+    async fn create(
+        &self,
+        _host: std::net::Ipv4Addr,
+        _node: &N,
+    ) -> Result<N::Lan, Self::Error> {
+        Err(BackendError("LAN adapters are not configured".into()))
+    }
+    async fn host_event(&self, _event: Value) {}
+}
+
+impl<N: crate::node::Node> crate::node::api::ApiServer<N> for Unconfigured {
+    type Error = BackendError;
+    async fn start(
+        &self,
+        _node: Arc<N>,
+        _on_sources: Arc<dyn Fn(Vec<crate::node::api::Source>) + Send + Sync>,
+    ) -> Result<Option<String>, Self::Error> {
+        Err(BackendError("The loopback API is not configured".into()))
+    }
+    fn notify(&self, _event: &str) {}
+    async fn close(&self) {}
+}
+
+impl<N: crate::node::Node> crate::node::api::CastFactory<N> for Unconfigured {
+    async fn create(
+        &self,
+        _options: crate::node::api::CastOptions<N>,
+    ) -> Result<Arc<dyn crate::node::api::Cast>, String> {
+        Err("Cast adapters are not configured".into())
+    }
+    async fn peer_storage(&self, candidate: Option<&str>, fallback: &str) -> String {
+        candidate.unwrap_or(fallback).to_owned()
+    }
+    fn reclaim(&self, _storage: &str) {}
+}

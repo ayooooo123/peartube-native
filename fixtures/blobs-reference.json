@@ -1,0 +1,129 @@
+{
+  "primaryKey": "1111111111111111111111111111111111111111111111111111111111111111",
+  "localKey": "2222222222222222222222222222222222222222222222222222222222222222",
+  "epochKey": "3333333333333333333333333333333333333333333333333333333333333333",
+  "videoKey": "4444444444444444444444444444444444444444444444444444444444444444",
+  "fresh": {
+    "size": 1300123,
+    "streamUrl": "?key=xr7j4919iykw85ykcy99r41myedmh1i7br4teadf874p1u1wiz6o&blob=yybob9w54ajoy&type=application%2Foctet-stream",
+    "key": "youtube:fixturefresh/2222222222222222222222222222222222222222222222222222222222222222/793a9d7e5fa81543ec0a603ff26a4b0206be4abd09351460653f74d94e54adfd:0",
+    "channel": "1111111111111111111111111111111111111111111111111111111111111111",
+    "magnetUrl": "peartube://watch/793a9d7e5fa81543ec0a603ff26a4b0206be4abd09351460653f74d94e54adfd:0:3:0:1300123?id=youtube%3Afixturefresh&title=Fresh%20Ingest&sha256=29b87d41ef9a79410badfeec811986182e1b8ac6d3808b08eeb54eda20b920ca",
+    "announce": {
+      "type": "announce",
+      "id": "youtube:fixturefresh",
+      "title": "Fresh Ingest",
+      "size": 1300123,
+      "sha256": "29b87d41ef9a79410badfeec811986182e1b8ac6d3808b08eeb54eda20b920ca",
+      "blobs": "793a9d7e5fa81543ec0a603ff26a4b0206be4abd09351460653f74d94e54adfd",
+      "blob": {
+        "blockOffset": 0,
+        "byteOffset": 0,
+        "blockLength": 3,
+        "byteLength": 1300123
+      }
+    },
+    "core": {
+      "key": "793a9d7e5fa81543ec0a603ff26a4b0206be4abd09351460653f74d94e54adfd",
+      "length": 3,
+      "byteLength": 1300123,
+      "blocks": [
+        "e67474777a169f3baada61bb1afc91dcaaf1d72aec0a72635527ea5f4310556b",
+        "f03c4437779686edd50248a31e0b7783b7abdbfe6bf7d801e9e52584e12cf34d",
+        "2cab10aec426a898044ed838b16f245c5a545682a73166499942eb74076d6566"
+      ],
+      "plain": [
+        "e67474777a169f3baada61bb1afc91dcaaf1d72aec0a72635527ea5f4310556b",
+        "f03c4437779686edd50248a31e0b7783b7abdbfe6bf7d801e9e52584e12cf34d",
+        "2cab10aec426a898044ed838b16f245c5a545682a73166499942eb74076d6566"
+      ]
+    },
+    "ops": [
+      "{\"type\":\"announce\",\"id\":\"youtube:fixturefresh\",\"title\":\"Fresh Ingest\",\"size\":1300123,\"sha256\":\"29b87d41ef9a79410badfeec811986182e1b8ac6d3808b08eeb54eda20b920ca\",\"blobs\":\"793a9d7e5fa81543ec0a603ff26a4b0206be4abd09351460653f74d94e54adfd\",\"blob\":{\"blockOffset\":0,\"byteOffset\":0,\"blockLength\":3,\"byteLength\":1300123}}"
+    ]
+  },
+  "encrypted": {
+    "size": 1100000,
+    "streamUrl": "?key=gbgr9gnioi6dhfe7dnp5bg1ju6szwp8w1sz7k7ydjsa37ifojoqy&blob=yybob9zy3yeyy&type=application%2Foctet-stream",
+    "key": "youtube:fixtureenc/2222222222222222222222222222222222222222222222222222222222222222/304c4f9855857c3e151d189bb09a499fad7a34f495afd574034db19ed4b04c1c:0",
+    "channel": "1111111111111111111111111111111111111111111111111111111111111111",
+    "magnetUrl": "peartube://watch/304c4f9855857c3e151d189bb09a499fad7a34f495afd574034db19ed4b04c1c:0:3:0:1100000?id=youtube%3Afixtureenc&title=Encrypted%20Ingest&sha256=ee22b6b66bb9d5c10e931027b8fbb4d816a2fc6c27af4c7a5149ee975549d7dd",
+    "announce": {
+      "type": "announce",
+      "id": "youtube:fixtureenc",
+      "title": "Encrypted Ingest",
+      "size": 1100000,
+      "sha256": "ee22b6b66bb9d5c10e931027b8fbb4d816a2fc6c27af4c7a5149ee975549d7dd",
+      "blobs": "304c4f9855857c3e151d189bb09a499fad7a34f495afd574034db19ed4b04c1c",
+      "blob": {
+        "blockOffset": 0,
+        "byteOffset": 0,
+        "blockLength": 3,
+        "byteLength": 1100000
+      },
+      "epoch": 1,
+      "wrappedKey": "2bf82b5f0470e24c0b0748d665b6264082662d469035dcf6fd0cea3993914f438ab2333a7b52b1a7efd3a5b00037ac111d38253068312f70df7de91b208c304c9450c6c64540fdc7"
+    },
+    "unwrapped": "4444444444444444444444444444444444444444444444444444444444444444",
+    "core": {
+      "key": "304c4f9855857c3e151d189bb09a499fad7a34f495afd574034db19ed4b04c1c",
+      "length": 3,
+      "byteLength": 1100000,
+      "blocks": [
+        "1967d4c0b91aee671d510976bc6031fa3e36fccff91d87f8edf36cdb0ea1cd13",
+        "0e4532bf2fcd36d4ccea2db3304515f68966e73a5c2bf14214021e8a955e34c7",
+        "c2426f55cfd7b455c6611e66731762ff9e4c5c4e8ec738935ab9793c3354af54"
+      ],
+      "plain": [
+        "e67474777a169f3baada61bb1afc91dcaaf1d72aec0a72635527ea5f4310556b",
+        "f03c4437779686edd50248a31e0b7783b7abdbfe6bf7d801e9e52584e12cf34d",
+        "0fabb006c7354af4a5a2885b057d8ecafec23e3f36981e4e9cf79bb0e881553f"
+      ]
+    },
+    "ops": [
+      "{\"type\":\"announce\",\"id\":\"youtube:fixtureenc\",\"title\":\"Encrypted Ingest\",\"size\":1100000,\"sha256\":\"ee22b6b66bb9d5c10e931027b8fbb4d816a2fc6c27af4c7a5149ee975549d7dd\",\"blobs\":\"304c4f9855857c3e151d189bb09a499fad7a34f495afd574034db19ed4b04c1c\",\"blob\":{\"blockOffset\":0,\"byteOffset\":0,\"blockLength\":3,\"byteLength\":1100000},\"epoch\":1,\"wrappedKey\":\"2bf82b5f0470e24c0b0748d665b6264082662d469035dcf6fd0cea3993914f438ab2333a7b52b1a7efd3a5b00037ac111d38253068312f70df7de91b208c304c9450c6c64540fdc7\"}"
+    ]
+  },
+  "cacheTrim": {
+    "budget": 2097152,
+    "cores": [
+      {
+        "name": "cache-a",
+        "key": "1ed2cd130c038cfc7ed1030095b229d5e7af6dbe80a75fc1d0ae25527faf1621"
+      },
+      {
+        "name": "cache-b",
+        "key": "ca51d688a843576a9f0631923d74deedcd18377407e11e5a338f597e661c4182"
+      },
+      {
+        "name": "cache-c",
+        "key": "8a31ada2feb418def29d87ef2828c8bf4ad64a07cc0d6a8d332d1e09623175e2"
+      },
+      {
+        "name": "cache-d",
+        "key": "a99c3766b6977dc611583f320e128e23a9160ecca8dc6cee1298e5a14c6ff340"
+      }
+    ],
+    "blockBytes": 614400,
+    "progress": [
+      [
+        "8a31ada2feb418def29d87ef2828c8bf4ad64a07cc0d6a8d332d1e09623175e2",
+        5242880
+      ]
+    ],
+    "streaming": [
+      "8a31ada2feb418def29d87ef2828c8bf4ad64a07cc0d6a8d332d1e09623175e2"
+    ],
+    "keep": "1ed2cd130c038cfc7ed1030095b229d5e7af6dbe80a75fc1d0ae25527faf1621",
+    "result": {
+      "evicted": 2457600,
+      "cachedBytes": 2457600
+    },
+    "remaining": {
+      "1ed2cd130c038cfc7ed1030095b229d5e7af6dbe80a75fc1d0ae25527faf1621": 2,
+      "ca51d688a843576a9f0631923d74deedcd18377407e11e5a338f597e661c4182": 0,
+      "8a31ada2feb418def29d87ef2828c8bf4ad64a07cc0d6a8d332d1e09623175e2": 2,
+      "a99c3766b6977dc611583f320e128e23a9160ecca8dc6cee1298e5a14c6ff340": 0
+    }
+  }
+}
