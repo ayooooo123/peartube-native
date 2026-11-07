@@ -85,7 +85,9 @@ The worker emits `{event:"update"}` (`worklet/worker.js:51`), `{event:"sources",
 
 ## Worker adapters
 
-`backend::Backend` runs `worklet/worker.js`'s port on its own thread. `Backend::spawn` keeps the FFI surface (`send`, `suspend`, `resume`, `shutdown`, all synchronous; `Backend` is `Send + Sync`) and reports through the per-line callback; `Backend::spawn_with` takes the same plus `backend::Adapters`, so nothing that opens a socket, binds a port or reads a clock is compiled into the worker.
+`app::App` is `worklet/worker.js`'s port as a typed service: one public async method per worker method, with serde-derived request and reply types, and an `AppEvent` stream (`node::api::WorkerEvent`) carrying the same coalescing, timer and suspend behaviour. `lifecycle` is the thin JSON adapter over it — it decodes a request line into the method's request and serializes the reply — and `backend::Backend` runs that pair on its own thread. `Backend::spawn` keeps the FFI surface (`send`, `suspend`, `resume`, `shutdown`, all synchronous; `Backend` is `Send + Sync`) and reports through the per-line callback; `Backend::spawn_with` takes the same plus `backend::Adapters`, so nothing that opens a socket, binds a port or reads a clock is compiled into the app.
+
+A host that links the backend in-process (`app::AppHost`, over `app::NativeApp`) calls the same methods directly: no line is serialized, replies are the typed structs, and `subscribe` maps the events into the host's own types.
 
 | Adapter | Role |
 |---|---|
@@ -98,7 +100,7 @@ The worker emits `{event:"update"}` (`worklet/worker.js:51`), `{event:"sources",
 
 Every asynchronous member of `Node`, `PutSource`, `NodeFactory`, `Swarm`, `LanFactory`, `ApiServer` and `CastFactory` is declared as `fn name(...) -> impl Future<Output = T> + Send`, not `async fn`, so a caller can `tokio::spawn` a node call on the backend's runtime. Implementations may still write `async fn`; rustc then requires that future to be `Send`. `Node` is `Send + Sync + 'static` and `Node::Swarm: api::Swarm`. `Cast` is the one exception — it is used behind `Arc<dyn Cast>`, so its asynchronous members return `BoxFuture` instead. `ApiServer::notify` is synchronous: it only queues an event for the API's stream.
 
-The worker owns the `castStorage` sent by `init`, the last settings a `start` was given, the LAN note and the update coalescing timer. Inputs are handled one at a time on the backend thread, in arrival order, so `start`, `stop` and the LAN moves can never overlap — the guarantee the JavaScript worker gets from `serial()`. Request lines and host events may arrive in one chunk or split across chunks; the framer keeps the partial line.
+The app owns the `castStorage` sent by `init`, the last settings a `start` was given, the LAN note and the update coalescing timer. Inputs are handled one at a time on the backend thread, in arrival order, so `start`, `stop` and the LAN moves can never overlap — the guarantee the JavaScript worker gets from `serial()`. Request lines and host events may arrive in one chunk or split across chunks; the framer keeps the partial line.
 
 `CastOptions::get_lan_host` answers with the device address the worker last sampled, because the interface list is asynchronous; the cast controller reads it between LAN polls.
 

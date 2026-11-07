@@ -11,7 +11,8 @@ use serde_json::Value;
 use tokio::sync::mpsc as tokio_mpsc;
 
 use crate::ipc::Framer;
-use crate::lifecycle::{SystemClock, Worker};
+use crate::app::{App, SystemClock};
+use crate::lifecycle;
 
 #[derive(Debug)]
 pub struct BackendError(String);
@@ -67,17 +68,7 @@ impl Backend {
             .and_then(Value::as_u64)
             .and_then(|port| u16::try_from(port).ok())
             .unwrap_or(crate::protocol::API_PORT);
-        Self::spawn_with(
-            config,
-            Adapters {
-                factory: Arc::new(crate::node::factory::Factory),
-                clock: Arc::new(SystemClock),
-                lan: Arc::new(crate::lan::Factory),
-                api: Some(Arc::new(crate::adapters::LoopbackApi::new(api_port))),
-                cast: Some(Arc::new(crate::cast::adapters::Factory)),
-            },
-            on_line,
-        )
+        Self::spawn_with(config, native_adapters(api_port), on_line)
     }
 
     pub fn spawn_with<F, C, L, A, K>(
@@ -115,19 +106,21 @@ impl Backend {
                 let Adapters { factory, clock, lan, api, cast } = adapters;
                 runtime.block_on(async move {
                     let (changes, mut change_rx) = tokio_mpsc::unbounded_channel();
+                    let (events, mut event_rx) = tokio_mpsc::unbounded_channel();
                     let sink = Mutex::new(on_line);
-                    let send: Arc<dyn Fn(String) + Send + Sync> = Arc::new(move |line: String| {
+                    let write = |line: String| {
                         let sink = sink.lock().unwrap_or_else(|error| error.into_inner());
                         sink(line);
-                    });
-                    let mut worker = Worker::new(factory, clock.clone(), lan, api, cast, send, changes);
+                    };
+                    let mut app = App::new(factory, clock.clone(), lan, api, cast, events, changes);
                     let mut framing = Framer::new();
                     let mut lines: Vec<String> = Vec::new();
                     loop {
-                        while let Some(timer) = worker.take_due() {
-                            worker.timer(timer).await;
+                        while let Some(timer) = app.take_due() {
+                            app.timer(timer).await;
                         }
-                        let deadline = worker.next_deadline();
+                        write_events(&mut event_rx, &write);
+                        let deadline = app.next_deadline();
                         tokio::select! {
                             command = incoming.recv() => match command {
                                 None => break,
@@ -135,18 +128,27 @@ impl Backend {
                                     lines.clear();
                                     framing.push(text.as_bytes(), |line| lines.push(line.to_owned()));
                                     for line in lines.drain(..) {
-                                        worker.input(&line).await;
+                                        let response = lifecycle::input(&mut app, &line).await;
+                                        write_events(&mut event_rx, &write);
+                                        if let Some(response) = response {
+                                            write(response);
+                                        }
                                     }
                                 }
-                                Some(Command::Suspend(linger)) => worker.suspend(linger),
-                                Some(Command::Resume) => worker.resume().await,
+                                Some(Command::Suspend(linger)) => app.suspend(linger),
+                                Some(Command::Resume) => app.resume().await,
                                 Some(Command::Shutdown) => {
-                                    worker.shutdown().await;
+                                    app.shutdown().await;
                                     break;
                                 }
                             },
                             () = clock.wait_until(deadline.unwrap_or(u64::MAX)), if deadline.is_some() => {},
-                            Some(()) = change_rx.recv() => worker.changed(),
+                            Some(()) = change_rx.recv() => app.changed(),
+                            Some(event) = event_rx.recv() => {
+                                if let Some(line) = lifecycle::event_line(&event) {
+                                    write(line);
+                                }
+                            }
                         }
                     }
                 });
@@ -183,6 +185,35 @@ impl Backend {
             && handle.thread().id() != thread::current().id()
         {
             let _ = handle.join();
+        }
+    }
+}
+
+/// The adapters a native host has: the node factory, the process clock, LAN discovery, the
+/// loopback API on `api_port` and the cast stack.
+pub fn native_adapters(
+    api_port: u16,
+) -> Adapters<
+    crate::node::factory::Factory,
+    SystemClock,
+    crate::lan::Factory,
+    crate::adapters::LoopbackApi,
+    crate::cast::adapters::Factory,
+> {
+    Adapters {
+        factory: Arc::new(crate::node::factory::Factory),
+        clock: Arc::new(SystemClock),
+        lan: Arc::new(crate::lan::Factory),
+        api: Some(Arc::new(crate::adapters::LoopbackApi::new(api_port))),
+        cast: Some(Arc::new(crate::cast::adapters::Factory)),
+    }
+}
+
+/// Writes every event the app has queued, in the order it emitted them.
+fn write_events(events: &mut tokio_mpsc::UnboundedReceiver<crate::app::AppEvent>, write: &impl Fn(String)) {
+    while let Ok(event) = events.try_recv() {
+        if let Some(line) = lifecycle::event_line(&event) {
+            write(line);
         }
     }
 }

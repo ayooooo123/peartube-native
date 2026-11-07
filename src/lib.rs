@@ -10,6 +10,7 @@ pub use mnemonic::{Identity, MnemonicError, derive_identity};
 pub use protocol::{ParsedUri, UriError};
 pub mod acquire;
 pub mod adapters;
+pub mod app;
 pub mod app_settings;
 pub mod art;
 pub mod backend;
