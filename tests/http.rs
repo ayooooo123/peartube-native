@@ -713,11 +713,12 @@ fn backdrop() -> ArtLookup {
 }
 
 fn identify() -> Options {
-    let mut options = Options::default();
-    options.identify = Some(Arc::new(|url: String| {
-        Box::pin(async move { Ok(json!({ "title": "Identified", "url": url })) })
-    }));
-    options
+    Options {
+        identify: Some(Arc::new(|url: String| {
+            Box::pin(async move { Ok(json!({ "title": "Identified", "url": url })) })
+        })),
+        ..Options::default()
+    }
 }
 
 fn full_options(token: Option<&str>) -> Options {
@@ -890,9 +891,11 @@ async fn token_scenario_matches_the_app() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn bare_scenario_matches_the_app() {
-    let mut options = Options::default();
-    options.fallback_status = Some(json!({ "tracker": "trk" }));
-    options.fallback_jobs = Some(Arc::new(|| json!([{ "jobId": "fallback" }])));
+    let options = Options {
+        fallback_status: Some(json!({ "tracker": "trk" })),
+        fallback_jobs: Some(Arc::new(|| json!([{ "jobId": "fallback" }]))),
+        ..Options::default()
+    };
     replay("bare", options, None).await;
 }
 
@@ -911,14 +914,16 @@ async fn cast_scenario_matches_the_app() {
 #[tokio::test(flavor = "multi_thread")]
 async fn settings_are_private_and_gated_by_token() {
     let dir = tempfile::tempdir().unwrap();
-    let mut options = Options::default();
-    options.settings = Some(peartube_native::settings::Settings::new(
-        dir.path(),
-        Default::default(),
-    ));
-    options.restart = Some(Arc::new(|| {
-        Box::pin(async {}) as futures_util::future::BoxFuture<'static, ()>
-    }));
+    let options = Options {
+        settings: Some(peartube_native::settings::Settings::new(
+            dir.path(),
+            Default::default(),
+        )),
+        restart: Some(Arc::new(|| {
+            Box::pin(async {}) as futures_util::future::BoxFuture<'static, ()>
+        })),
+        ..Options::default()
+    };
     let api = Api::<Fake>::new(options);
     let server = api
         .bind("127.0.0.1:0".parse().unwrap())
@@ -1207,8 +1212,10 @@ async fn blob_proxy_passes_ranges_and_names_downloads() {
     let data = mp4_header();
     let total = data.len();
     let (upstream, _task) = blob_upstream(data.clone(), "video/mp4").await;
-    let mut options = Options::default();
-    options.blob = Some(BlobAddr::new("127.0.0.1", upstream.port()));
+    let options = Options {
+        blob: Some(BlobAddr::new("127.0.0.1", upstream.port())),
+        ..Options::default()
+    };
     let api = Api::<Fake>::new(options);
     let server = api
         .bind("127.0.0.1:0".parse().unwrap())
@@ -1257,8 +1264,10 @@ async fn stream_names_carry_the_resolution_read_from_the_blob_server() {
         "http://127.0.0.1:{}/?key=aaa&blob=bbb&type=video%2Fmp4",
         upstream.port()
     );
-    let mut options = Options::default();
-    options.blob = Some(BlobAddr::new("127.0.0.1", upstream.port()));
+    let options = Options {
+        blob: Some(BlobAddr::new("127.0.0.1", upstream.port())),
+        ..Options::default()
+    };
     let api = Api::with_node(options, Arc::new(Fake::new(&stream)));
     let server = api
         .bind("127.0.0.1:0".parse().unwrap())

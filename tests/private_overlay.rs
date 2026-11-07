@@ -254,7 +254,7 @@ fn json() -> Value {
 }
 
 fn unhex(s: &str) -> Vec<u8> {
-    assert!(s.len() % 2 == 0, "odd hex");
+    assert!(s.len().is_multiple_of(2), "odd hex");
     (0..s.len() / 2)
         .map(|i| u8::from_str_radix(&s[i * 2..i * 2 + 2], 16).expect("hex"))
         .collect()
@@ -575,6 +575,7 @@ mod fake {
     }
 
     impl FakeRaw {
+        #[allow(clippy::type_complexity)] // the faked stream's two ends, taken together
         fn take_pipe(
             &self,
         ) -> Option<(
@@ -1280,8 +1281,8 @@ async fn guards_and_swarms_rendezvous_and_exchange_bytes() {
     assert_eq!(source_a.topic, rv_topic(&SOURCE_KEY, &rv_epoch(now_ms())));
     assert!(swarm_a.status(source_a.topic).is_some());
     assert_eq!(swarm_a.topics().len(), 1);
-    assert_eq!(source_a.is_client, true);
-    assert_eq!(source_a.is_server, false);
+    assert!(source_a.is_client);
+    assert!(!source_a.is_server);
 
     eventually("both swarms ready", Duration::from_secs(15), || {
         let a = swarm_a.private_routing().status();

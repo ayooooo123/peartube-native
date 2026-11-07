@@ -120,6 +120,15 @@ pub enum Art {
 
 /// `state.posterUrl` / `state.backdropUrl`: an IMDb id to a Cinemeta image URL.
 pub type ArtLookup = Arc<dyn Fn(String) -> BoxFuture<'static, Option<String>> + Send + Sync>;
+/// `state.applySettings(changed)`.
+pub type ApplySettings =
+    Arc<dyn Fn(Vec<String>) -> BoxFuture<'static, Result<(), String>> + Send + Sync>;
+/// `state.recoverMnemonic(mnemonic, alias)`.
+pub type RecoverMnemonic =
+    Arc<dyn Fn(String, String) -> BoxFuture<'static, Result<Value, HttpError>> + Send + Sync>;
+/// `state.identify(link)`.
+pub type Identify =
+    Arc<dyn Fn(String) -> BoxFuture<'static, Result<Value, HttpError>> + Send + Sync>;
 
 /// The app's `metahub(kind, size)` lookups, which read Cinemeta through [`crate::art`].
 pub fn cinemeta_lookup(base: &str, art: Art) -> ArtLookup {
@@ -206,17 +215,13 @@ pub struct Options {
     /// `state.settings`: the relay settings the `/v1/settings` routes read and write.
     pub settings: Option<Settings>,
     /// `state.applySettings(changed)`: applies live settings in place; a message becomes `warning`.
-    pub apply_settings:
-        Option<Arc<dyn Fn(Vec<String>) -> BoxFuture<'static, Result<(), String>> + Send + Sync>>,
+    pub apply_settings: Option<ApplySettings>,
     /// `state.restart`: reopens the node for the settings a restart applies.
     pub restart: Option<Arc<dyn Fn() -> BoxFuture<'static, ()> + Send + Sync>>,
     /// `state.recoverMnemonic(mnemonic, alias)`.
-    pub recover_mnemonic: Option<
-        Arc<dyn Fn(String, String) -> BoxFuture<'static, Result<Value, HttpError>> + Send + Sync>,
-    >,
+    pub recover_mnemonic: Option<RecoverMnemonic>,
     /// `state.identify(link)`.
-    pub identify:
-        Option<Arc<dyn Fn(String) -> BoxFuture<'static, Result<Value, HttpError>> + Send + Sync>>,
+    pub identify: Option<Identify>,
     /// `state.onSourcesChanged(sources)`.
     pub on_sources_changed: Option<Arc<dyn Fn(Vec<Source>) + Send + Sync>>,
     /// `state.posterUrl` and `state.backdropUrl`.
@@ -382,7 +387,7 @@ impl<N: Node> Api<N> {
             let Some(page) = self.web_asset("index.html") else {
                 return plain(StatusCode::NOT_FOUND, "not found");
             };
-            let mut response = full(Bytes::from(page));
+            let mut response = full(page);
             let headers = response.headers_mut();
             cors(headers);
             isolation(headers);
@@ -606,7 +611,9 @@ impl<N: Node> Api<N> {
             status.insert("settingsOpen".to_owned(), Value::Bool(settings_open));
             return Ok(Some(Value::Object(status)));
         }
-        if self.settings.is_some() && (path == "/v1/settings" || path == "/v1/restart") {
+        if (path == "/v1/settings" || path == "/v1/restart")
+            && let Some(settings) = self.settings.as_ref()
+        {
             if !settings_open {
                 return Err(HttpError::new(
                     403,
@@ -621,7 +628,6 @@ impl<N: Node> Api<N> {
                     "Settings can only be changed from the relay’s own page",
                 ));
             }
-            let settings = self.settings.as_ref().unwrap();
             if *method == Method::GET && path == "/v1/settings" {
                 return Ok(Some(settings.lock().await.view()));
             }
@@ -1231,7 +1237,7 @@ impl<N: Node> Api<N> {
         let search = Url::parse(&entry.stream_url).ok()?.query()?.to_owned();
         let shared = {
             let mut resolutions = self.resolutions.lock().unwrap();
-            let shared = match resolutions.get(&search) {
+            match resolutions.get(&search) {
                 Some(known)
                     if known.label != Some(None) || known.at.elapsed() < RESOLUTION_RETRY =>
                 {
@@ -1254,7 +1260,7 @@ impl<N: Node> Api<N> {
                                 }
                             };
                             let size = video_size(read).await.ok().flatten();
-                            size.map(|size| resolution_label(size))
+                            size.map(resolution_label)
                         })
                         .boxed()
                         .shared();
@@ -1268,8 +1274,7 @@ impl<N: Node> Api<N> {
                     );
                     shared
                 }
-            };
-            shared
+            }
         };
         let label = shared.await;
         if let Some(known) = self.resolutions.lock().unwrap().get_mut(&search) {
@@ -1289,10 +1294,7 @@ impl<N: Node> Api<N> {
     ) -> Response<Body> {
         let blob = self.options.blob.as_ref().unwrap();
         let download = query(url, "download");
-        let up = match UriQuery::without(url, "download") {
-            Some(query) => query,
-            None => String::new(),
-        };
+        let up = UriQuery::without(url, "download").unwrap_or_default();
         let mut meta = None;
         if let Some(title) = &download {
             let cached = self.downloads.lock().unwrap().get(&up).cloned();

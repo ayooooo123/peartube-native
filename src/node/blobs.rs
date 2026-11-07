@@ -241,6 +241,9 @@ pub struct Compact {
 }
 
 /// The channel the announce ops land in, as far as blobs are concerned.
+/// The view's keys and values (`channel.view.createReadStream()`).
+pub type ViewEntries = Vec<(Vec<u8>, Vec<u8>)>;
+
 pub trait ChannelView: Send + Sync {
     type Error: std::error::Error + Send + Sync + 'static;
 
@@ -250,7 +253,7 @@ pub trait ChannelView: Send + Sync {
     fn local_role(&self) -> SendFuture<'_, String>;
     fn update(&self) -> SendFuture<'_, Result<(), Self::Error>>;
     /// `channel.view.createReadStream()`: every view key and value, newest first.
-    fn entries(&self) -> SendFuture<'_, Result<Vec<(Vec<u8>, Vec<u8>)>, Self::Error>>;
+    fn entries(&self) -> SendFuture<'_, Result<ViewEntries, Self::Error>>;
     fn append(&self, op: &Value) -> SendFuture<'_, Result<(), Self::Error>>;
     fn add_secondary_writer(&self, writer_hex: &str);
     fn mark_has_entries(&self);
@@ -345,14 +348,19 @@ pub struct MigrationProgress {
     pub current_title: Option<String>,
 }
 
+/// A rechunk job's progress callback.
+pub type MigrationProgressHook = dyn FnMut(&MigrationProgress) + Send;
+/// A rechunk job's per-entry callback (`onMigrate(oldTag, target, sample)`).
+pub type MigrationHook = dyn FnMut(&str, &Announce, &Announce) + Send;
+
 /// [`Blobs::rechunk_legacy_blobs`] options.
 #[derive(Default)]
 pub struct RechunkOptions {
     pub id: Option<String>,
     pub foreground: bool,
     pub limit: Option<u64>,
-    pub on_progress: Option<Box<dyn FnMut(&MigrationProgress) + Send>>,
-    pub on_migrate: Option<Box<dyn FnMut(&str, &Announce, &Announce) + Send>>,
+    pub on_progress: Option<Box<MigrationProgressHook>>,
+    pub on_migrate: Option<Box<MigrationHook>>,
 }
 
 struct Slot {

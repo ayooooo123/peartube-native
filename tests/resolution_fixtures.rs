@@ -1,6 +1,9 @@
 use peartube_native::resolution::{VideoSize, resolution_label, video_size};
 use serde::Deserialize;
-use std::{future::Future, task::{Context, Poll, Waker}};
+use std::{
+    future::Future,
+    task::{Context, Poll, Waker},
+};
 
 #[derive(Deserialize)]
 struct Fixtures {
@@ -21,7 +24,10 @@ struct Label {
 }
 fn run<F: Future>(future: F) -> F::Output {
     let mut future = std::pin::pin!(future);
-    match future.as_mut().poll(&mut Context::from_waker(Waker::noop())) {
+    match future
+        .as_mut()
+        .poll(&mut Context::from_waker(Waker::noop()))
+    {
         Poll::Ready(value) => value,
         Poll::Pending => panic!("fixture reader unexpectedly pending"),
     }

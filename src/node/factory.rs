@@ -6,7 +6,7 @@ use serde_json::Value;
 
 use crate::backend::BackendError;
 use crate::node::api::NodeFactory;
-use crate::node::core::{create_node, CoreNode};
+use crate::node::core::{CoreNode, create_node};
 
 /// Opens the native node the backend's `start` drives.
 pub struct Factory;

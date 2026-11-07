@@ -11,10 +11,10 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
-use autobee::types::Key;
 use autobee::Autobee;
+use autobee::types::Key;
 use corestore::Corestore;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use super::api::{DiscoveredSource, Removed, Source, SourceSpec};
 use super::apply::Apply;
@@ -124,7 +124,12 @@ impl SourceRecord {
             HashMap::new()
         };
         let mut items: HashMap<String, Item> = if merge {
-            cache.entries.iter().cloned().map(|item| (item.sub.clone(), item)).collect()
+            cache
+                .entries
+                .iter()
+                .cloned()
+                .map(|item| (item.sub.clone(), item))
+                .collect()
         } else {
             HashMap::new()
         };
@@ -265,10 +270,26 @@ impl Sources {
         if let Some(list) = saved.get("discovered").and_then(Value::as_array) {
             for item in list {
                 discovered.push(DiscoveredSource {
-                    key: item.get("key").and_then(Value::as_str).unwrap_or_default().to_owned(),
-                    kind: item.get("kind").and_then(Value::as_str).unwrap_or("channel").to_owned(),
-                    title: item.get("title").and_then(Value::as_str).unwrap_or_default().to_owned(),
-                    via: item.get("via").and_then(Value::as_str).unwrap_or_default().to_owned(),
+                    key: item
+                        .get("key")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_owned(),
+                    kind: item
+                        .get("kind")
+                        .and_then(Value::as_str)
+                        .unwrap_or("channel")
+                        .to_owned(),
+                    title: item
+                        .get("title")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_owned(),
+                    via: item
+                        .get("via")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_owned(),
                 });
             }
         }
@@ -320,7 +341,9 @@ impl Sources {
         let primary = parse_hex32(&record.key)?;
         let namespace = self.deps.store.namespace(format!("channel:{}", record.key));
         let apply = (self.deps.make_apply)(&record.key);
-        let bee = Autobee::open(&namespace, Some(primary), Arc::new(HandlersWrap(apply))).await.ok()?;
+        let bee = Autobee::open(&namespace, Some(primary), Arc::new(HandlersWrap(apply)))
+            .await
+            .ok()?;
         if self.deps.closing.load(Ordering::Acquire) {
             let _ = bee.close().await;
             return None;
@@ -506,7 +529,9 @@ impl Sources {
         Ok(Source {
             key: key.clone(),
             kind: "channel".to_owned(),
-            alias: record.as_ref().map_or(alias.clone(), |record| record.alias()),
+            alias: record
+                .as_ref()
+                .map_or(alias.clone(), |record| record.alias()),
             primary: false,
             writable: false,
             entries: record
@@ -556,7 +581,11 @@ impl Sources {
     }
 
     /// `discoveredSources()` over the pool.
-    pub async fn discovered(&self, primary: Vec<DiscoveredSource>, active: Vec<String>) -> Vec<DiscoveredSource> {
+    pub async fn discovered(
+        &self,
+        primary: Vec<DiscoveredSource>,
+        active: Vec<String>,
+    ) -> Vec<DiscoveredSource> {
         for key in self.keys() {
             let _ = self.refresh(&key, false).await;
         }
@@ -621,11 +650,7 @@ impl Sources {
             };
             #[cfg(not(unix))]
             let mut options = std::fs::OpenOptions::new();
-            let mut file = options
-                .write(true)
-                .create(true)
-                .truncate(true)
-                .open(&tmp)?;
+            let mut file = options.write(true).create(true).truncate(true).open(&tmp)?;
             file.write_all(text.as_bytes())?;
             drop(file);
             std::fs::rename(&tmp, &self.deps.cache_file)

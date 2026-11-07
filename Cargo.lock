@@ -1031,6 +1031,7 @@ dependencies = [
  "hyperbee-rs",
  "hyperblobs-rs",
  "hypercore-rs",
+ "if-addrs 0.13.4",
  "libudx",
  "mdns-sd",
  "peeroxide",

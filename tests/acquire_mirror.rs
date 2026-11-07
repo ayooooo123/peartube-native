@@ -57,13 +57,16 @@ fn sha256_hex(bytes: &[u8]) -> String {
     out
 }
 
+/// A scripted `SourceResponse` body.
+type BoxReader = Box<dyn AsyncRead + Send + Unpin>;
+
 /// One `SourceResponse` body, delivered chunk by chunk so progress reports match the app's per-chunk reports.
 struct BytesReader {
     chunks: VecDeque<Vec<u8>>,
 }
 
 impl BytesReader {
-    fn new(chunks: Vec<Vec<u8>>) -> Box<dyn AsyncRead + Send + Unpin> {
+    fn boxed(chunks: Vec<Vec<u8>>) -> BoxReader {
         Box::new(Self {
             chunks: chunks.into(),
         })
@@ -195,7 +198,7 @@ impl JobFiles for Files {
 
     fn open_read(&self, path: &str) -> Result<Box<dyn AsyncRead + Send + Unpin>, String> {
         match self.read(path) {
-            Some(bytes) => Ok(BytesReader::new(vec![bytes])),
+            Some(bytes) => Ok(BytesReader::boxed(vec![bytes])),
             None => Err(format!("ENOENT: {path}")),
         }
     }
@@ -348,7 +351,7 @@ impl HttpOpen for Http {
                 status: plan.status,
                 headers: plan.headers,
                 url: request.url,
-                body: BytesReader::new(plan.chunks),
+                body: BytesReader::boxed(plan.chunks),
             })
         })
     }
@@ -471,13 +474,16 @@ struct PutPlan {
     hash: Option<u64>,
 }
 
+type MigrationFn = Arc<dyn Fn(&str, Value) + Send + Sync>;
+type ProgressFn = Arc<dyn Fn(Value) + Send + Sync>;
+
 #[derive(Clone)]
 struct FakeRechunkOptions {
     id: Option<String>,
     foreground: bool,
     limit: Option<u64>,
-    on_migrate: Arc<dyn Fn(&str, Value) + Send + Sync>,
-    on_progress: Arc<dyn Fn(Value) + Send + Sync>,
+    on_migrate: MigrationFn,
+    on_progress: ProgressFn,
 }
 
 struct FakeNode {

@@ -11,19 +11,19 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
+use autobee::Autobee;
 use autobee::apply_view::{Handlers, WakeupCapability};
 use autobee::types::Key;
 use autobee::updates::Changes;
-use autobee::Autobee;
 use bytes::Bytes;
 use corestore::{Corestore, GetOptions as StoreGetOptions};
 use hyperbee::{Bee, RangeOptions};
-use hypercore::crypto::KeyPair;
 use hypercore::core::Session;
+use hypercore::crypto::KeyPair;
 use serde_json::Value;
 
 use super::apply::Apply;
-use super::blobs::{ChannelView, SendFuture};
+use super::blobs::{ChannelView, SendFuture, ViewEntries};
 use crate::protocol::{clean_text, decode_op, hex_encode, is_hex64, is_system_view_key};
 
 /// A read waits at most this long for the view to apply (channel.js `applied`).
@@ -89,13 +89,18 @@ pub trait AppendAuthority: Send + Sync {
     fn sign_claim(&self, channel: &str, writer: &str) -> Option<String>;
 }
 
+/// `ctx.update()`: a change notification.
+pub type UpdateHook = Arc<dyn Fn() + Send + Sync>;
+/// `ctx.net.joinOverlayTopic(...)`: called with the tracker id on a write.
+pub type JoinTopicHook = Arc<dyn Fn(&str) + Send + Sync>;
+
 /// Everything the channel reaches outside itself.
 #[derive(Default)]
 pub struct Hooks {
     /// `ctx.update()` after a change.
-    pub update: Option<Arc<dyn Fn() + Send + Sync>>,
+    pub update: Option<UpdateHook>,
     /// `ctx.net.joinOverlayTopic(...)` on a write.
-    pub join_topic: Option<Arc<dyn Fn(&str) + Send + Sync>>,
+    pub join_topic: Option<JoinTopicHook>,
 }
 
 /// The apply handlers plus the founder key pair, which `Apply` itself does not carry.
@@ -164,6 +169,7 @@ impl Channel {
     ///
     /// `primary` is the channel key resolved before the store opens (the target key, the founder
     /// key pair's public key, or the stored local core's key).
+    #[allow(clippy::too_many_arguments)] // the reference's tracker fields, in order
     pub async fn open(
         tracker: Corestore,
         target: Option<[u8; 32]>,
@@ -352,7 +358,10 @@ impl Channel {
         });
         let mut out = Vec::new();
         while let Some(entry) = stream.next().await? {
-            out.push((String::from_utf8_lossy(&entry.key).into_owned(), entry.value));
+            out.push((
+                String::from_utf8_lossy(&entry.key).into_owned(),
+                entry.value,
+            ));
         }
         Ok(out)
     }
@@ -364,7 +373,9 @@ impl Channel {
             .await
             .and_then(|value| match value {
                 Value::Number(number) => number.as_u64(),
-                other => Some(crate::app_settings::js_number(&crate::app_settings::js_string(&other)) as u64),
+                other => Some(
+                    crate::app_settings::js_number(&crate::app_settings::js_string(&other)) as u64,
+                ),
             })
             .unwrap_or(1)
     }
@@ -384,16 +395,14 @@ impl Channel {
         {
             return Some(role.to_owned());
         }
-        let authority = lock(&self.authority).clone();
-        let Some(authority) = authority else {
-            return None;
-        };
+        let authority = lock(&self.authority).clone()?;
         if authority.vault_channel_key().as_deref() == Some(self.primary_key.as_str()) {
             return Some("owner".to_owned());
         }
         let owner = self.view_get_timeout(b"meta/owner").await?;
         let owner_key = crate::app_settings::js_string(&owner);
-        (authority.owner_public_key().as_deref() == Some(owner_key.as_str())).then(|| "owner".to_owned())
+        (authority.owner_public_key().as_deref() == Some(owner_key.as_str()))
+            .then(|| "owner".to_owned())
     }
 
     /// `listWriters()`.
@@ -447,11 +456,9 @@ impl Channel {
         let writable = self.writable();
         let can_claim = match &authority {
             Some(authority) => {
-                let mut claim = authority.vault_channel_key().as_deref()
-                    == Some(self.primary_key.as_str());
-                if !claim
-                    && let Some(owner) = self.view_get_timeout(b"meta/owner").await
-                {
+                let mut claim =
+                    authority.vault_channel_key().as_deref() == Some(self.primary_key.as_str());
+                if !claim && let Some(owner) = self.view_get_timeout(b"meta/owner").await {
                     claim = authority.owner_public_key().as_deref()
                         == Some(crate::app_settings::js_string(&owner).as_str());
                 }
@@ -459,26 +466,26 @@ impl Channel {
             }
             None => false,
         };
-        let payload = if !writable
-            && can_claim
-            && op.get("type").and_then(Value::as_str) != Some("claim")
-        {
-            match authority.as_ref().and_then(|authority| {
-                authority.sign_claim(&self.primary_key, &writer_hex)
-            }) {
-                Some(claim) => {
-                    let mut map = op;
-                    if let Value::Object(object) = &mut map {
-                        object.insert("claim".to_owned(), Value::String(claim));
+        let payload =
+            if !writable && can_claim && op.get("type").and_then(Value::as_str) != Some("claim") {
+                match authority
+                    .as_ref()
+                    .and_then(|authority| authority.sign_claim(&self.primary_key, &writer_hex))
+                {
+                    Some(claim) => {
+                        let mut map = op;
+                        if let Value::Object(object) = &mut map {
+                            object.insert("claim".to_owned(), Value::String(claim));
+                        }
+                        map
                     }
-                    map
+                    None => op,
                 }
-                None => op,
-            }
-        } else {
-            op
-        };
-        let text = serde_json::to_string(&payload).map_err(|error| ChannelError(error.to_string()))?;
+            } else {
+                op
+            };
+        let text =
+            serde_json::to_string(&payload).map_err(|error| ChannelError(error.to_string()))?;
         let before = self.auto.local.length();
         self.auto
             .append(vec![Bytes::from(text.into_bytes())], !writable)
@@ -493,7 +500,9 @@ impl Channel {
                 break;
             }
             if self.closing.load(Ordering::Acquire) {
-                return Err(ChannelError("Node closed before the write was durable".into()));
+                return Err(ChannelError(
+                    "Node closed before the write was durable".into(),
+                ));
             }
             tokio::time::sleep(WRITE_POLL).await;
             let _ = self.auto.update().await;
@@ -503,7 +512,11 @@ impl Channel {
     }
 
     /// `publishSource({ sourceKey, title })`.
-    pub async fn publish_source(&self, source_key: &str, title: &str) -> Result<Value, ChannelError> {
+    pub async fn publish_source(
+        &self,
+        source_key: &str,
+        title: &str,
+    ) -> Result<Value, ChannelError> {
         let source_key = source_key.to_lowercase();
         let op = serde_json::json!({
             "type": "source",
@@ -678,7 +691,10 @@ impl Channel {
 
     /// The channel's seedable core record, for HiveRelays.
     pub fn bootstrap_len(&self) -> (u64, u64) {
-        (self.auto.bootstrap.length(), self.auto.bootstrap.byte_length())
+        (
+            self.auto.bootstrap.length(),
+            self.auto.bootstrap.byte_length(),
+        )
     }
 
     pub fn writer_core_len(&self, hex: &str) -> Option<(u64, u64)> {
@@ -730,7 +746,7 @@ impl ChannelView for Arc<Channel> {
         })
     }
 
-    fn entries(&self) -> SendFuture<'_, Result<Vec<(Vec<u8>, Vec<u8>)>, Self::Error>> {
+    fn entries(&self) -> SendFuture<'_, Result<ViewEntries, Self::Error>> {
         Box::pin(async move {
             let mut stream = self.view().range(RangeOptions::default());
             let mut out = Vec::new();
@@ -786,7 +802,7 @@ impl ChannelView for Channel {
         })
     }
 
-    fn entries(&self) -> SendFuture<'_, Result<Vec<(Vec<u8>, Vec<u8>)>, Self::Error>> {
+    fn entries(&self) -> SendFuture<'_, Result<ViewEntries, Self::Error>> {
         Box::pin(async move {
             let mut stream = self.view().range(RangeOptions::default());
             let mut out = Vec::new();

@@ -41,6 +41,20 @@ function sha256 (bytes) {
   return createHash('sha256').update(bytes).digest('hex')
 }
 
+// The start, middle and end of the published file, as the bytes and the hash a reader must get.
+function rangeCases (bytes) {
+  const size = bytes.length
+  const span = Math.min(500_001, size)
+  const mid = Math.floor((size - span) / 2)
+  const end = Math.max(size - span, 0)
+  return [[0, span - 1], [mid, mid + span - 1], [end, size - 1]].map(([start, last]) => ({
+    start,
+    end: last,
+    length: last - start + 1,
+    sha256: sha256(bytes.subarray(start, last + 1))
+  }))
+}
+
 async function until (fn, ms = 120000) {
   const end = Date.now() + ms
   for (;;) {
@@ -81,6 +95,7 @@ if (mode === 'testnet') {
     entry: published,
     sha256: sha256(bytes),
     size,
+    ranges: rangeCases(bytes),
     streamUrl: published.streamUrl,
     entries: await node.search(null, {})
   })

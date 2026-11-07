@@ -50,7 +50,10 @@ Deviations from the JavaScript, all deliberate:
 | `browser.on('up')` may fire repeatedly per service | same (resolved events repeat on re-announcement); `down` carries the last resolved service | `ServiceRemoved` only carries the name; the app's `down` also carries the cached service |
 | name probing is not done at all | `set_requires_probe(false)` | probing would rename the instance and lose the generation/shard suffix; the nonce already prevents collisions |
 
-## Isolated LAN DHT half (not ported yet)
+## Isolated LAN DHT half (ported)
+
+Ported in `src/lan/discovery.rs`, with the `LanFactory` `worker.js` uses in `src/lan/mod.rs`. The
+`lan.js` behaviour below is the reference; where the Rust port deviates it says so.
 
 `LanDiscovery` in `lan.js` never touches the public network. In constructor order:
 
@@ -101,9 +104,17 @@ new HyperDHT({ host, port: port ? [port, port + 1] : [0, 0], bootstrap: [],
 | `connect(pk, { keyPair, nodes, relayAddresses })` | `connect_with_nodes(&key_pair, pk, &[Ipv4Peer] /* relay_addresses */, &UdxRuntime)`; `ConnectOpts` for the LAN shortcut | JS `nodes` (peers to query directly) has no counterpart; `relay_addresses` is the working equivalent here |
 | `destroy({ force: true })` | `destroy()` | — |
 
-So the LAN half is buildable on `peeroxide-dht` today except for the server accept loop: `lan.js`
-needs "listen as this key pair and give me every accepted encrypted stream", while `peeroxide`
-wraps that inside `swarm`. The port should either expose a minimal accept helper in `peeroxide-dht`
-or reuse `peeroxide::spawn` with an empty bootstrap and the LAN addresses injected as peers — both
-keep `announce` out of the picture, which is required: announcing a topic to an isolated DHT with an
-empty routing table would be a no-op, and the mDNS record is the only rendezvous.
+The Rust port reuses `peeroxide::spawn` with an empty bootstrap and the node's own keypair
+(`Network::key_pair()`), exactly as `lan.js` shares the swarm's key pair: the DHT server is registered
+by joining one server-only topic that can never be announced (the routing table is empty), inbound
+streams arrive on the swarm's connection channel, and outbound dials go through
+`swarm.dht().connect_with_nodes(..., &[Ipv4Peer { host, port }], ..)` with `establish`d secret
+streams wrapped in a `protomux::Mux` and handed to `LanBinding::on_connection`.
+
+Deviations from `lan.js`:
+
+- no `port`/`port + 1` socket pairing: peeroxide binds one ephemeral socket pair per DHT; the LAN
+  case never asks for a fixed port, so no caller needs the pairing.
+- no `tuneUdxSocket` buffer tuning: libudx's socket buffers stay at the platform defaults.
+- a handshake-accepted connection carries no topic list; the accept gate reads the tokens the mDNS
+  bookkeeping recorded, which is what `_onIncoming` consults as well.

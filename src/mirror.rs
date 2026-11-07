@@ -588,13 +588,16 @@ fn collapse_spaces(text: &str) -> String {
     out
 }
 
+/// A per-entry migration callback (`onMigrate(oldTag, target)`).
+pub type MigrationCallback = Box<dyn Fn(&str, Value) + Send + Sync>;
+
 /// How the backend turns `rechunkLegacyBlobs`' options (with their callbacks) into its own type.
 pub struct RechunkOptions {
     pub id: Option<String>,
     pub foreground: bool,
     /// `None` is the app's `Infinity`.
     pub limit: Option<u64>,
-    pub on_migrate: Box<dyn Fn(&str, Value) + Send + Sync>,
+    pub on_migrate: MigrationCallback,
     pub on_progress: Box<dyn Fn(Value) + Send + Sync>,
 }
 
@@ -1251,11 +1254,14 @@ where
     }
 }
 
+/// One registered mirror plugin, with the name it was registered under.
+pub type Plugin<N> = Arc<dyn MirrorPlugin<N>>;
+
 /// `createMirrorHost`'s returned handle.
 pub struct MirrorHost<N: Node> {
     pub node: Arc<N>,
     storage: String,
-    plugins: Mutex<Vec<(String, Arc<dyn MirrorPlugin<N>>)>>,
+    plugins: Mutex<Vec<(String, Plugin<N>)>>,
     stats: Arc<Mutex<std::collections::HashMap<String, Stats>>>,
     acquirer: Option<Acquirer<N>>,
     watch_state: Arc<WatchState>,
@@ -1392,7 +1398,7 @@ where
             files.mkdirs(&dir);
             let _ = host.run("watch-dir", Value::Null).await;
         }
-        if host.feeds.lock().expect("feeds").len() > 0 && !host.is_closed() {
+        if !host.feeds.lock().expect("feeds").is_empty() && !host.is_closed() {
             host.spawn_run("feed-mirror", Value::Null);
         }
         host.start_poll_timer(opts.poll_interval_ms);

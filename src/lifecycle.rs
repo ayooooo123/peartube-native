@@ -491,6 +491,12 @@ where
         }
     }
 
+    /// Releases the node, the loopback API and the cast controller before the backend thread exits.
+    pub(crate) async fn shutdown(&mut self) {
+        self.timers.clear();
+        self.close_worker().await;
+    }
+
     /// The old swarm's listener goes first: closing it fires an update per connection.
     async fn close_worker(&mut self) {
         let update_timer = self.update_timer.take();

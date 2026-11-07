@@ -218,7 +218,6 @@ pub struct Network {
     overlay_topics: Mutex<HashMap<String, [u8; 32]>>,
     allowed: Mutex<Option<HashSet<String>>>,
     lan: Mutex<Option<LanState>>,
-    private: Bucket,
     public: Bucket,
     lan_bucket: Bucket,
     prev_rx: AtomicU64,
@@ -232,6 +231,7 @@ pub struct Network {
 
 impl Network {
     /// Opens the swarm and starts accepting connections.
+    #[allow(clippy::too_many_arguments)] // the reference's `createNetwork(ctx)` fields, in order
     pub async fn open(
         store: Corestore,
         bootstrap: Vec<String>,
@@ -262,9 +262,8 @@ impl Network {
         let (_task, swarm, mut incoming) = peeroxide::spawn(config)
             .await
             .map_err(|error| std::io::Error::other(error.to_string()))?;
-        let runtime = Arc::new(
-            UdxRuntime::new().map_err(|error| std::io::Error::other(error.to_string()))?,
-        );
+        let runtime =
+            Arc::new(UdxRuntime::new().map_err(|error| std::io::Error::other(error.to_string()))?);
         let allowed = allowed_peers
             .filter(|peers| !peers.is_empty())
             .map(|peers| {
@@ -289,7 +288,6 @@ impl Network {
             overlay_topics: Mutex::new(HashMap::new()),
             allowed: Mutex::new(allowed),
             lan: Mutex::new(None),
-            private: Bucket::default(),
             public: Bucket::default(),
             lan_bucket: Bucket::default(),
             prev_rx: AtomicU64::new(0),
@@ -338,7 +336,7 @@ impl Network {
     }
 
     fn accept(&self, connection: peeroxide::SwarmConnection) {
-        if self.blocked(&connection.remote_public_key()) {
+        if self.blocked(connection.remote_public_key()) {
             return;
         }
         let peer = *connection.remote_public_key();
@@ -410,8 +408,23 @@ impl Network {
         self.swarm.key_pair().public_key
     }
 
+    /// `swarm.keyPair`: the identity a LAN binding runs its own DHT with.
+    pub fn key_pair(&self) -> &peeroxide::KeyPair {
+        self.swarm.key_pair()
+    }
+
     pub fn private_routing(&self) -> bool {
         self.private_routing
+    }
+
+    /// Whether topics may be announced on the public swarm or the LAN.
+    ///
+    /// A private-routed node's discovery belongs to the private overlay (`private_overlay::swarm`),
+    /// which this build does not ship. Joining the public DHT or the LAN instead would publish the
+    /// channel's discovery key, so it announces nothing: `status()` then shows no private route
+    /// bytes, because there is no private route to carry them.
+    fn can_announce(&self) -> bool {
+        !self.private_routing
     }
 
     /// `setAllowedPeers`: a key not in the set is dropped on arrival.
@@ -445,6 +458,9 @@ impl Network {
 
     /// `joinOverlayTopic`: one discovery per followed channel.
     pub fn join_overlay_topic(&self, id: &str, key: [u8; 32]) {
+        if !self.can_announce() {
+            return;
+        }
         let mut topics = lock(&self.overlay_topics);
         if topics.contains_key(id) {
             return;
@@ -482,6 +498,9 @@ impl Network {
 
     /// `joinContentSwarm`: the stock Hypercore discoveryKey of a video core.
     pub fn join_content(&self, key: [u8; 32]) {
+        if !self.can_announce() {
+            return;
+        }
         let mut topics = lock(&self.content_topics);
         if topics.contains_key(&key) {
             return;
@@ -541,7 +560,7 @@ impl Network {
         let Some(binding) = binding else {
             return Ok(());
         };
-        if self.closing.load(Ordering::Acquire) {
+        if !self.can_announce() || self.closing.load(Ordering::Acquire) {
             binding.destroy().await;
             return Ok(());
         }
@@ -576,7 +595,9 @@ impl Network {
     }
 
     pub fn lan_endpoint(&self) -> Option<LanEndpoint> {
-        let lan = lock(&self.lan).as_ref().map(|state| state.binding.clone())?;
+        let lan = lock(&self.lan)
+            .as_ref()
+            .map(|state| state.binding.clone())?;
         Some(LanEndpoint {
             host: lan.host()?,
             port: lan.port()?,
@@ -595,15 +616,21 @@ impl Network {
     }
 
     /// `joinPeer`: dial a peer by key and wire the resulting stream into replication.
-    pub fn join_peer(&self, key_hex: &str, lan_first: bool) {
+    ///
+    /// Returns whether a dial was started. A private-routed node dials nothing: the public DHT is
+    /// not its route, and the private overlay that would carry the dial is not in this build.
+    pub fn join_peer(&self, key_hex: &str, lan_first: bool) -> bool {
+        if !self.can_announce() {
+            return false;
+        }
         let Some(key) = parse_hex32(key_hex) else {
-            return;
+            return false;
         };
         if key == self.peer_key() {
-            return;
+            return false;
         }
         if lan_first && self.has_lan() {
-            return;
+            return false;
         }
         let weak = self.weak.clone();
         let key_pair = self.swarm.key_pair().clone();
@@ -628,6 +655,7 @@ impl Network {
             let mux = Mux::from_secret_stream(connection.stream);
             network.wire(mux, key, false, Box::new(|| {}), vec![Box::new(socket)]);
         });
+        true
     }
 
     pub fn inflight_range(&self) -> Option<(u32, u32)> {
@@ -651,6 +679,8 @@ impl Network {
     ///
     /// The peeroxide connection exposes no per-connection byte counters, so the DHT's wire
     /// counters are attributed to the route that carries traffic; the LAN route counts its peers.
+    /// The DHT here is the public swarm: a private-routed node has no overlay connection to carry
+    /// its bytes, so nothing is ever labelled private.
     pub fn sample(&self) -> Sample {
         let now = now_ms();
         let prev_at = self.prev_at.load(Ordering::Relaxed);
@@ -658,15 +688,9 @@ impl Network {
         let (rx, tx) = self.dht.wire_stats();
         let peers = self.connection_count();
         let mut public = self.public;
-        let mut private = self.private;
         let lan = self.lan_bucket;
-        if self.private_routing {
-            private.closed_rx = rx;
-            private.closed_tx = tx;
-        } else {
-            public.closed_rx = rx;
-            public.closed_tx = tx;
-        }
+        public.closed_rx = rx;
+        public.closed_tx = tx;
         let prev_rx = self.prev_rx.load(Ordering::Relaxed);
         let prev_tx = self.prev_tx.load(Ordering::Relaxed);
         if dt >= 500 {
@@ -676,24 +700,15 @@ impl Network {
             *lock(&self.up_bps) = ((tx.saturating_sub(prev_tx)) as f64 * 1000.0 / dt as f64)
                 .round()
                 .max(0.0);
-            public.down_bps = if self.private_routing { 0.0 } else { self.down_bps() };
-            public.up_bps = if self.private_routing { 0.0 } else { self.up_bps() };
-            private.down_bps = if self.private_routing { self.down_bps() } else { 0.0 };
-            private.up_bps = if self.private_routing { self.up_bps() } else { 0.0 };
+            public.down_bps = self.down_bps();
+            public.up_bps = self.up_bps();
             self.prev_rx.store(rx, Ordering::Relaxed);
             self.prev_tx.store(tx, Ordering::Relaxed);
             self.prev_at.store(now, Ordering::Relaxed);
         }
-        let public_route = public.route(
-            if self.private_routing { 0 } else { peers },
-            public.closed_rx,
-            public.closed_tx,
-        );
-        let private_route = private.route(
-            if self.private_routing { peers } else { 0 },
-            private.closed_rx,
-            private.closed_tx,
-        );
+        let public_route = public.route(peers, public.closed_rx, public.closed_tx);
+        // No private overlay: the private route carries nothing.
+        let private_route = Bucket::default().route(0, 0, 0);
         let lan_route = lan.route(self.lan_connection_count(), lan.closed_rx, lan.closed_tx);
         Sample {
             routes: Routes {

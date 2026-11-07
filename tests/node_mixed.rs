@@ -9,7 +9,7 @@ use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use peartube_native::node::Node;
 
@@ -23,7 +23,9 @@ fn app_dir() -> String {
 }
 
 fn has_app() -> bool {
-    std::path::Path::new(&app_dir()).join("src/index.js").exists()
+    std::path::Path::new(&app_dir())
+        .join("src/index.js")
+        .exists()
 }
 
 /// One harness process: its JSON result line and its stdin (closing it stops the child).
@@ -150,7 +152,10 @@ fn rust_node_opens_and_restarts() {
         .await
     });
     let resumed = runtime.block_on(restarted.status());
-    assert_eq!(resumed.channel, status.channel, "same channel after restart");
+    assert_eq!(
+        resumed.channel, status.channel,
+        "same channel after restart"
+    );
     runtime.block_on(restarted.close()).expect("close");
     let _ = std::fs::remove_dir_all(&storage);
     let _ = &mut testnet;
@@ -250,7 +255,11 @@ fn rust_node_lists_js_published_videos() {
     .expect("rust listing");
     let rust_listing = rust_listing.expect("listing");
     let js_listing = js_listing.as_array().cloned().unwrap_or_default();
-    assert_eq!(rust_listing.len(), js_listing.len(), "same number of entries");
+    assert_eq!(
+        rust_listing.len(),
+        js_listing.len(),
+        "same number of entries"
+    );
     for (rust, js) in rust_listing.iter().zip(js_listing.iter()) {
         assert_eq!(rust.id, js["id"].as_str().unwrap_or_default());
         assert_eq!(rust.title, js["title"].as_str().unwrap_or_default());
@@ -260,13 +269,18 @@ fn rust_node_lists_js_published_videos() {
         assert_eq!(rust.episode, js["episode"].as_u64());
     }
 
-    // Milestone 3: a range read of the JS blob URL is byte-identical.
+    // Milestone 3: the JS file's own start, middle and end are byte-identical through the URL.
     let blob_hex = runtime.block_on(async {
         node.find_entry(&hit.key)
             .await
             .ok()
             .flatten()
-            .and_then(|value| value.get("blobs").and_then(|blob| blob.as_str()).map(str::to_owned))
+            .and_then(|value| {
+                value
+                    .get("blobs")
+                    .and_then(|blob| blob.as_str())
+                    .map(str::to_owned)
+            })
             .expect("the announce names its blob")
     });
     if let Err(error) = runtime.block_on(node.blob_core(&blob_hex)) {
@@ -274,32 +288,50 @@ fn rust_node_lists_js_published_videos() {
     }
     let stream_url = hit.stream_url.clone();
     assert!(!stream_url.is_empty(), "a stream URL");
-    let bytes = runtime.block_on(async {
-        let request = hyper::Request::builder()
-            .uri(&stream_url)
-            .header("range", "bytes=100000-600000")
-            .body(http_body_util::Empty::<bytes::Bytes>::new())
-            .expect("request");
-        let client = hyper_util::client::legacy::Client::builder(
-            hyper_util::rt::TokioExecutor::new(),
-        )
-        .build_http();
-        let response = client.request(request).await.expect("range request");
-        assert_eq!(response.status(), 206, "range status");
-        let body = http_body_util::BodyExt::collect(response.into_body())
-            .await
-            .expect("body")
-            .to_bytes();
-        body.to_vec()
-    });
-    assert_eq!(bytes.len(), 500_001);
-    let mut full = spawn_js(
-        "fetch",
-        &[format!("{stream_url}"), String::new()],
-    );
+    let ranges = published["ranges"].as_array().cloned().unwrap_or_default();
+    assert_eq!(ranges.len(), 3, "start, middle and end");
+    for case in &ranges {
+        let start = case["start"].as_u64().expect("range start");
+        let end = case["end"].as_u64().expect("range end");
+        let bytes = runtime.block_on(async {
+            let request = hyper::Request::builder()
+                .uri(&stream_url)
+                .header("range", format!("bytes={start}-{end}"))
+                .body(http_body_util::Empty::<bytes::Bytes>::new())
+                .expect("request");
+            let client =
+                hyper_util::client::legacy::Client::builder(hyper_util::rt::TokioExecutor::new())
+                    .build_http();
+            let response = client.request(request).await.expect("range request");
+            assert_eq!(response.status(), 206, "range status for {start}-{end}");
+            let body = http_body_util::BodyExt::collect(response.into_body())
+                .await
+                .expect("body")
+                .to_bytes();
+            body.to_vec()
+        });
+        assert_eq!(
+            bytes.len() as u64,
+            case["length"].as_u64().expect("range length"),
+            "range {start}-{end} length"
+        );
+        assert_eq!(
+            sha256_hex(&bytes),
+            case["sha256"].as_str().expect("range sha256"),
+            "range {start}-{end} bytes"
+        );
+    }
+    // The whole file through the same URL hashes to what the JS node published.
+    let mut full = spawn_js("fetch", &[stream_url.clone(), String::new()]);
     let full_line = full.result();
-    assert_eq!(full_line["size"].as_u64().unwrap(), published["size"].as_u64().unwrap());
-    let _ = sha256_hex(&bytes);
+    assert_eq!(
+        full_line["size"].as_u64().unwrap(),
+        published["size"].as_u64().unwrap()
+    );
+    assert_eq!(
+        full_line["sha256"].as_str().unwrap(),
+        published["sha256"].as_str().unwrap()
+    );
 
     let _ = std::fs::remove_dir_all(&storage);
     runtime.block_on(node.close()).expect("close");
@@ -352,14 +384,25 @@ fn js_follows_rust_published_video_and_node_resumes() {
 
     let mut verifier = spawn_js(
         "verify",
-        &[bootstrap.to_string(), channel.clone(), "imdb:tt0000002".into()],
+        &[
+            bootstrap.to_string(),
+            channel.clone(),
+            "imdb:tt0000002".into(),
+        ],
     );
     let verified = verifier.result();
-    assert_eq!(verified["sha256"].as_str().unwrap(), expected, "JS reads the Rust blob");
+    assert_eq!(
+        verified["sha256"].as_str().unwrap(),
+        expected,
+        "JS reads the Rust blob"
+    );
     assert_eq!(verified["size"].as_u64().unwrap(), bytes.len() as u64);
     assert_eq!(verified["status"].as_u64().unwrap(), 200);
     let js_entry = verified["entry"].clone();
-    assert_eq!(js_entry["title"].as_str().unwrap(), "Rust Published Fixture");
+    assert_eq!(
+        js_entry["title"].as_str().unwrap(),
+        "Rust Published Fixture"
+    );
     assert_eq!(js_entry["source"].as_str().unwrap(), channel);
 
     // The listing this node serves for its own channel matches what the JS node sees.

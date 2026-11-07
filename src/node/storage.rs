@@ -6,8 +6,8 @@
 //! engine's own defaults.
 
 use std::collections::HashSet;
-use std::sync::Mutex;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use corestore::Corestore;
 

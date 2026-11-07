@@ -841,6 +841,9 @@ async fn open_source(
     }
 }
 
+/// One in-flight source open, awaited by the reader that needs its head.
+type PendingResponse = Pin<Box<dyn Future<Output = Result<SourceResponse, AcquireError>> + Send>>;
+
 /// A stalled or dropped mid-film stream, re-stitched with `Range: bytes=offset-`.
 ///
 /// Range resumes may force upstream (e.g. a Usenet skipReader) to chew through several MiB before emitting byte 1,
@@ -855,7 +858,7 @@ pub struct Resumable {
     conn_start: u64,
     reconnects: u32,
     current: Option<Box<dyn AsyncRead + Send + Unpin>>,
-    pending: Option<Pin<Box<dyn Future<Output = Result<SourceResponse, AcquireError>> + Send>>>,
+    pending: Option<PendingResponse>,
     delay: Option<Pin<Box<Sleep>>>,
     deadline: Option<Pin<Box<Sleep>>>,
     last_error: Option<String>,
@@ -914,7 +917,7 @@ impl Resumable {
     }
 
     fn seek_timeout(&self) -> Duration {
-        self.stall * (self.reconnects + 2).min(6) as u32
+        self.stall * (self.reconnects + 2).min(6)
     }
 
     fn cancelled(&self) -> bool {
@@ -1877,12 +1880,11 @@ where
             })
             .unwrap_or_else(|| loaded.clone());
         // A job that will never run again must not leave a half-written core on the array.
-        if job.status == JobStatus::Cancelled
-            || (job.status == JobStatus::Failed && job.source.is_none())
+        if (job.status == JobStatus::Cancelled
+            || (job.status == JobStatus::Failed && job.source.is_none()))
+            && let Some(store) = &job.store
         {
-            if let Some(store) = &job.store {
-                let _ = self.node.drop_store(store).await;
-            }
+            let _ = self.node.drop_store(store).await;
         }
         if closed
             || job.status != JobStatus::Failed

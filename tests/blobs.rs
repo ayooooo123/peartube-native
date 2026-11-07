@@ -165,7 +165,7 @@ impl ChannelView for TestChannel {
         let entries = lock(&self.0.ops).clone();
         Box::pin(async move { Ok(entries) })
     }
-    fn append<'a, 'b>(&'a self, op: &'b Value) -> SendFuture<'a, Result<(), Self::Error>> {
+    fn append<'a>(&'a self, op: &Value) -> SendFuture<'a, Result<(), Self::Error>> {
         self.push(op);
         Box::pin(async { Ok(()) })
     }

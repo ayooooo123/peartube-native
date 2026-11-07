@@ -13,18 +13,17 @@ use std::sync::{Arc, Mutex, MutexGuard, OnceLock, Weak};
 use autobee::Autobee;
 use corestore::Corestore;
 use hypercore::core::Session;
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 use tokio::io::AsyncRead;
 use tokio::sync::watch;
 
-use super::api::*;
-use super::api::Identity as ApiIdentity;
 use super::Node;
-use super::apply::{Apply, Mirror};
-use hyperblobs::BlobId;
-use super::blobs::{BlobHost, Blobs, BlobsError, Compact, EvictOptions, RechunkOptions};
 use super::PutSource;
+use super::api::Identity as ApiIdentity;
 use super::api::PutMeta as BlobPutMeta;
+use super::api::*;
+use super::apply::{Apply, Mirror};
+use super::blobs::{BlobHost, Blobs, BlobsError, Compact, EvictOptions, RechunkOptions};
 use super::catalog::{Catalog, CatalogBlobs};
 use super::channel::{AppendAuthority, Channel, ChannelError, Hooks};
 use super::network::{LanBinding, Network, NetworkSwarm};
@@ -33,6 +32,7 @@ use super::storage::Storage;
 use crate::app_settings::{js_string, js_truthy};
 use crate::identity::{Channel as IdentityChannel, Identity as IdentityStore, IdentityContext};
 use crate::protocol::{hex_encode, is_hex64};
+use hyperblobs::BlobId;
 
 fn lock<T>(cell: &Mutex<T>) -> MutexGuard<'_, T> {
     cell.lock().unwrap_or_else(|error| error.into_inner())
@@ -200,7 +200,8 @@ impl ChannelHandle {
     }
 
     fn require(&self) -> Arc<Channel> {
-        self.get().unwrap_or_else(|| panic!("channel used before it opened"))
+        self.get()
+            .unwrap_or_else(|| panic!("channel used before it opened"))
     }
 }
 
@@ -257,7 +258,9 @@ impl AppendAuthority for Authority {
     fn sign_claim(&self, channel: &str, writer: &str) -> Option<String> {
         let shared = self.0.upgrade()?;
         let vault = lock(&shared.vault);
-        vault.as_ref().map(|vault| vault.sign_claim(channel, writer))
+        vault
+            .as_ref()
+            .map(|vault| vault.sign_claim(channel, writer))
     }
 }
 
@@ -290,7 +293,9 @@ impl BlobHost for Host {
     fn epoch_key(&self, channel_hex: &str, epoch: u64) -> Option<[u8; 32]> {
         let shared = self.0.upgrade()?;
         let vault = lock(&shared.vault);
-        vault.as_ref().map(|vault| vault.epoch_key(channel_hex, epoch))
+        vault
+            .as_ref()
+            .map(|vault| vault.epoch_key(channel_hex, epoch))
     }
 
     fn access_key(&self, channel_hex: &str, epoch: u64) -> Option<[u8; 32]> {
@@ -337,9 +342,9 @@ impl BlobHost for Host {
     }
 
     fn db_disk_bytes(&self) -> u64 {
-        self.0
-            .upgrade()
-            .map_or(0, |shared| dir_bytes(&shared.storage.path().join("corestore")))
+        self.0.upgrade().map_or(0, |shared| {
+            dir_bytes(&shared.storage.path().join("corestore"))
+        })
     }
 
     fn free_bytes(&self) -> Option<u64> {
@@ -392,6 +397,7 @@ pub struct Shared {
     pub close_started: Mutex<bool>,
     pub swarm_cell: OnceLock<NetworkSwarm>,
     pub dht: OnceLock<peeroxide_dht::hyperdht::HyperDhtHandle>,
+    pub blob_server: OnceLock<std::net::SocketAddr>,
 }
 
 impl Shared {
@@ -416,14 +422,11 @@ pub struct CoreNode {
 
 impl CoreNode {
     fn channel(&self) -> Arc<Channel> {
-        self.inner
-            .channel
-            .get()
-            .cloned()
-            .expect("channel open")
+        self.inner.channel.get().cloned().expect("channel open")
     }
 
-    fn net(&self) -> Arc<Network> {
+    /// The swarm, the connection set and the traffic sample.
+    pub fn net(&self) -> Arc<Network> {
         self.inner.net.get().cloned().expect("network open")
     }
 
@@ -513,8 +516,14 @@ impl CoreNode {
         let net = self.net();
         let blobs = self.blobs();
         let worklet = self.worklet();
-        let any_bytes = blobs.owned_blobs().values().any(|meta| meta.byte_length > 0)
-            || blobs.slot_keys().iter().any(|key| blobs.owned(key).is_some_and(|meta| meta.byte_length > 0));
+        let any_bytes = blobs
+            .owned_blobs()
+            .values()
+            .any(|meta| meta.byte_length > 0)
+            || blobs
+                .slot_keys()
+                .iter()
+                .any(|key| blobs.owned(key).is_some_and(|meta| meta.byte_length > 0));
         let tier = if seeded > 0
             && (tx > 0
                 || !blobs.owned_blobs().is_empty()
@@ -719,6 +728,7 @@ pub async fn create_node(options: Value) -> Result<Arc<CoreNode>, NodeError> {
         close_started: Mutex::new(false),
         swarm_cell: OnceLock::new(),
         dht: OnceLock::new(),
+        blob_server: OnceLock::new(),
     });
     let node = Arc::new(CoreNode {
         inner: shared.clone(),
@@ -779,6 +789,7 @@ pub async fn create_node(options: Value) -> Result<Arc<CoreNode>, NodeError> {
     };
 
     let mut founder = None;
+    let mut founder_channel: Option<[u8; 32]> = None;
     let mut target_key: Option<[u8; 32]> = tracker_opt.as_deref().and_then(parse_hex32);
     {
         let mut guard = shared.identity.lock().await;
@@ -805,7 +816,12 @@ pub async fn create_node(options: Value) -> Result<Arc<CoreNode>, NodeError> {
                 if !founded.is_empty() && founded != vault_key {
                     target_key = parse_hex32(&founded);
                 } else {
-                    founder = identity.id_vault().map(|vault| vault.genesis_key_pair.clone());
+                    founder = identity
+                        .id_vault()
+                        .map(|vault| vault.genesis_key_pair.clone());
+                    // A founder's channel is its genesis core, and a v1 manifest hashes the genesis
+                    // key: `channel.key` is the vault's channel key, not the key pair's public key.
+                    founder_channel = parse_hex32(&vault_key);
                 }
             }
         } else if identity.id_vault().is_none() && !join_opt {
@@ -813,10 +829,9 @@ pub async fn create_node(options: Value) -> Result<Arc<CoreNode>, NodeError> {
         }
     }
 
-    let primary = match (target_key, founder.as_ref()) {
-        (Some(key), _) => key,
-        (None, Some(key_pair)) => key_pair.public_key,
-        (None, None) => {
+    let primary = match target_key.or(founder_channel) {
+        Some(key) => key,
+        None => {
             let mut opts = corestore::GetOptions::name("local".as_bytes());
             opts.inactive = true;
             let probe = tracker_store.get(opts).await?;
@@ -919,9 +934,7 @@ pub async fn create_node(options: Value) -> Result<Arc<CoreNode>, NodeError> {
             .as_ref()
             .is_some_and(|identity| identity.founded_key() == primary_hex)
     };
-    if channel.writable()
-        && founded_here
-        && channel.view_get_timeout(b"meta/owner").await.is_none()
+    if channel.writable() && founded_here && channel.view_get_timeout(b"meta/owner").await.is_none()
     {
         let owner = lock(&shared.vault)
             .as_ref()
@@ -938,10 +951,7 @@ pub async fn create_node(options: Value) -> Result<Arc<CoreNode>, NodeError> {
         .get("privateHost")
         .and_then(Value::as_str)
         .map(|text| text.to_owned());
-    let dht_port = options
-        .get("dhtPort")
-        .and_then(Value::as_u64)
-        .unwrap_or(0) as u16;
+    let dht_port = options.get("dhtPort").and_then(Value::as_u64).unwrap_or(0) as u16;
     let relay_through = options
         .get("relayThrough")
         .and_then(Value::as_array)
@@ -949,11 +959,14 @@ pub async fn create_node(options: Value) -> Result<Arc<CoreNode>, NodeError> {
         .and_then(Value::as_str)
         .and_then(parse_hex32);
     let private_routing = options.get("privateRouting").is_some_and(js_truthy);
-    let allowed_peers = options.get("allowedPeers").and_then(Value::as_array).map(|keys| {
-        keys.iter()
-            .map(|key| js_string(key).to_lowercase())
-            .collect::<Vec<_>>()
-    });
+    let allowed_peers = options
+        .get("allowedPeers")
+        .and_then(Value::as_array)
+        .map(|keys| {
+            keys.iter()
+                .map(|key| js_string(key).to_lowercase())
+                .collect::<Vec<_>>()
+        });
     let net = Network::open(
         shared.storage.store().clone(),
         bootstrap,
@@ -997,7 +1010,8 @@ pub async fn create_node(options: Value) -> Result<Arc<CoreNode>, NodeError> {
     let addr: std::net::SocketAddr = format!("{stream_host}:{stream_port}")
         .parse()
         .map_err(|_| NodeError("invalid stream host".into()))?;
-    blobs.start_server(addr, window).await?;
+    let bound = blobs.start_server(addr, window).await?;
+    let _ = shared.blob_server.set(bound);
     let _ = shared.blobs.set(blobs.clone());
 
     let sources = Sources::new(
@@ -1026,9 +1040,7 @@ pub async fn create_node(options: Value) -> Result<Arc<CoreNode>, NodeError> {
             leave_topic: {
                 let weak = weak.clone();
                 Arc::new(move |id: String| {
-                    let Some(net) = weak
-                        .upgrade()
-                        .and_then(|shared| shared.net.get().cloned())
+                    let Some(net) = weak.upgrade().and_then(|shared| shared.net.get().cloned())
                     else {
                         return;
                     };
@@ -1099,7 +1111,11 @@ pub async fn create_node(options: Value) -> Result<Arc<CoreNode>, NodeError> {
     }
     let _ = woken;
 
-    let catalog = Catalog::new(channel.clone(), sources.clone(), Arc::new(BlobOps(weak.clone())));
+    let catalog = Catalog::new(
+        channel.clone(),
+        sources.clone(),
+        Arc::new(BlobOps(weak.clone())),
+    );
     let _ = shared.catalog.set(catalog.clone());
 
     // A primary channel is hydrated once the update that follows the swarm's join has run.
@@ -1115,7 +1131,7 @@ pub async fn create_node(options: Value) -> Result<Arc<CoreNode>, NodeError> {
         });
     }
 
-    let _ = net.set_inflight_range(if shared.storage.is_mobile_worklet() {
+    net.set_inflight_range(if shared.storage.is_mobile_worklet() {
         (6, 8)
     } else if worklet {
         (16, 48)
@@ -1136,7 +1152,7 @@ fn land_core(shared: &Arc<Shared>, key: [u8; 32]) {
         let Ok(session) = store.get(corestore::GetOptions::key(key)).await else {
             return;
         };
-        let _ = session.download(0, None, false);
+        let _ = session.download(0, None, false).await;
         drop(hex);
     });
 }
@@ -1161,16 +1177,22 @@ impl CatalogBlobs for BlobOps {
     }
 
     fn slot_keys(&self) -> Vec<[u8; 32]> {
-        self.blobs().map_or_else(Vec::new, |blobs| blobs.slot_keys())
+        self.blobs()
+            .map_or_else(Vec::new, |blobs| blobs.slot_keys())
     }
 
     fn open_core(&self, blob: &[u8; 32]) -> bool {
-        self.blobs().is_some_and(|blobs| blobs.open_core(blob).is_some())
+        self.blobs()
+            .is_some_and(|blobs| blobs.open_core(blob).is_some())
     }
 
     fn cached_meta(&self, blob: &[u8; 32]) -> Option<(u64, u64, u64)> {
-        self.blobs()
-            .and_then(|blobs| blobs.cached_blobs().get(blob).map(|meta| (meta.length, meta.byte_length, meta.blocks)))
+        self.blobs().and_then(|blobs| {
+            blobs
+                .cached_blobs()
+                .get(blob)
+                .map(|meta| (meta.length, meta.byte_length, meta.blocks))
+        })
     }
 
     fn absent(&self, discovery: &[u8; 32]) -> bool {
@@ -1264,7 +1286,8 @@ impl CatalogBlobs for BlobOps {
     }
 
     fn stream_url(&self, entry: &Announce) -> String {
-        self.blobs().map_or_else(String::new, |blobs| blobs.stream_url(entry))
+        self.blobs()
+            .map_or_else(String::new, |blobs| blobs.stream_url(entry))
     }
 
     fn warm<'a>(&'a self, entry: &'a Announce) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
@@ -1286,7 +1309,7 @@ impl Node for CoreNode {
     type Connection = super::network::ConnectionHandle;
     type ConnectionSubscription = Box<dyn Fn() + Send + Sync>;
     type Lan = Arc<dyn LanBinding>;
-    type BlobServer = ();
+    type BlobServer = std::net::SocketAddr;
     type PutSource = NodeSource;
     type RechunkOptions = RechunkOptions;
 
@@ -1301,19 +1324,20 @@ impl Node for CoreNode {
     fn swarm(&self) -> &Self::Swarm {
         // The swarm handle is created with the network; `NetworkSwarm` is rebuilt per call in the
         // contract but must be borrowed, so the node keeps one alive beside the network.
-        &self.inner.swarm_cell.get_or_init(|| NetworkSwarm {
+        self.inner.swarm_cell.get_or_init(|| NetworkSwarm {
             network: self.net(),
         })
     }
 
     fn dht(&self) -> &Self::Dht {
-        self.inner
-            .dht
-            .get_or_init(|| self.net().dht().clone())
+        self.inner.dht.get_or_init(|| self.net().dht().clone())
     }
 
     fn blob_server(&self) -> &Self::BlobServer {
-        &()
+        self.inner
+            .blob_server
+            .get()
+            .expect("the blob server starts with the node")
     }
 
     fn private_routing(&self) -> bool {
@@ -1414,7 +1438,11 @@ impl Node for CoreNode {
         Ok(())
     }
 
-    async fn search(&self, id: Option<&str>, options: SearchOptions) -> Result<Vec<Entry>, Self::Error> {
+    async fn search(
+        &self,
+        id: Option<&str>,
+        options: SearchOptions,
+    ) -> Result<Vec<Entry>, Self::Error> {
         Ok(self.catalog().search(id, options).await)
     }
 
@@ -1468,10 +1496,7 @@ impl Node for CoreNode {
             .append(json!({ "type": "remove", "key": clean }))
             .await?;
         if let Some(previous) = previous {
-            let _ = self
-                .blobs()
-                .gc_unreferenced_slot_blob(&previous)
-                .await;
+            let _ = self.blobs().gc_unreferenced_slot_blob(&previous).await;
         }
         channel.changed();
         Ok(())
@@ -1485,7 +1510,10 @@ impl Node for CoreNode {
         Ok(self.blobs().sync_local_channel().await?)
     }
 
-    async fn rechunk_legacy_blobs(&self, options: Self::RechunkOptions) -> Result<RechunkResult, Self::Error> {
+    async fn rechunk_legacy_blobs(
+        &self,
+        options: Self::RechunkOptions,
+    ) -> Result<RechunkResult, Self::Error> {
         Ok(self.blobs().rechunk_legacy_blobs(options).await?)
     }
 
@@ -1563,12 +1591,21 @@ impl Node for CoreNode {
         serde_json::from_value(value).map_err(|error| NodeError(error.to_string()))
     }
 
-    async fn grant_writer(&self, writer: &str, role: &str, alias: &str) -> Result<Grant, Self::Error> {
+    async fn grant_writer(
+        &self,
+        writer: &str,
+        role: &str,
+        alias: &str,
+    ) -> Result<Grant, Self::Error> {
         let value = self.channel().grant_writer(writer, role, alias).await?;
         serde_json::from_value(value).map_err(|error| NodeError(error.to_string()))
     }
 
-    async fn revoke_writer(&self, writer: &str, purge_entries: bool) -> Result<Revoke, Self::Error> {
+    async fn revoke_writer(
+        &self,
+        writer: &str,
+        purge_entries: bool,
+    ) -> Result<Revoke, Self::Error> {
         let value = self.channel().revoke_writer(writer, purge_entries).await?;
         serde_json::from_value(value).map_err(|error| NodeError(error.to_string()))
     }
@@ -1613,7 +1650,10 @@ impl Node for CoreNode {
         self.blobs().set_cache_max_bytes(bytes)
     }
 
-    async fn enforce_cache_ceiling(&self, keep_hex: Option<&str>) -> Result<CacheCeiling, Self::Error> {
+    async fn enforce_cache_ceiling(
+        &self,
+        keep_hex: Option<&str>,
+    ) -> Result<CacheCeiling, Self::Error> {
         let keep = keep_hex.and_then(parse_hex32);
         Ok(self.blobs().enforce_cache_ceiling(keep).await)
     }
@@ -1655,4 +1695,3 @@ impl Node for CoreNode {
 fn api_meta(meta: super::api::PutMeta) -> BlobPutMeta {
     meta
 }
-

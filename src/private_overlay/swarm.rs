@@ -94,7 +94,15 @@ impl PrivateRouting {
     }
 }
 
+/// `firewall(remotePublicKey)`: `true` blocks the peer.
+pub type Firewall = Arc<dyn Fn(&[u8; 32]) -> bool + Send + Sync>;
+/// `swarm.on('connection', fn)`.
+pub type ConnectionHook = Arc<dyn Fn(NoiseConnection) + Send + Sync>;
+/// `swarm.on('update', fn)`.
+pub type UpdateHook = Arc<dyn Fn() + Send + Sync>;
+
 /// `createPrivateSwarm` options.
+#[derive(Default)]
 pub struct SwarmOptions {
     pub host: Option<String>,
     pub bootstrap: Vec<String>,
@@ -105,27 +113,11 @@ pub struct SwarmOptions {
     /// The end-to-end Noise identity; random when omitted.
     pub key_pair: Option<KeyPair>,
     /// `true` blocks a peer (`firewall(remotePublicKey)`).
-    pub firewall: Option<Arc<dyn Fn(&[u8; 32]) -> bool + Send + Sync>>,
+    pub firewall: Option<Firewall>,
     /// `swarm.on('connection', ...)`.
-    pub on_connection: Option<Arc<dyn Fn(NoiseConnection) + Send + Sync>>,
+    pub on_connection: Option<ConnectionHook>,
     /// `swarm.on('update', ...)`: emitted after every connection add/remove.
-    pub on_update: Option<Arc<dyn Fn() + Send + Sync>>,
-}
-
-impl Default for SwarmOptions {
-    fn default() -> Self {
-        Self {
-            host: None,
-            bootstrap: Vec::new(),
-            port: 0,
-            allow_loopback: None,
-            resolve_address: None,
-            key_pair: None,
-            firewall: None,
-            on_connection: None,
-            on_update: None,
-        }
-    }
+    pub on_update: Option<UpdateHook>,
 }
 
 /// The handle `joinSource`/`join` returns.
@@ -219,9 +211,9 @@ struct SwarmInner {
     transport_key_pair: KeyPair,
     allow_loopback: bool,
     resolve_address: Option<ResolveAddress>,
-    firewall: Arc<dyn Fn(&[u8; 32]) -> bool + Send + Sync>,
-    on_connection: Option<Arc<dyn Fn(NoiseConnection) + Send + Sync>>,
-    on_update: Option<Arc<dyn Fn() + Send + Sync>>,
+    firewall: Firewall,
+    on_connection: Option<ConnectionHook>,
+    on_update: Option<UpdateHook>,
     guards: Mutex<Vec<Arc<Guard>>>,
     connections: Mutex<HashMap<u64, Arc<Admitted>>>,
     active_by_peer: Mutex<HashMap<[u8; 32], u64>>,
@@ -625,16 +617,14 @@ impl SwarmInner {
             .clone()
             .unwrap_or_default();
         for source in sources {
-            if !need_card_renewal {
-                if let Some((last_epoch, last_guard, last_token, renewal)) = source.stamp() {
-                    if last_guard == primary.public_key
-                        && last_epoch == epoch
-                        && last_token == token
-                        && now < renewal
-                    {
-                        continue;
-                    }
-                }
+            if !need_card_renewal
+                && let Some((last_epoch, last_guard, last_token, renewal)) = source.stamp()
+                && last_guard == primary.public_key
+                && last_epoch == epoch
+                && last_token == token
+                && now < renewal
+            {
+                continue;
             }
             let topic = rv_topic(&source.source_key, &epoch);
             let sealed_card = seal_box(&cached_card, &rv_seal_key(&source.source_key));
@@ -1562,18 +1552,18 @@ pub async fn attempt_direct_hop_bypass(
     let mut endpoint_bypass_accepted = false;
     let endpoint_key_pair = KeyPair::from_seed(rand_bytes());
     if let Ok(conn) = dht.connect(card.guard_public_key, &endpoint_key_pair).await {
-        if let Ok(mux) = dht.protomux(&conn).await {
-            if let Ok(rpc) = attach_rpc_channel(&mux, Arc::clone(&conn), None) {
-                let _ = rpc.request(op::HELLO, op::HELLO, b"endpoint", 3000).await;
-                if let Ok(raw) = dht::alloc_raw_stream(&dht, &conn, true).await {
-                    let mut ask = Vec::with_capacity(36);
-                    ask.extend_from_slice(&card.route_token);
-                    ask.extend_from_slice(&raw.id().to_be_bytes());
-                    if let Ok(reply) = rpc.request(op::HOP_OPEN, op::HOP_READY, &ask, 3000).await {
-                        endpoint_bypass_accepted = reply.len() == 5 && reply[0] == 1;
-                    }
-                    raw.destroy();
+        if let Ok(mux) = dht.protomux(&conn).await
+            && let Ok(rpc) = attach_rpc_channel(&mux, Arc::clone(&conn), None)
+        {
+            let _ = rpc.request(op::HELLO, op::HELLO, b"endpoint", 3000).await;
+            if let Ok(raw) = dht::alloc_raw_stream(&dht, &conn, true).await {
+                let mut ask = Vec::with_capacity(36);
+                ask.extend_from_slice(&card.route_token);
+                ask.extend_from_slice(&raw.id().to_be_bytes());
+                if let Ok(reply) = rpc.request(op::HOP_OPEN, op::HOP_READY, &ask, 3000).await {
+                    endpoint_bypass_accepted = reply.len() == 5 && reply[0] == 1;
                 }
+                raw.destroy();
             }
         }
         conn.destroy();
@@ -1583,26 +1573,21 @@ pub async fn attempt_direct_hop_bypass(
     let mut spoofed_hop_accepted = false;
     let hop_key_pair = KeyPair::from_seed(rand_bytes());
     if let Ok(conn) = dht.connect(card.guard_public_key, &hop_key_pair).await {
-        if let Ok(mux) = dht.protomux(&conn).await {
-            if let Ok(rpc) = attach_rpc_channel(&mux, Arc::clone(&conn), None) {
-                if rpc
-                    .request(op::HELLO, op::HELLO, b"hop", 3000)
-                    .await
-                    .is_ok()
-                {
-                    if let Ok(raw) = dht::alloc_raw_stream(&dht, &conn, true).await {
-                        let mut ask = Vec::with_capacity(36);
-                        ask.extend_from_slice(&card.route_token);
-                        ask.extend_from_slice(&raw.id().to_be_bytes());
-                        if let Ok(reply) =
-                            rpc.request(op::HOP_OPEN, op::HOP_READY, &ask, 3000).await
-                        {
-                            spoofed_hop_accepted = reply.len() == 5 && reply[0] == 1;
-                        }
-                        raw.destroy();
-                    }
-                }
+        if let Ok(mux) = dht.protomux(&conn).await
+            && let Ok(rpc) = attach_rpc_channel(&mux, Arc::clone(&conn), None)
+            && rpc
+                .request(op::HELLO, op::HELLO, b"hop", 3000)
+                .await
+                .is_ok()
+            && let Ok(raw) = dht::alloc_raw_stream(&dht, &conn, true).await
+        {
+            let mut ask = Vec::with_capacity(36);
+            ask.extend_from_slice(&card.route_token);
+            ask.extend_from_slice(&raw.id().to_be_bytes());
+            if let Ok(reply) = rpc.request(op::HOP_OPEN, op::HOP_READY, &ask, 3000).await {
+                spoofed_hop_accepted = reply.len() == 5 && reply[0] == 1;
             }
+            raw.destroy();
         }
         conn.destroy();
     }

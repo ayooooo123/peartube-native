@@ -16,8 +16,8 @@ use super::api::{Announce, Blob, Entry, OpenUri, SearchOptions};
 use super::channel::Channel;
 use super::sources::{Item, Sources};
 use crate::protocol::{
-    clean_text, decode_op, describe_entry, format_watch_uri, is_system_view_key, parse_uri,
-    BlobPointer, ParsedUri, WatchEntry,
+    BlobPointer, ParsedUri, WatchEntry, clean_text, decode_op, describe_entry, format_watch_uri,
+    is_system_view_key, parse_uri,
 };
 
 fn lock<T>(cell: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -145,11 +145,17 @@ impl Catalog {
         }
         if force {
             self.channel.auto().wakeup.request_lookup();
-            let _ = tokio::time::timeout(std::time::Duration::from_secs(2), self.channel.auto().update()).await;
+            let _ = tokio::time::timeout(
+                std::time::Duration::from_secs(2),
+                self.channel.auto().update(),
+            )
+            .await;
         } else {
             self.channel.applied().await;
         }
-        let (entries, discovered) = self.scan(self.channel.view(), &self.channel.primary_key()).await;
+        let (entries, discovered) = self
+            .scan(self.channel.view(), &self.channel.primary_key())
+            .await;
         let mut by_sub = HashMap::new();
         for item in &entries {
             by_sub.insert(item.sub.clone(), item.entry.clone());
@@ -161,11 +167,7 @@ impl Catalog {
     }
 
     /// `search(id, { source, query, limit, offset })`.
-    pub async fn search(
-        &self,
-        id: Option<&str>,
-        options: SearchOptions,
-    ) -> Vec<Entry> {
+    pub async fn search(&self, id: Option<&str>, options: SearchOptions) -> Vec<Entry> {
         let filter = options.source.clone().flatten();
         if let Some(filter) = &filter {
             let _ = self.sources.focus(filter).await;
@@ -202,7 +204,9 @@ impl Catalog {
             // An id lookup reads the applied view directly: the cache only holds what a full
             // listing walked, and a fresh follower has not walked anything yet.
             let items = if id.is_some() {
-                let (entries, _) = self.scan(self.channel.view(), &self.channel.primary_key()).await;
+                let (entries, _) = self
+                    .scan(self.channel.view(), &self.channel.primary_key())
+                    .await;
                 entries
             } else {
                 lock(&self.primary).entries.clone()
@@ -309,14 +313,14 @@ impl Catalog {
             } else {
                 self.blobs.entry_cached_bytes(&blob, &announce).await
             };
-            if cached > 0
-                && !owned
-                && !self.blobs.owned(&blob)
-            {
+            if cached > 0 && !owned && !self.blobs.owned(&blob) {
                 self.blobs.join_content(&blob, false);
             }
             let local = owned || (self.blobs.slot_contains(&blob) && cached >= announce.size);
-            let info = describe_entry(&item.entry_id(), &clean_text(Some(&announce.title), &announce.id));
+            let info = describe_entry(
+                &item.entry_id(),
+                &clean_text(Some(&announce.title), &announce.id),
+            );
             let entry = Entry {
                 key: item.key.clone(),
                 id: announce.id.clone(),
@@ -339,10 +343,7 @@ impl Catalog {
                 magnet_url: format_watch_uri(&watch_entry(&announce), "", ""),
             };
             let dedupe = format!("{}/{}", entry.id, entry.sha256);
-            match files
-                .iter_mut()
-                .find(|(key, _)| *key == dedupe)
-            {
+            match files.iter_mut().find(|(key, _)| *key == dedupe) {
                 Some((_, existing)) => {
                     if better(&entry, existing) {
                         *existing = entry;
@@ -362,7 +363,8 @@ impl Catalog {
             .to_lowercase();
         if !query.is_empty() {
             list.retain(|entry| {
-                entry.title.to_lowercase().contains(&query) || entry.id.to_lowercase().contains(&query)
+                entry.title.to_lowercase().contains(&query)
+                    || entry.id.to_lowercase().contains(&query)
             });
         }
         let offset = options
@@ -447,12 +449,15 @@ impl Catalog {
             ParsedUri::Source { key, .. } => {
                 let source = self
                     .sources
-                    .add(super::api::SourceSpec::Object(super::api::SourceObject {
-                        uri: Some(uri.to_owned()),
-                        key: Some(key),
-                        kind: Some("channel".into()),
-                        alias: None,
-                    }), true)
+                    .add(
+                        super::api::SourceSpec::Object(super::api::SourceObject {
+                            uri: Some(uri.to_owned()),
+                            key: Some(key),
+                            kind: Some("channel".into()),
+                            alias: None,
+                        }),
+                        true,
+                    )
                     .await?;
                 Ok(OpenUri::Source { source })
             }
@@ -461,18 +466,19 @@ impl Catalog {
                 entry: parsed_entry,
                 ..
             } => {
-                if join_source {
-                    if let Some(key) = &source_key {
-                        let _ = self
-                            .sources
-                            .add(super::api::SourceSpec::Object(super::api::SourceObject {
+                if join_source && let Some(key) = &source_key {
+                    let _ = self
+                        .sources
+                        .add(
+                            super::api::SourceSpec::Object(super::api::SourceObject {
                                 uri: None,
                                 key: Some(key.clone()),
                                 kind: Some("channel".into()),
                                 alias: None,
-                            }), true)
-                            .await;
-                    }
+                            }),
+                            true,
+                        )
+                        .await;
                 }
                 let announce = Announce {
                     kind: "announce".to_owned(),
@@ -492,20 +498,24 @@ impl Catalog {
                     wrapped_key: None,
                     extra: serde_json::Map::new(),
                 };
-                let key = format!(
-                    "watch/{}:{}",
-                    announce.blobs, announce.blob.block_offset
-                );
+                let key = format!("watch/{}:{}", announce.blobs, announce.blob.block_offset);
                 let source = source_key.clone().unwrap_or_else(|| "direct".to_owned());
                 lock(&self.ephemeral).insert(
                     key.clone(),
-                    (serde_json::to_value(&parsed_entry).unwrap_or(Value::Null), source.clone(), "watch".to_owned()),
+                    (
+                        serde_json::to_value(&parsed_entry).unwrap_or(Value::Null),
+                        source.clone(),
+                        "watch".to_owned(),
+                    ),
                 );
                 self.blobs.warm(&announce).await;
                 self.channel.changed();
                 let blob = parse_hex32(&announce.blobs).unwrap_or_default();
                 let cached = self.blobs.entry_cached_bytes(&blob, &announce).await;
-                let info = describe_entry(&announce.id, &clean_text(Some(&announce.title), &announce.id));
+                let info = describe_entry(
+                    &announce.id,
+                    &clean_text(Some(&announce.title), &announce.id),
+                );
                 Ok(OpenUri::Watch {
                     entry: Entry {
                         key,
@@ -622,4 +632,3 @@ impl Raw {
             .to_owned()
     }
 }
-

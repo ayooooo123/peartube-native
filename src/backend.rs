@@ -64,8 +64,8 @@ impl Backend {
             Adapters {
                 factory: Arc::new(crate::node::factory::Factory),
                 clock: Arc::new(SystemClock),
-                lan: Arc::new(Unconfigured),
-                api: None::<Arc<Unconfigured>>,
+                lan: Arc::new(crate::lan::Factory),
+                api: Some(Arc::new(crate::adapters::LoopbackApi::default())),
                 cast: None::<Arc<Unconfigured>>,
             },
             on_line,
@@ -132,7 +132,10 @@ impl Backend {
                                 }
                                 Some(Command::Suspend(linger)) => worker.suspend(linger),
                                 Some(Command::Resume) => worker.resume().await,
-                                Some(Command::Shutdown) => break,
+                                Some(Command::Shutdown) => {
+                                    worker.shutdown().await;
+                                    break;
+                                }
                             },
                             () = clock.wait_until(deadline.unwrap_or(u64::MAX)), if deadline.is_some() => {},
                             Some(()) = change_rx.recv() => worker.changed(),
@@ -504,11 +507,7 @@ impl<N: crate::node::Node> crate::node::api::LanFactory<N> for Unconfigured {
     async fn interfaces(&self) -> Result<Vec<(String, std::net::IpAddr, bool)>, Self::Error> {
         Err(BackendError("LAN adapters are not configured".into()))
     }
-    async fn create(
-        &self,
-        _host: std::net::Ipv4Addr,
-        _node: &N,
-    ) -> Result<N::Lan, Self::Error> {
+    async fn create(&self, _host: std::net::Ipv4Addr, _node: &N) -> Result<N::Lan, Self::Error> {
         Err(BackendError("LAN adapters are not configured".into()))
     }
     async fn host_event(&self, _event: Value) {}

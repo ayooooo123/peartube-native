@@ -124,10 +124,13 @@ impl Mirror {
     }
 }
 
+/// `onWriterChange(writerHex, added)`.
+pub type WriterChange = Arc<dyn Fn(&str, bool) + Send + Sync>;
+
 /// The channel's apply handler and its `isTrusted` / `update` companions.
 pub struct Apply {
     channel: String,
-    writer_change: Option<Arc<dyn Fn(&str, bool) + Send + Sync>>,
+    writer_change: Option<WriterChange>,
     mirror: Option<Mirror>,
 }
 
@@ -142,7 +145,7 @@ impl Apply {
     }
 
     /// `onWriterChange`: tells the node which secondary writer cores to hold.
-    pub fn on_writer_change(mut self, callback: Arc<dyn Fn(&str, bool) + Send + Sync>) -> Self {
+    pub fn on_writer_change(mut self, callback: WriterChange) -> Self {
         self.writer_change = Some(callback);
         self
     }
@@ -191,7 +194,7 @@ struct Context<'a, 'b> {
     channel: &'a str,
     view: &'a Bee,
     host: &'a ApplyCalls<'a, 'b>,
-    writer_change: Option<&'a Arc<dyn Fn(&str, bool) + Send + Sync>>,
+    writer_change: Option<&'a WriterChange>,
     ops: Vec<Op>,
     roles: HashMap<String, String>,
     revoked: HashMap<String, bool>,
@@ -273,19 +276,17 @@ impl<'a, 'b> Context<'a, 'b> {
             };
             let mut claimed_here = false;
             let mut legacy_granted_here = false;
-            if !role_known(&role) {
-                if !self.roles.contains_key(&writer) {
-                    if let Some(record) = self.get(format!("writer/{writer}").as_bytes()).await {
-                        if let Ok(parsed) = serde_json::from_slice::<Value>(&record) {
-                            let role_here = parsed.get("role");
-                            if truthy(role_here) {
-                                role = Some(js_text(role_here));
-                            }
-                        }
+            if !role_known(&role) && !self.roles.contains_key(&writer) {
+                if let Some(record) = self.get(format!("writer/{writer}").as_bytes()).await
+                    && let Ok(parsed) = serde_json::from_slice::<Value>(&record)
+                {
+                    let role_here = parsed.get("role");
+                    if truthy(role_here) {
+                        role = Some(js_text(role_here));
                     }
-                    if let Some(role_here) = role.clone() {
-                        self.roles.insert(writer.clone(), role_here);
-                    }
+                }
+                if let Some(role_here) = role.clone() {
+                    self.roles.insert(writer.clone(), role_here);
                 }
             }
             if !role_known(&role) {
@@ -346,17 +347,17 @@ impl<'a, 'b> Context<'a, 'b> {
                             format!("writer/{writer}"),
                             writer_record("owner", "primary"),
                         );
-                        if let Some(owner) = op.get("owner").and_then(Value::as_str) {
-                            if !owner.is_empty() {
-                                self.owner = Some(owner.to_string());
-                                self.put("meta/owner", owner.to_string());
-                            }
+                        if let Some(owner) = op.get("owner").and_then(Value::as_str)
+                            && !owner.is_empty()
+                        {
+                            self.owner = Some(owner.to_string());
+                            self.put("meta/owner", owner.to_string());
                         }
-                        if let Some(epoch) = op.get("epoch").and_then(Value::as_f64) {
-                            if epoch != 0.0 {
-                                self.epoch = Some(epoch);
-                                self.put("meta/epoch", js_number_text(epoch));
-                            }
+                        if let Some(epoch) = op.get("epoch").and_then(Value::as_f64)
+                            && epoch != 0.0
+                        {
+                            self.epoch = Some(epoch);
+                            self.put("meta/epoch", js_number_text(epoch));
                         }
                     }
                 }

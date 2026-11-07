@@ -193,10 +193,10 @@ impl Inner {
     /// `ownDiversityBucket()`.
     fn own_diversity_bucket(&self) -> Option<String> {
         let own = self.dht.remote_address().or_else(|| {
-            self.server_address
+            *self
+                .server_address
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
-                .clone()
         });
         let own: SocketAddr = own?;
         let host = own.ip().to_string();
@@ -368,10 +368,9 @@ impl Inner {
             .unwrap_or_else(|e| e.into_inner())
             .get(&target)
             .cloned()
+            && !current.rpc().is_some_and(|rpc| rpc.is_closed())
         {
-            if !current.rpc().is_some_and(|rpc| rpc.is_closed()) {
-                return Ok(current);
-            }
+            return Ok(current);
         }
         let lock = self.hop_lock(&target);
         let _guard = lock.lock().await;
@@ -381,10 +380,9 @@ impl Inner {
             .unwrap_or_else(|e| e.into_inner())
             .get(&target)
             .cloned()
+            && !current.rpc().is_some_and(|rpc| rpc.is_closed())
         {
-            if !current.rpc().is_some_and(|rpc| rpc.is_closed()) {
-                return Ok(current);
-            }
+            return Ok(current);
         }
         if self.closing() {
             return Err(Error::Closed("Guard closing"));
@@ -733,13 +731,13 @@ impl PrivateGuard {
     }
 
     pub async fn suspend(&self) -> Result<()> {
-        if let Some(server) = self
+        let server = self
             .inner
             .server
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .clone()
-        {
+            .clone();
+        if let Some(server) = server {
             server.suspend().await?;
         }
         self.inner.dht.suspend().await
@@ -747,13 +745,13 @@ impl PrivateGuard {
 
     pub async fn resume(&self) -> Result<()> {
         self.inner.dht.resume().await?;
-        if let Some(server) = self
+        let server = self
             .inner
             .server
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .clone()
-        {
+            .clone();
+        if let Some(server) = server {
             server.resume().await?;
         }
         self.inner.announce_service().await;
@@ -816,13 +814,13 @@ impl PrivateGuard {
             };
             let _ = tokio::time::timeout(Duration::from_millis(1500), unannounce).await;
         }
-        if let Some(server) = self
+        let server = self
             .inner
             .server
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .clone()
-        {
+            .clone();
+        if let Some(server) = server {
             let _ = server.close().await;
         }
         let _ = self.inner.dht.destroy().await;
