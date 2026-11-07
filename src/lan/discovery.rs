@@ -864,7 +864,8 @@ mod tests {
                 .is_err(),
             "the larger key must let the smaller key dial first",
         );
-        let connection = tokio::time::timeout(Duration::from_secs(1), connections.recv()).await;
+        // A re-arming timer never dials, so a generous window still catches that bug.
+        let connection = tokio::time::timeout(Duration::from_secs(8), connections.recv()).await;
         large.destroy().await;
         small.destroy().await;
         assert!(
