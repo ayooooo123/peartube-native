@@ -5,7 +5,7 @@
 
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
-use std::net::TcpStream;
+use std::net::{TcpStream, ToSocketAddrs};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -50,7 +50,7 @@ fn temp_dir(label: &str) -> PathBuf {
 struct Testnet {
     _runtime: tokio::runtime::Runtime,
     _udx: libudx::UdxRuntime,
-    _task: tokio::task::JoinHandle<Result<(), peeroxide_dht::rpc::DhtError>>,
+    _task: tokio::task::JoinHandle<Result<(), peeroxide_dht::hyperdht::HyperDhtError>>,
     bootstrap: Value,
 }
 
@@ -62,12 +62,13 @@ fn testnet() -> Testnet {
         .expect("testnet runtime");
     let udx = libudx::UdxRuntime::new().expect("udx");
     let (task, port) = runtime.block_on(async {
-        let mut config = peeroxide_dht::rpc::DhtConfig::default();
-        config.bootstrap = Vec::new();
-        config.host = "127.0.0.1".to_owned();
-        config.port = 0;
-        config.firewalled = false;
-        let (task, handle) = peeroxide_dht::rpc::spawn(&udx, config)
+        let mut config = peeroxide_dht::hyperdht::HyperDhtConfig::default();
+        config.dht.bootstrap = Vec::new();
+        config.dht.host = "127.0.0.1".to_owned();
+        config.dht.port = 0;
+        config.dht.firewalled = false;
+        // A bare RPC node cannot store announcements or route peer handshakes.
+        let (task, handle, _events) = peeroxide_dht::hyperdht::spawn(&udx, config)
             .await
             .expect("testnet node");
         let port = handle.local_port().await.expect("testnet port");
@@ -239,13 +240,16 @@ struct HttpResponse {
     body: Vec<u8>,
 }
 
-fn http_get(url: &str, range: Option<&str>) -> HttpResponse {
+/// Connects with a bound timeout: a LAN address the host cannot reach (its own interface, or a
+/// dropped SYN) must fail the probe instead of blocking the test forever.
+fn try_http_get(url: &str, range: Option<&str>) -> Option<HttpResponse> {
     let rest = url.strip_prefix("http://").expect("an http url");
     let (authority, path) = match rest.find('/') {
         Some(index) => (&rest[..index], &rest[index..]),
         None => (rest, "/"),
     };
-    let mut stream = TcpStream::connect(authority).expect("the player url listens");
+    let address = authority.to_socket_addrs().ok()?.next()?;
+    let mut stream = TcpStream::connect_timeout(&address, Duration::from_secs(5)).ok()?;
     stream
         .set_read_timeout(Some(Duration::from_secs(90)))
         .expect("read timeout");
@@ -292,11 +296,24 @@ fn http_get(url: &str, range: Option<&str>) -> HttpResponse {
             headers.insert(name.trim().to_lowercase(), value.trim().to_owned());
         }
     }
-    HttpResponse {
+    Some(HttpResponse {
         status,
         headers,
         body: raw[split..].to_vec(),
-    }
+    })
+}
+
+fn http_get(url: &str, range: Option<&str>) -> HttpResponse {
+    try_http_get(url, range).unwrap_or_else(|| panic!("{url} answers"))
+}
+
+/// The same port on loopback: on a single machine the host's own LAN interface can be
+/// unreachable (firewall), while the one listener still serves the request.
+fn loopback_url(url: &str) -> String {
+    let rest = url.strip_prefix("http://").expect("an http url");
+    let (authority, path) = rest.split_once('/').unwrap_or((rest, ""));
+    let port = authority.rsplit_once(':').map_or("", |(_, port)| port);
+    format!("http://127.0.0.1:{port}/{path}")
 }
 
 /// The node status the loopback API reports.
@@ -369,7 +386,9 @@ fn default_backends_cast_a_local_blob_over_lan() {
         .unwrap_or("")
         .to_owned();
     assert!(!fallback.is_empty(), "the sender offers a LAN blob URL");
-    let direct = http_get(&fallback, None);
+    let direct = try_http_get(&fallback, None)
+        .or_else(|| try_http_get(&loopback_url(&fallback), None))
+        .expect("the sender's LAN Range server answers on its port");
     assert_eq!(direct.status, 200);
     assert_eq!(
         sha256_hex(&direct.body),

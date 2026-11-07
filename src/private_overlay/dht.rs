@@ -7,21 +7,109 @@ use std::any::Any;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 
+use bytes::Bytes;
 use futures_util::future::BoxFuture;
 use protomux::Mux;
-use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 use super::{Error, KeyPair};
 
-/// A bidirectional byte pipe (a Noise stream once the handshake is done).
-pub trait Duplex: AsyncRead + AsyncWrite + Send + Unpin {}
-impl<T: AsyncRead + AsyncWrite + Send + Unpin> Duplex for T {}
+/// Reads one whole end-to-end Noise message: the JS `NoiseSecretStream` preserves message
+/// boundaries, and the app's Protomux reads exactly one message per frame.
+pub trait MessageRead: Send + Unpin {
+    fn read_message<'a>(&'a mut self) -> BoxFuture<'a, Result<Option<Bytes>, Error>>;
+}
 
-/// What `enc.opened` resolves to: the finished handshake and its duplex.
+/// Writes one whole end-to-end Noise message.
+pub trait MessageWrite: Send + Unpin {
+    fn write_message<'a>(&'a mut self, message: &'a [u8]) -> BoxFuture<'a, Result<(), Error>>;
+    fn shutdown(&mut self) -> BoxFuture<'_, ()>;
+}
+
+/// The established inner Noise stream (`enc` in `swarm.on('connection', enc)`), split into the
+/// halves Protomux replicates over.
+pub trait MessageDuplex: Send {
+    fn split(self: Box<Self>) -> (Box<dyn MessageRead>, Box<dyn MessageWrite>);
+}
+
+/// A raw byte pipe framed as messages with a big-endian `u32` length.
+///
+/// Only the in-process test fake needs this: a real Noise stream already carries message
+/// boundaries, which is what makes the overlay JS-compatible.
+pub struct LengthFrames<D> {
+    stream: Option<D>,
+}
+
+impl<D> LengthFrames<D> {
+    pub fn new(stream: D) -> Self {
+        Self {
+            stream: Some(stream),
+        }
+    }
+}
+
+impl<D: AsyncRead + AsyncWrite + Send + Unpin + 'static> MessageDuplex for LengthFrames<D> {
+    fn split(mut self: Box<Self>) -> (Box<dyn MessageRead>, Box<dyn MessageWrite>) {
+        let stream = self.stream.take().expect("split once");
+        let (read, write) = tokio::io::split(stream);
+        (Box::new(LengthRead(read)), Box::new(LengthWrite(write)))
+    }
+}
+
+struct LengthRead<R>(R);
+
+impl<R: AsyncRead + Unpin + Send> MessageRead for LengthRead<R> {
+    fn read_message<'a>(&'a mut self) -> BoxFuture<'a, Result<Option<Bytes>, Error>> {
+        Box::pin(async move {
+            let mut len = [0u8; 4];
+            match self.0.read_exact(&mut len).await {
+                Ok(_) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::UnexpectedEof => return Ok(None),
+                Err(error) => return Err(Error::dht(error.to_string())),
+            }
+            let mut message = vec![0u8; u32::from_be_bytes(len) as usize];
+            self.0
+                .read_exact(&mut message)
+                .await
+                .map_err(|error| Error::dht(error.to_string()))?;
+            Ok(Some(Bytes::from(message)))
+        })
+    }
+}
+
+struct LengthWrite<W>(W);
+
+impl<W: AsyncWrite + Unpin + Send> MessageWrite for LengthWrite<W> {
+    fn write_message<'a>(&'a mut self, message: &'a [u8]) -> BoxFuture<'a, Result<(), Error>> {
+        Box::pin(async move {
+            if self
+                .0
+                .write_all(&(message.len() as u32).to_be_bytes())
+                .await
+                .is_err()
+                || self.0.write_all(message).await.is_err()
+                || self.0.flush().await.is_err()
+            {
+                return Err(Error::dht("inner stream write failed"));
+            }
+            Ok(())
+        })
+    }
+
+    fn shutdown(&mut self) -> BoxFuture<'_, ()> {
+        Box::pin(async move {
+            let _ = self.0.shutdown().await;
+        })
+    }
+}
+
+/// What `enc.opened` resolves to: the finished handshake and its message stream.
 pub struct NoiseOpened {
     pub remote_public_key: [u8; 32],
     pub is_initiator: bool,
-    pub stream: Box<dyn Duplex>,
+    /// Noise handshake transcript hash, which hypercore's replication capability derives from.
+    pub handshake_hash: Option<[u8; 64]>,
+    pub stream: Box<dyn MessageDuplex>,
 }
 
 /// A Noise handshake in flight (`new NoiseSecretStream(...)` before `opened`).
@@ -41,7 +129,9 @@ pub struct PendingNoise {
 pub struct NoiseConnection {
     pub remote_public_key: [u8; 32],
     pub is_initiator: bool,
-    pub stream: Box<dyn Duplex>,
+    /// Noise handshake transcript hash, which hypercore's replication capability derives from.
+    pub handshake_hash: Option<[u8; 64]>,
+    pub stream: Box<dyn MessageDuplex>,
     /// `enc.destroy()` for the stream the app now owns.
     pub close: Arc<dyn Fn() + Send + Sync>,
     /// Flips to `true` when the stream closes (`enc.once('close')`).

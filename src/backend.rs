@@ -10,8 +10,8 @@ use std::{
 use serde_json::Value;
 use tokio::sync::mpsc as tokio_mpsc;
 
-use crate::ipc::Framer;
 use crate::app::{App, SystemClock};
+use crate::ipc::Framer;
 use crate::lifecycle;
 
 #[derive(Debug)]
@@ -59,6 +59,10 @@ impl Backend {
     ///
     /// `config.apiPort` picks the loopback API's preferred port (`0` for an ephemeral one); the
     /// default is the app's [`crate::protocol::API_PORT`].
+    ///
+    /// `config.bonjour: "host"` asks the platform's Bonjour daemon over the line protocol instead
+    /// of opening a multicast socket (iOS, see [`crate::lan::host`]): the requests go out on the
+    /// same channel the events come back on.
     pub fn spawn(
         config: Value,
         on_line: impl Fn(String) + Send + 'static,
@@ -68,6 +72,15 @@ impl Backend {
             .and_then(Value::as_u64)
             .and_then(|port| u16::try_from(port).ok())
             .unwrap_or(crate::protocol::API_PORT);
+        if config.get("bonjour").and_then(Value::as_str) == Some("host") {
+            let sink = Arc::new(Mutex::new(on_line));
+            let lan = Arc::new(crate::lan::HostFactory::new({
+                let sink = Arc::clone(&sink);
+                move |value: Value| write(&sink, value.to_string())
+            }));
+            let adapters = adapters(api_port, lan);
+            return Self::spawn_with(config, adapters, move |line| write(&sink, line));
+        }
         Self::spawn_with(config, native_adapters(api_port), on_line)
     }
 
@@ -189,6 +202,12 @@ impl Backend {
     }
 }
 
+/// One line to the host; the sink is shared by the event loop and the Bonjour bridge.
+fn write(sink: &Mutex<impl Fn(String) + Send>, line: String) {
+    let sink = sink.lock().unwrap_or_else(|error| error.into_inner());
+    sink(line);
+}
+
 /// The adapters a native host has: the node factory, the process clock, LAN discovery, the
 /// loopback API on `api_port` and the cast stack.
 pub fn native_adapters(
@@ -200,17 +219,34 @@ pub fn native_adapters(
     crate::adapters::LoopbackApi,
     crate::cast::adapters::Factory,
 > {
+    adapters(api_port, Arc::new(crate::lan::Factory))
+}
+
+/// [`native_adapters`] with the LAN factory the platform needs.
+fn adapters<L>(
+    api_port: u16,
+    lan: Arc<L>,
+) -> Adapters<
+    crate::node::factory::Factory,
+    SystemClock,
+    L,
+    crate::adapters::LoopbackApi,
+    crate::cast::adapters::Factory,
+> {
     Adapters {
         factory: Arc::new(crate::node::factory::Factory),
         clock: Arc::new(SystemClock),
-        lan: Arc::new(crate::lan::Factory),
+        lan,
         api: Some(Arc::new(crate::adapters::LoopbackApi::new(api_port))),
         cast: Some(Arc::new(crate::cast::adapters::Factory)),
     }
 }
 
 /// Writes every event the app has queued, in the order it emitted them.
-fn write_events(events: &mut tokio_mpsc::UnboundedReceiver<crate::app::AppEvent>, write: &impl Fn(String)) {
+fn write_events(
+    events: &mut tokio_mpsc::UnboundedReceiver<crate::app::AppEvent>,
+    write: &impl Fn(String),
+) {
     while let Ok(event) = events.try_recv() {
         if let Some(line) = lifecycle::event_line(&event) {
             write(line);

@@ -115,5 +115,7 @@ port opens P2P sockets itself; `src/cast/adapters.rs` fills every seam for the r
   source's exact bytes full and ranged, and the `castControl`/`castStop` transitions.
   `js_cast_receiver_is_driven_by_the_default_backend` (ignored) drives the app's own `cast.js`
   receiver through the same backend.
+  Its bootstrap is a HyperDHT node, not bare DHT-RPC: the latter cannot store peer announcements
+  or forward `PEER_HANDSHAKE`, and replies with error code 1 instead of reaching the receiver.
 - 29 module unit tests sit next to the code (`cargo test --lib cast`); clippy is clean for
   `src/cast/**`, `tests/cast.rs` and `tests/cast_default.rs`.

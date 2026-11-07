@@ -188,9 +188,12 @@ pub fn merge_headers(sets: &[&[(String, String)]]) -> Vec<(String, String)> {
         .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
         .collect();
     for entry in sets.iter().flat_map(|set| set.iter()) {
-        match out.iter_mut().find(|(key, _)| *key == entry.0) {
+        // Header names are case-insensitive: a user's `Authorization` must replace, not double, and must be
+        // stripped on a cross-origin redirect like the app's lowercased `mergeHeaders`.
+        let key = entry.0.to_ascii_lowercase();
+        match out.iter_mut().find(|(kept, _)| *kept == key) {
             Some(slot) => slot.1 = entry.1.clone(),
-            None => out.push(entry.clone()),
+            None => out.push((key, entry.1.clone())),
         }
     }
     out
@@ -739,7 +742,10 @@ impl HttpOpen for HyperHttp {
                 status,
                 headers,
                 url: uri.as_str().to_owned(),
-                body: Box::new(BodyReader(response.into_body())),
+                body: Box::new(BodyReader {
+                    body: response.into_body(),
+                    pending: Bytes::new(),
+                }),
             })
         })
     }
@@ -758,16 +764,33 @@ static HOP_CLIENT: std::sync::LazyLock<Client<Hops, Full<Bytes>>> =
     });
 
 /// A hyper body as `AsyncRead`, copying each frame straight into the caller's buffer.
-struct BodyReader(Incoming);
+struct BodyReader<B = Incoming> {
+    body: B,
+    /// The tail of a frame larger than the caller's buffer; dropping it would lose bytes.
+    pending: Bytes,
+}
 
-impl AsyncRead for BodyReader {
+impl<B> AsyncRead for BodyReader<B>
+where
+    B: Body<Data = Bytes> + Unpin,
+    B::Error: std::fmt::Display,
+{
     fn poll_read(
-        mut self: Pin<&mut Self>,
+        self: Pin<&mut Self>,
         cx: &mut Context<'_>,
         buf: &mut ReadBuf<'_>,
     ) -> Poll<std::io::Result<()>> {
+        let this = self.get_mut();
         loop {
-            match Pin::new(&mut self.0).poll_frame(cx) {
+            if !this.pending.is_empty() {
+                let take = this.pending.len().min(buf.remaining());
+                buf.put_slice(&this.pending.split_to(take));
+                return Poll::Ready(Ok(()));
+            }
+            if buf.remaining() == 0 {
+                return Poll::Ready(Ok(()));
+            }
+            match Pin::new(&mut this.body).poll_frame(cx) {
                 Poll::Pending => return Poll::Pending,
                 Poll::Ready(None) => return Poll::Ready(Ok(())),
                 Poll::Ready(Some(Err(error))) => {
@@ -777,13 +800,147 @@ impl AsyncRead for BodyReader {
                     if let Ok(data) = frame.into_data()
                         && !data.is_empty()
                     {
-                        let take = data.len().min(buf.remaining());
-                        buf.put_slice(&data[..take]);
-                        return Poll::Ready(Ok(()));
+                        this.pending = data;
                     }
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod body_reader_tests {
+    use super::*;
+    use tokio::io::AsyncReadExt;
+
+    /// A frame larger than the caller's buffer must be drained, never dropped: a lost tail reads
+    /// as a truncated transfer and fails the job.
+    #[tokio::test]
+    async fn a_frame_larger_than_the_read_buffer_is_not_lost() {
+        let data = Bytes::from(
+            (0..1024 * 1024)
+                .map(|index| index as u8)
+                .collect::<Vec<u8>>(),
+        );
+        let mut reader = BodyReader {
+            body: Full::new(data.clone()),
+            pending: Bytes::new(),
+        };
+        let mut chunk = vec![0u8; 4096];
+        let mut total = Vec::new();
+        loop {
+            let read = reader.read(&mut chunk).await.expect("read");
+            if read == 0 {
+                break;
+            }
+            total.extend_from_slice(&chunk[..read]);
+        }
+        assert_eq!(total, data.to_vec());
+    }
+}
+
+#[cfg(test)]
+mod header_tests {
+    use super::*;
+    use std::collections::VecDeque;
+
+    /// One scripted hop: the status it answers with and the headers that ride it.
+    type Hop = (u16, Vec<(String, String)>);
+
+    /// A scripted source: records each hop's headers and answers from a queue.
+    struct Script {
+        seen: Mutex<Vec<Vec<(String, String)>>>,
+        replies: Mutex<VecDeque<Hop>>,
+    }
+
+    impl Script {
+        fn new(replies: Vec<Hop>) -> Arc<Self> {
+            Arc::new(Self {
+                seen: Mutex::new(Vec::new()),
+                replies: Mutex::new(replies.into()),
+            })
+        }
+    }
+
+    impl HttpOpen for Script {
+        fn open(
+            &self,
+            request: SourceRequest,
+        ) -> Pin<Box<dyn Future<Output = Result<SourceResponse, SourceError>> + Send>> {
+            self.seen
+                .lock()
+                .expect("seen")
+                .push(request.headers.clone());
+            let (status, headers) = self
+                .replies
+                .lock()
+                .expect("replies")
+                .pop_front()
+                .unwrap_or((200, Vec::new()));
+            let url = request.url;
+            Box::pin(async move {
+                Ok(SourceResponse {
+                    status,
+                    headers,
+                    url,
+                    body: Box::new(std::io::Cursor::new(Vec::<u8>::new())),
+                })
+            })
+        }
+    }
+
+    /// A user header replaces the default case-insensitively, as the app's `mergeHeaders` lowercases keys.
+    #[test]
+    fn a_user_header_replaces_the_default_case_insensitively() {
+        let merged = merge_headers(&[&[("User-Agent".to_owned(), "VLC/4".to_owned())]]);
+        assert_eq!(header(&merged, "user-agent"), Some("VLC/4"));
+        assert_eq!(
+            merged
+                .iter()
+                .filter(|(name, _)| name == "user-agent")
+                .count(),
+            1,
+            "one user-agent, not the default plus the override"
+        );
+    }
+
+    /// A cross-origin redirect must not carry an auth header a caller spelled with a capital A.
+    #[tokio::test]
+    async fn a_cross_origin_redirect_strips_the_authorization_header() {
+        let script = Script::new(vec![
+            (
+                302,
+                vec![(
+                    "location".to_owned(),
+                    "http://cdn.example/video.mkv".to_owned(),
+                )],
+            ),
+            (200, Vec::new()),
+        ]);
+        let headers = merge_headers(&[&[(
+            "Authorization".to_owned(),
+            "Bearer one-shot-secret".to_owned(),
+        )]]);
+        open_source(
+            &*script,
+            "http://gateway.example/source",
+            &headers,
+            &Cancel::new(),
+            0,
+            Duration::from_secs(5),
+        )
+        .await
+        .expect("the redirect resolves");
+        let seen = script.seen.lock().expect("seen");
+        assert_eq!(
+            header(&seen[0], "authorization"),
+            Some("Bearer one-shot-secret")
+        );
+        assert_eq!(
+            header(&seen[1], "authorization"),
+            None,
+            "auth never crosses origins"
+        );
     }
 }
 
@@ -817,7 +974,10 @@ async fn open_source(
                 .join(&location)
                 .map_err(|_| AcquireError::Message("Invalid URL".into()))?;
             if next.origin() != current.origin() {
-                headers.retain(|(key, _)| key != "authorization" && key != "cookie");
+                headers.retain(|(key, _)| {
+                    !key.eq_ignore_ascii_case("authorization")
+                        && !key.eq_ignore_ascii_case("cookie")
+                });
             }
             current = next;
             redirects += 1;

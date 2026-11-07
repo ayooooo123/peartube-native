@@ -309,16 +309,17 @@ impl SwarmInner {
             close();
             return;
         }
-        let previous = self
+        // Duplicate selection and publication are one JS callback, so keep them atomic here too.
+        let mut active = self
             .active_by_peer
             .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .get(&remote)
-            .copied();
+            .unwrap_or_else(|e| e.into_inner());
+        let previous = active.get(&remote).copied();
         let admitted = Arc::new(Admitted {
             close: Arc::clone(&close),
             closed: closed.clone(),
         });
+        let mut replaced = None;
         if let Some(previous_id) = previous {
             let previous = self
                 .connections
@@ -329,10 +330,11 @@ impl SwarmInner {
             if let Some(previous) = previous.filter(|p| !*p.closed.borrow()) {
                 // The responder wins the duplicate exchange when the remote half sorts lower.
                 if opened.is_initiator || remote >= self.key_pair.public_key {
+                    drop(active);
                     close();
                     return;
                 }
-                (previous.close)();
+                replaced = Some(previous);
             }
         }
         let id = self.next_stream_id.fetch_add(1, Ordering::Relaxed);
@@ -340,10 +342,11 @@ impl SwarmInner {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .insert(id, Arc::clone(&admitted));
-        self.active_by_peer
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .insert(remote, id);
+        active.insert(remote, id);
+        drop(active);
+        if let Some(previous) = replaced {
+            (previous.close)();
+        }
         let inner = Arc::clone(self);
         let mut watcher = closed.clone();
         tokio::spawn(async move {
@@ -367,6 +370,7 @@ impl SwarmInner {
             on_connection(NoiseConnection {
                 remote_public_key: remote,
                 is_initiator: opened.is_initiator,
+                handshake_hash: opened.handshake_hash,
                 stream: opened.stream,
                 close,
                 closed,
@@ -427,6 +431,7 @@ impl SwarmInner {
                     return None;
                 }
             };
+            mux.ready();
             *guard.rpc.lock().unwrap_or_else(|e| e.into_inner()) = Some(Arc::clone(&rpc));
             if rpc
                 .request(op::HELLO, op::HELLO, b"endpoint", 4000)
@@ -1470,6 +1475,7 @@ pub async fn publish_standalone_route_card(
                                         on_inner_connection(NoiseConnection {
                                             remote_public_key: opened.remote_public_key,
                                             is_initiator: opened.is_initiator,
+                                            handshake_hash: opened.handshake_hash,
                                             stream: opened.stream,
                                             close,
                                             closed,
@@ -1490,6 +1496,7 @@ pub async fn publish_standalone_route_card(
     };
     let mux = dht.protomux(&conn).await?;
     let rpc = attach_rpc_channel(&mux, Arc::clone(&conn), Some(handler))?;
+    mux.ready();
     rpc.request(op::HELLO, op::HELLO, b"endpoint", 4000).await?;
     let mut register = Vec::with_capacity(36);
     register.extend_from_slice(&route_token);
@@ -1555,6 +1562,7 @@ pub async fn attempt_direct_hop_bypass(
         if let Ok(mux) = dht.protomux(&conn).await
             && let Ok(rpc) = attach_rpc_channel(&mux, Arc::clone(&conn), None)
         {
+            mux.ready();
             let _ = rpc.request(op::HELLO, op::HELLO, b"endpoint", 3000).await;
             if let Ok(raw) = dht::alloc_raw_stream(&dht, &conn, true).await {
                 let mut ask = Vec::with_capacity(36);

@@ -115,8 +115,10 @@ The app owns the `castStorage` sent by `init`, the last settings a `start` was g
 Deliberate deviations from the JavaScript:
 
 * **Storage tuning.** `createStorage`'s `hypercore-storage` options (write buffer, caches, pinning) are not configurable through the Rust Corestore, so the engine's own defaults apply; the worklet flag still selects the mobile request window.
-* **Swarm.** Topics, joins, content announcements, replication fan-out (`Corestore::replicate` on every accepted connection) and the channel/corestore wakeup sessions match the JS. `privateRouting` fails closed: the private overlay (`private_overlay::swarm`) is not available in this build, so a private-routed node joins no public or LAN topic (`Network::can_announce`) and `sample()` attributes nothing to the private route rather than relabelling public DHT bytes.
-* **Traffic sample.** peeroxide's connection type exposes no per-connection byte counters, so `sample()` reports the DHT's wire counters on the public route (the DHT is the public swarm; a private-routed node has no overlay to carry private bytes) and the LAN route counts peers only; `rtt` and `retransmits` stay 0.
+* **Swarm.** Topics, joins, content announcements, replication fan-out (`Corestore::replicate` on every accepted connection) and the channel/corestore wakeup sessions match the JS. `privateRouting` runs `create_private_swarm` like `src/node/network.js`: channel discovery becomes `joinSource` on the overlay, `joinPeer` dials through the guards, content topics stay unannounced, and LAN bindings are refused. If the overlay cannot start the node fails closed (`Network::can_announce`), joining no public or LAN topic and attributing nothing to the private route.
+  Inner-stream duplicate selection and active-peer registration are atomic, matching one JS
+  connection callback; replacement close callbacks run after that state is published.
+* **Traffic sample.** peeroxide's connection type exposes no per-connection byte counters, so every mux counts the frames it carries: the public route counts the swarm's connections, the private route the overlay's, and the LAN route the binding's. `rtt` and `retransmits` stay 0.
 * **`joinPeer`.** Hyperswarm has no `joinPeer`, so the node dials the peer's public key through HyperDHT and wires the resulting stream into the same replication set. `lanFirst` defers the dial when a LAN binding exists.
 * **LAN.** A host binding is the new `network::LanBinding` trait (join/leave/destroy/host/port/stats/dialDirect plus an `on_connection` callback that yields a `LanConnection` carrying an already-framed Protomux). `Node::Lan` is `Arc<dyn LanBinding>`.
 * **Authority.** `channel::AppendAuthority` is the small read-only face of the vault that channel writes need (channel key, owner key, `signClaim`); `Shared` keeps a clone of the vault and the saved access keys so blob-host reads stay synchronous.
@@ -124,3 +126,12 @@ Deliberate deviations from the JavaScript:
 * **Blob host maintenance.** `flush`/`compact` are no-ops (the engine has no compaction entry point exposed) and `freeBytes` is `None` (unbounded), which the blob store already treats as "unknown".
 * **`Node::BlobServer`** is the `SocketAddr` the Range server bound (`Blobs::start_server`'s local address, kept in `Shared`), which the `/v1/blob` proxy needs.
 * **Catalog ordering** keeps the JS `Map`'s insertion order (primary channel first, then followed sources, then direct watches).
+
+## Mixed network acceptance
+
+The JS/Rust scenarios live in `network_mixed_a` (acquire/restart, eight tests),
+`network_mixed_b` (ACL/malformed announces/convergence, eight tests), and `network_mixed_c`
+(private routing/cache/eviction, seven tests). Run each with `-- --include-ignored --test-threads=1`;
+the old combined target was removed when these slices replaced it.
+The documented `PEARTUBE_ACQUIRE` copy in `tests/network_mixed_a.rs` is required for the app's
+known announcing-job restart bug; it does not change the app checkout.

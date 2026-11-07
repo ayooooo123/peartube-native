@@ -49,7 +49,7 @@ tempfile = "3"
 members = ["ffi"]
 
 [features]
-default = []
+default = ["peeroxide-dht"]
 peeroxide-dht = []
 
 # Our fork: UDX write pipelining, C-compatible pacing and SACKs, reachability check (see ../peeroxide).

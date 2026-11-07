@@ -1,8 +1,9 @@
 //! `src/node/network.js`: the swarm, its topics, replication and the traffic sample.
 //!
 //! Every accepted connection becomes one Protomux multiplexer over its Noise stream; the
-//! Corestore replicates every open core over it (and opens stored cores a peer asks for), the
-//! channel's wakeup session rides it, and each followed source attaches its own wakeup.
+//! Corestore replicates every open core over it (and opens stored cores a peer asks for), and
+//! the node's one wakeup swarm opens a topic channel per bee on it. A connection pairs wakeup
+//! once, so the swarm is shared: a second swarm on the same mux would take the pairing.
 //!
 //! The peeroxide swarm has no `joinPeer`: a direct peer dials the DHT itself and wires the
 //! resulting stream into the same replication set.
@@ -14,14 +15,22 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, Weak};
 use std::time::Duration;
 
+#[cfg(feature = "peeroxide-dht")]
+use crate::private_overlay::dht::{MessageDuplex, MessageRead, MessageWrite, NoiseConnection};
+#[cfg(feature = "peeroxide-dht")]
+use crate::private_overlay::peeroxide::open_dht;
+#[cfg(feature = "peeroxide-dht")]
+use crate::private_overlay::{PrivateSwarm, SwarmOptions, create_private_swarm};
 use corestore::Corestore;
 use futures_util::future::BoxFuture;
 use libudx::UdxRuntime;
 use peeroxide::{JoinOpts, SwarmConfig, SwarmHandle};
 use peeroxide_dht::hyperdht::{HyperDhtConfig, HyperDhtHandle};
 use peeroxide_dht::rpc::DhtConfig;
-use protomux::Mux;
+use peeroxide_dht::secret_stream::SecretStream;
+use protomux::{FrameRead, FrameWrite, Mux, StreamInfo};
 use serde_json::Value;
+use tokio::io::{AsyncRead, AsyncWrite, ReadHalf, WriteHalf};
 
 use super::api::{LanEndpoint, Route, Routes};
 
@@ -85,6 +94,18 @@ fn is_loopback(bootstrap: &[String]) -> bool {
     })
 }
 
+/// `bootstrap: []` means the public network, as npm hyperdht does: an empty list is only ever the
+/// caller saying "I have no custom nodes", never "run isolated" (the LAN half passes its own DHT).
+pub fn resolve_bootstrap(bootstrap: Vec<String>) -> Vec<String> {
+    if !bootstrap.is_empty() {
+        return bootstrap;
+    }
+    peeroxide_dht::hyperdht::DEFAULT_BOOTSTRAP
+        .iter()
+        .map(|node| (*node).to_owned())
+        .collect()
+}
+
 /// A LAN binding the host supplies (`opts.lan(swarm.keyPair)`), as the node drives it.
 pub trait LanBinding: Send + Sync {
     fn join(&self, topic: [u8; 32]);
@@ -107,6 +128,8 @@ pub struct LanConnection {
     pub mux: Mux,
     pub remote_public_key: Option<[u8; 32]>,
     pub close: Box<dyn Fn() + Send + Sync>,
+    /// The frames this connection carried, so the LAN route can count them.
+    pub bytes: WireBytes,
 }
 
 struct LanState {
@@ -119,6 +142,228 @@ pub trait WakeupSink: Send + Sync {
     fn add_stream(&self, mux: &Mux);
     /// `session.broadcastLookup()`: ask the new peer for the writers it holds.
     fn request_lookup(&self);
+}
+
+/// The frames one connection carried, as its route counts them.
+///
+/// peeroxide's DHT counters never see established UDX streams, so nothing else would; every
+/// mux counts what crosses it, and a LAN binding hands its connection's counters over with it.
+#[derive(Clone, Default)]
+pub struct WireBytes {
+    rx: Arc<AtomicU64>,
+    tx: Arc<AtomicU64>,
+}
+
+impl WireBytes {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn rx(&self) -> u64 {
+        self.rx.load(Ordering::Relaxed)
+    }
+
+    pub fn tx(&self) -> u64 {
+        self.tx.load(Ordering::Relaxed)
+    }
+}
+
+/// The connection's frames, counted: peeroxide's DHT counters never see
+/// established UDX streams, so nothing else would count replication bytes.
+struct MeteredRead<R>(R, Arc<AtomicU64>);
+
+impl<R: FrameRead> FrameRead for MeteredRead<R> {
+    async fn read(&mut self) -> std::io::Result<Option<bytes::Bytes>> {
+        let frame = self.0.read().await?;
+        if let Some(frame) = &frame {
+            self.1.fetch_add(frame.len() as u64, Ordering::Relaxed);
+        }
+        Ok(frame)
+    }
+}
+
+struct MeteredWrite<W>(W, Arc<AtomicU64>);
+
+impl<W: FrameWrite> FrameWrite for MeteredWrite<W> {
+    async fn write(&mut self, frame: bytes::Bytes) -> std::io::Result<()> {
+        self.1.fetch_add(frame.len() as u64, Ordering::Relaxed);
+        self.0.write(frame).await
+    }
+
+    async fn close(&mut self) -> std::io::Result<()> {
+        self.0.close().await
+    }
+}
+
+/// `Mux::from_secret_stream`, with every frame added to `bytes`.
+pub fn metered_mux<T>(stream: SecretStream<T>, bytes: &WireBytes) -> Mux
+where
+    T: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+    ReadHalf<T>: Send,
+    WriteHalf<T>: Send,
+{
+    let info = StreamInfo {
+        is_initiator: stream.is_initiator(),
+        handshake_hash: Some(*stream.handshake_hash()),
+        remote_public_key: Some(*stream.remote_public_key()),
+    };
+    let (read, write) = stream.into_split();
+    Mux::new(
+        MeteredRead(read, Arc::clone(&bytes.rx)),
+        MeteredWrite(write, Arc::clone(&bytes.tx)),
+        info,
+    )
+}
+
+/// The private overlay handle when this build ships one; nothing is ever stored otherwise.
+#[cfg(feature = "peeroxide-dht")]
+type PrivateOverlay = PrivateSwarm;
+/// Without the feature no overlay is ever created; the stub keeps the plumbing type-checking.
+#[cfg(not(feature = "peeroxide-dht"))]
+#[derive(Clone)]
+#[allow(dead_code)]
+struct PrivateOverlay;
+
+#[cfg(not(feature = "peeroxide-dht"))]
+#[allow(dead_code)]
+impl PrivateOverlay {
+    async fn destroy(&self) {}
+    async fn suspend(&self) {}
+    async fn resume(&self) {}
+    async fn leave_source(&self, _id: &str) {}
+    fn join_source(&self, _id: &str, _key: &[u8; 32]) {}
+    fn join_peer(&self, _key: [u8; 32]) {}
+}
+
+/// The private overlay's message halves as a protomux frame transport.
+#[cfg(feature = "peeroxide-dht")]
+struct FramesRead(Box<dyn MessageRead>);
+
+#[cfg(feature = "peeroxide-dht")]
+impl FrameRead for FramesRead {
+    async fn read(&mut self) -> std::io::Result<Option<bytes::Bytes>> {
+        self.0
+            .read_message()
+            .await
+            .map_err(|error| std::io::Error::other(error.to_string()))
+    }
+}
+
+#[cfg(feature = "peeroxide-dht")]
+struct FramesWrite(Box<dyn MessageWrite>);
+
+#[cfg(feature = "peeroxide-dht")]
+impl FrameWrite for FramesWrite {
+    async fn write(&mut self, frame: bytes::Bytes) -> std::io::Result<()> {
+        self.0
+            .write_message(&frame)
+            .await
+            .map_err(|error| std::io::Error::other(error.to_string()))
+    }
+
+    async fn close(&mut self) -> std::io::Result<()> {
+        self.0.shutdown().await;
+        Ok(())
+    }
+}
+
+/// One private overlay connection as a metered mux over the Noise stream's own messages, the
+/// same framing the public connections use (and JS replicates over).
+#[cfg(feature = "peeroxide-dht")]
+fn private_mux(
+    stream: Box<dyn MessageDuplex>,
+    is_initiator: bool,
+    handshake_hash: Option<[u8; 64]>,
+    remote_public_key: [u8; 32],
+    bytes: &WireBytes,
+) -> Mux {
+    let info = StreamInfo {
+        is_initiator,
+        handshake_hash,
+        remote_public_key: Some(remote_public_key),
+    };
+    let (read, write) = stream.split();
+    Mux::new(
+        MeteredRead(FramesRead(read), Arc::clone(&bytes.rx)),
+        MeteredWrite(FramesWrite(write), Arc::clone(&bytes.tx)),
+        info,
+    )
+}
+
+/// Opens the private overlay with the network's bind and bootstrap.
+///
+/// Returns `None` when the overlay cannot start; `privateRouting` then fails closed, announcing
+/// nothing on the public DHT or the LAN.
+#[cfg(feature = "peeroxide-dht")]
+async fn start_private(
+    network: &Arc<Network>,
+    host: String,
+    bootstrap: Vec<String>,
+    port: u16,
+) -> Option<PrivateOverlay> {
+    let dht = open_dht(crate::private_overlay::dht::DhtOptions {
+        host: Some(host.clone()),
+        port,
+        bootstrap: bootstrap.clone(),
+    })
+    .await
+    .ok()?;
+    let weak = network.weak.clone();
+    let hook: crate::private_overlay::swarm::ConnectionHook = Arc::new(move |connection| {
+        let Some(network) = weak.upgrade() else {
+            (connection.close)();
+            return;
+        };
+        let NoiseConnection {
+            remote_public_key: peer,
+            is_initiator,
+            handshake_hash,
+            stream,
+            close,
+            ..
+        } = connection;
+        if network.closing.load(Ordering::Acquire) || network.blocked(&peer) {
+            close();
+            return;
+        }
+        let bytes = WireBytes {
+            rx: Arc::clone(&network.private_rx),
+            tx: Arc::clone(&network.private_tx),
+        };
+        let mux = private_mux(stream, is_initiator, handshake_hash, peer, &bytes);
+        let handle = network.wire(
+            mux,
+            peer,
+            false,
+            true,
+            Box::new(move || close()),
+            Vec::new(),
+            None,
+        );
+        network.private_peers.fetch_add(1, Ordering::AcqRel);
+        let watched = handle.mux().clone();
+        let weak = network.weak.clone();
+        tokio::spawn(async move {
+            watched.closed().await;
+            if let Some(network) = weak.upgrade() {
+                network.private_peers.fetch_sub(1, Ordering::AcqRel);
+            }
+        });
+    });
+    Some(create_private_swarm(
+        dht,
+        SwarmOptions {
+            host: Some(host),
+            bootstrap,
+            port,
+            allow_loopback: None,
+            resolve_address: None,
+            key_pair: None,
+            firewall: None,
+            on_connection: Some(hook),
+            on_update: None,
+        },
+    ))
 }
 
 struct BeeWakeup(Arc<autobee::Autobee>);
@@ -139,6 +384,7 @@ struct ConnectionState {
     closed: AtomicBool,
     close: Box<dyn Fn() + Send + Sync>,
     lan: bool,
+    private: bool,
     /// The transport pieces the mux does not own (socket handle, direct-dial runtime).
     _keepalive: Vec<Box<dyn Any + Send + Sync>>,
 }
@@ -152,10 +398,13 @@ impl ConnectionHandle {
         hex(&self.0.peer)
     }
     pub fn destroyed(&self) -> bool {
-        self.0.closed.load(Ordering::Acquire)
+        self.0.closed.load(Ordering::Acquire) || self.0.mux.is_destroyed()
     }
     pub fn is_lan(&self) -> bool {
         self.0.lan
+    }
+    pub fn is_private(&self) -> bool {
+        self.0.private
     }
     pub fn mux(&self) -> &Mux {
         &self.0.mux
@@ -210,6 +459,11 @@ pub struct Network {
     runtime: Arc<UdxRuntime>,
     store: Corestore,
     private_routing: bool,
+    /// The private overlay when it started; `privateRouting` fails closed without one.
+    private: Mutex<Option<PrivateOverlay>>,
+    private_rx: Arc<AtomicU64>,
+    private_tx: Arc<AtomicU64>,
+    private_peers: Arc<AtomicU64>,
     connections: Mutex<Vec<ConnectionHandle>>,
     listeners: Mutex<Vec<(u64, Listener)>>,
     next_listener: AtomicU64,
@@ -220,6 +474,16 @@ pub struct Network {
     lan: Mutex<Option<LanState>>,
     public: Bucket,
     lan_bucket: Bucket,
+    /// Frames read and written on the swarm's connections (the public route's bytes).
+    wire_rx: Arc<AtomicU64>,
+    wire_tx: Arc<AtomicU64>,
+    /// Every LAN connection's counters, including closed ones so the route's total only grows;
+    /// they are folded into the closed totals when the binding is replaced.
+    lan_wires: Arc<Mutex<Vec<WireBytes>>>,
+    lan_closed_rx: AtomicU64,
+    lan_closed_tx: AtomicU64,
+    lan_prev_rx: AtomicU64,
+    lan_prev_tx: AtomicU64,
     prev_rx: AtomicU64,
     prev_tx: AtomicU64,
     prev_at: AtomicU64,
@@ -249,6 +513,9 @@ impl Network {
                 "0.0.0.0".to_owned()
             }
         });
+        let bootstrap = resolve_bootstrap(bootstrap);
+        let private_host = host.clone();
+        let private_bootstrap = bootstrap.clone();
         let mut config = SwarmConfig::default();
         config.max_parallel = 16;
         config.relay_through = relay_through;
@@ -280,6 +547,10 @@ impl Network {
             runtime,
             store,
             private_routing,
+            private: Mutex::new(None),
+            private_rx: Arc::new(AtomicU64::new(0)),
+            private_tx: Arc::new(AtomicU64::new(0)),
+            private_peers: Arc::new(AtomicU64::new(0)),
             connections: Mutex::new(Vec::new()),
             listeners: Mutex::new(Vec::new()),
             next_listener: AtomicU64::new(0),
@@ -290,6 +561,13 @@ impl Network {
             lan: Mutex::new(None),
             public: Bucket::default(),
             lan_bucket: Bucket::default(),
+            wire_rx: Arc::new(AtomicU64::new(0)),
+            wire_tx: Arc::new(AtomicU64::new(0)),
+            lan_wires: Arc::new(Mutex::new(Vec::new())),
+            lan_closed_rx: AtomicU64::new(0),
+            lan_closed_tx: AtomicU64::new(0),
+            lan_prev_rx: AtomicU64::new(0),
+            lan_prev_tx: AtomicU64::new(0),
             prev_rx: AtomicU64::new(0),
             prev_tx: AtomicU64::new(0),
             prev_at: AtomicU64::new(now_ms()),
@@ -310,6 +588,13 @@ impl Network {
                 network.accept(connection);
             }
         });
+        #[cfg(feature = "peeroxide-dht")]
+        if private_routing
+            && let Some(private) =
+                start_private(&network, private_host, private_bootstrap, port).await
+        {
+            *lock(&network.private) = Some(private);
+        }
         Ok(network)
     }
 
@@ -341,17 +626,32 @@ impl Network {
         }
         let peer = *connection.remote_public_key();
         let socket = connection.peer.socket.clone();
-        let mux = Mux::from_secret_stream(connection.peer.stream);
-        self.wire(mux, peer, false, Box::new(|| {}), vec![Box::new(socket)]);
+        let bytes = WireBytes {
+            rx: Arc::clone(&self.wire_rx),
+            tx: Arc::clone(&self.wire_tx),
+        };
+        let mux = metered_mux(connection.peer.stream, &bytes);
+        self.wire(
+            mux,
+            peer,
+            false,
+            false,
+            Box::new(|| {}),
+            vec![Box::new(socket)],
+            None,
+        );
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn wire(
         &self,
         mux: Mux,
         peer: [u8; 32],
         lan: bool,
+        private: bool,
         close: Box<dyn Fn() + Send + Sync>,
         keepalive: Vec<Box<dyn Any + Send + Sync>>,
+        bytes: Option<WireBytes>,
     ) -> ConnectionHandle {
         self.store.replicate(&mux);
         for sink in lock(&self.wakeups).iter() {
@@ -360,12 +660,17 @@ impl Network {
             // would stall at the head it woke with, so the node asks for every bee as it pairs.
             sink.request_lookup();
         }
+        if let Some(bytes) = &bytes {
+            // The route's total must not drop when the connection goes: the counters stay.
+            lock(&self.lan_wires).push(bytes.clone());
+        }
         let handle = ConnectionHandle(Arc::new(ConnectionState {
             peer,
             mux,
             closed: AtomicBool::new(false),
             close,
             lan,
+            private,
             _keepalive: keepalive,
         }));
         {
@@ -373,9 +678,21 @@ impl Network {
             connections.retain(|connection| !connection.destroyed());
             connections.push(handle.clone());
         }
+        // A connection the remote closed must leave the list (and drop its transport, which
+        // frees the peer's swarm slot) without waiting for the next status poll.
+        let weak = self.weak.clone();
+        let watched = handle.mux().clone();
+        tokio::spawn(async move {
+            watched.closed().await;
+            if let Some(network) = weak.upgrade() {
+                lock(&network.connections).retain(|connection| !connection.destroyed());
+            }
+        });
         for (_, listener) in lock(&self.listeners).iter() {
             listener(handle.clone());
         }
+        // Every protocol has registered its pairer by now; later unknown opens are refused.
+        handle.mux().ready();
         handle
     }
 
@@ -459,6 +776,21 @@ impl Network {
     /// `joinOverlayTopic`: one discovery per followed channel.
     pub fn join_overlay_topic(&self, id: &str, key: [u8; 32]) {
         if !self.can_announce() {
+            // `swarm.joinSource`: the private overlay's rendezvous, not a public topic join.
+            if !self.private_routing {
+                return;
+            }
+            let private = { lock(&self.private).clone() };
+            let Some(private) = private else {
+                return;
+            };
+            if lock(&self.overlay_topics)
+                .insert(id.to_owned(), key)
+                .is_some()
+            {
+                return;
+            }
+            private.join_source(id, &key);
             return;
         }
         let mut topics = lock(&self.overlay_topics);
@@ -469,7 +801,9 @@ impl Network {
         drop(topics);
         let topic = hypercore::crypto::discovery_key(&key);
         let swarm = self.swarm.clone();
-        let lan = lock(&self.lan).as_ref().map(|state| state.binding.clone());
+        if let Some(lan) = lock(&self.lan).as_ref().map(|state| state.binding.clone()) {
+            lan.join(topic);
+        }
         let closing = self.closing.clone();
         tokio::spawn(async move {
             if closing.load(Ordering::Acquire) {
@@ -479,14 +813,18 @@ impl Network {
             opts.server = true;
             opts.client = true;
             let _ = swarm.join(topic, opts).await;
-            if let Some(lan) = lan {
-                lan.join(topic);
-            }
         });
     }
 
     pub async fn leave_overlay_topic(&self, id: &str) {
         let key = lock(&self.overlay_topics).remove(id);
+        if !self.can_announce() {
+            let private = { lock(&self.private).clone() };
+            if let Some(private) = private {
+                private.leave_source(id).await;
+            }
+            return;
+        }
         if let Some(key) = key {
             let topic = hypercore::crypto::discovery_key(&key);
             let _ = self.swarm.leave(topic).await;
@@ -514,15 +852,14 @@ impl Network {
         topics.insert(key, discovery);
         drop(topics);
         let swarm = self.swarm.clone();
-        let lan = lock(&self.lan).as_ref().map(|state| state.binding.clone());
+        if let Some(lan) = lock(&self.lan).as_ref().map(|state| state.binding.clone()) {
+            lan.join(discovery);
+        }
         tokio::spawn(async move {
             let mut opts = JoinOpts::default();
             opts.server = true;
             opts.client = true;
             let _ = swarm.join(discovery, opts).await;
-            if let Some(lan) = lan {
-                lan.join(discovery);
-            }
         });
     }
 
@@ -556,6 +893,7 @@ impl Network {
         if let Some(previous) = previous {
             (previous.closer)();
             previous.binding.destroy().await;
+            self.fold_lan_bytes();
         }
         let Some(binding) = binding else {
             return Ok(());
@@ -580,8 +918,10 @@ impl Network {
                 connection.mux,
                 connection.remote_public_key.unwrap_or_default(),
                 true,
+                false,
                 connection.close,
                 Vec::new(),
+                Some(connection.bytes),
             );
         }));
         *lock(&self.lan) = Some(LanState { binding, closer });
@@ -620,18 +960,41 @@ impl Network {
     /// Returns whether a dial was started. A private-routed node dials nothing: the public DHT is
     /// not its route, and the private overlay that would carry the dial is not in this build.
     pub fn join_peer(&self, key_hex: &str, lan_first: bool) -> bool {
-        if !self.can_announce() {
-            return false;
-        }
         let Some(key) = parse_hex32(key_hex) else {
             return false;
         };
         if key == self.peer_key() {
             return false;
         }
-        if lan_first && self.has_lan() {
-            return false;
+        if !self.can_announce() {
+            // `swarm.joinPeer`: the private overlay dials through the guards, never the DHT.
+            let private = { lock(&self.private).clone() };
+            let Some(private) = private else {
+                return false;
+            };
+            private.join_peer(key);
+            return true;
         }
+        if lan_first && self.has_lan() {
+            // The LAN dial is already in flight. JS joins through the DHT 1.5 s later rather
+            // than not at all: a LAN path that never lands must not cost the peer.
+            let weak = self.weak.clone();
+            tokio::spawn(async move {
+                tokio::time::sleep(Duration::from_millis(1500)).await;
+                if let Some(network) = weak.upgrade()
+                    && !network.closing.load(Ordering::Acquire)
+                {
+                    network.dial_public(key);
+                }
+            });
+            return true;
+        }
+        self.dial_public(key);
+        true
+    }
+
+    /// The DHT half of `joinPeer`: connect by key and wire the stream into replication.
+    fn dial_public(&self, key: [u8; 32]) {
         let weak = self.weak.clone();
         let key_pair = self.swarm.key_pair().clone();
         let dht = self.dht.clone();
@@ -652,10 +1015,21 @@ impl Network {
                 return;
             }
             let socket = connection.socket.clone();
-            let mux = Mux::from_secret_stream(connection.stream);
-            network.wire(mux, key, false, Box::new(|| {}), vec![Box::new(socket)]);
+            let bytes = WireBytes {
+                rx: Arc::clone(&network.wire_rx),
+                tx: Arc::clone(&network.wire_tx),
+            };
+            let mux = metered_mux(connection.stream, &bytes);
+            network.wire(
+                mux,
+                key,
+                false,
+                false,
+                Box::new(|| {}),
+                vec![Box::new(socket)],
+                None,
+            );
         });
-        true
     }
 
     pub fn inflight_range(&self) -> Option<(u32, u32)> {
@@ -675,22 +1049,53 @@ impl Network {
         *lock(&self.up_bps)
     }
 
+    /// The LAN route's bytes: every connection it ever carried, closed ones included.
+    fn lan_totals(&self) -> (u64, u64) {
+        let mut rx = self.lan_closed_rx.load(Ordering::Relaxed);
+        let mut tx = self.lan_closed_tx.load(Ordering::Relaxed);
+        for bytes in lock(&self.lan_wires).iter() {
+            rx += bytes.rx();
+            tx += bytes.tx();
+        }
+        (rx, tx)
+    }
+
+    /// A replaced LAN binding's counters join the route's closed totals.
+    fn fold_lan_bytes(&self) {
+        let (rx, tx) = self.lan_totals();
+        self.lan_closed_rx.store(rx, Ordering::Relaxed);
+        self.lan_closed_tx.store(tx, Ordering::Relaxed);
+        lock(&self.lan_wires).clear();
+    }
+
     /// `sample()`: whole-node totals and rates (rates move at most every 500 ms).
     ///
-    /// The peeroxide connection exposes no per-connection byte counters, so the DHT's wire
-    /// counters are attributed to the route that carries traffic; the LAN route counts its peers.
-    /// The DHT here is the public swarm: a private-routed node has no overlay connection to carry
-    /// its bytes, so nothing is ever labelled private.
+    /// Bytes are counted where they cross the mux ([`metered_mux`]): peeroxide exposes no
+    /// per-connection counters and its DHT counters never see established UDX streams. The
+    /// swarm's connections are the public route; a private-routed node has no overlay
+    /// connection to carry its bytes, so nothing is ever labelled private, and a LAN binding
+    /// hands over its connection's counters, so the LAN route counts exactly its peers.
     pub fn sample(&self) -> Sample {
         let now = now_ms();
         let prev_at = self.prev_at.load(Ordering::Relaxed);
         let dt = now.saturating_sub(prev_at);
-        let (rx, tx) = self.dht.wire_stats();
+        let public_rx = self.wire_rx.load(Ordering::Relaxed);
+        let public_tx = self.wire_tx.load(Ordering::Relaxed);
+        let (lan_rx, lan_tx) = self.lan_totals();
+        let private_rx = self.private_rx.load(Ordering::Relaxed);
+        let private_tx = self.private_tx.load(Ordering::Relaxed);
+        let private_peers = self.private_peers.load(Ordering::Relaxed);
+        let (rx, tx) = (
+            public_rx + lan_rx + private_rx,
+            public_tx + lan_tx + private_tx,
+        );
         let peers = self.connection_count();
         let mut public = self.public;
-        let lan = self.lan_bucket;
-        public.closed_rx = rx;
-        public.closed_tx = tx;
+        let mut lan = self.lan_bucket;
+        public.closed_rx = public_rx;
+        public.closed_tx = public_tx;
+        lan.closed_rx = lan_rx;
+        lan.closed_tx = lan_tx;
         let prev_rx = self.prev_rx.load(Ordering::Relaxed);
         let prev_tx = self.prev_tx.load(Ordering::Relaxed);
         if dt >= 500 {
@@ -702,14 +1107,26 @@ impl Network {
                 .max(0.0);
             public.down_bps = self.down_bps();
             public.up_bps = self.up_bps();
+            let lan_prev_rx = self.lan_prev_rx.load(Ordering::Relaxed);
+            let lan_prev_tx = self.lan_prev_tx.load(Ordering::Relaxed);
+            lan.down_bps = ((lan_rx.saturating_sub(lan_prev_rx)) as f64 * 1000.0 / dt as f64)
+                .round()
+                .max(0.0);
+            lan.up_bps = ((lan_tx.saturating_sub(lan_prev_tx)) as f64 * 1000.0 / dt as f64)
+                .round()
+                .max(0.0);
+            self.lan_prev_rx.store(lan_rx, Ordering::Relaxed);
+            self.lan_prev_tx.store(lan_tx, Ordering::Relaxed);
             self.prev_rx.store(rx, Ordering::Relaxed);
             self.prev_tx.store(tx, Ordering::Relaxed);
             self.prev_at.store(now, Ordering::Relaxed);
         }
-        let public_route = public.route(peers, public.closed_rx, public.closed_tx);
-        // No private overlay: the private route carries nothing.
-        let private_route = Bucket::default().route(0, 0, 0);
-        let lan_route = lan.route(self.lan_connection_count(), lan.closed_rx, lan.closed_tx);
+        let lan_peers = self.lan_connection_count();
+        let public_peers = peers.saturating_sub(lan_peers + private_peers);
+        let public_route = public.route(public_peers, public.closed_rx, public.closed_tx);
+        // The private overlay's own route; nothing when it never started.
+        let private_route = Bucket::default().route(private_peers, private_rx, private_tx);
+        let lan_route = lan.route(lan_peers, lan.closed_rx, lan.closed_tx);
         Sample {
             routes: Routes {
                 private: private_route,
@@ -737,6 +1154,10 @@ impl Network {
         if let Some(state) = lan {
             (state.closer)();
             state.binding.destroy().await;
+        }
+        let private = { lock(&self.private).take() };
+        if let Some(private) = private {
+            private.destroy().await;
         }
         let _ = self.swarm.destroy().await;
     }
@@ -790,14 +1211,58 @@ impl super::api::Swarm for NetworkSwarm {
         for connection in self.network.connections() {
             connection.close();
         }
+        let private = { lock(&self.network.private).clone() };
+        if let Some(private) = private {
+            private.suspend().await;
+        }
         Ok(())
     }
 
     async fn resume(&self) -> Result<(), Self::Error> {
+        let private = { lock(&self.network.private).clone() };
+        if let Some(private) = private {
+            private.resume().await;
+        }
         Ok(())
     }
 
     fn on_update(&self, _callback: Arc<dyn Fn() + Send + Sync>) -> Box<dyn Fn() + Send + Sync> {
         Box::new(|| {})
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The app sends no bootstrap (the normal case): an empty list must reach the public DHT.
+    #[test]
+    fn empty_bootstrap_means_the_public_network() {
+        let public: Vec<String> = peeroxide_dht::hyperdht::DEFAULT_BOOTSTRAP
+            .iter()
+            .map(|node| (*node).to_owned())
+            .collect();
+        assert_eq!(resolve_bootstrap(Vec::new()), public);
+        assert_eq!(bootstrap_list(None), Vec::<String>::new());
+        assert_eq!(
+            resolve_bootstrap(bootstrap_list(Some(&serde_json::json!([])))),
+            public
+        );
+        assert_eq!(
+            resolve_bootstrap(bootstrap_list(Some(&serde_json::json!(null)))),
+            public
+        );
+    }
+
+    #[test]
+    fn an_explicit_bootstrap_is_kept() {
+        let given = vec!["127.0.0.1:9".to_owned()];
+        assert_eq!(resolve_bootstrap(given.clone()), given);
+        assert_eq!(
+            resolve_bootstrap(bootstrap_list(Some(&serde_json::json!([
+                { "host": "127.0.0.1", "port": 9 }
+            ])))),
+            given
+        );
     }
 }

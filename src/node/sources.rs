@@ -14,6 +14,7 @@ use std::time::Duration;
 use autobee::Autobee;
 use autobee::types::Key;
 use corestore::Corestore;
+use protomux_wakeup::WakeupSwarm;
 use serde_json::{Value, json};
 
 use super::api::{DiscoveredSource, Removed, Source, SourceSpec};
@@ -146,6 +147,9 @@ impl SourceRecord {
 /// What the pool needs from the node.
 pub struct SourcesDeps {
     pub store: Corestore,
+    /// The node's wakeup swarm, shared with the primary channel: one pairing
+    /// owner per connection (`channel.js` passes `ctx.channel.wakeup`).
+    pub wakeup: Arc<WakeupSwarm>,
     pub closing: Arc<AtomicBool>,
     pub update: Arc<dyn Fn() + Send + Sync>,
     pub join_topic: Arc<dyn Fn(&str) + Send + Sync>,
@@ -230,13 +234,16 @@ impl Sources {
             record.set_alias(&alias);
         }
         let _ = wake;
+        // The guard from the `entries` read must end before `hydrated()` takes the same lock: a
+        // temporary inside the struct literal lives to the end of the tail expression.
+        let entries = lock(&record.cache).entries.len() as u64;
         Some(Source {
             key: key.clone(),
             kind: "channel".to_owned(),
             alias: record.alias(),
             primary: false,
             writable: false,
-            entries: Some(lock(&record.cache).entries.len() as u64),
+            entries: Some(entries),
             active: Some(record.active()),
             hydrated: Some(record.hydrated()),
         })
@@ -341,9 +348,14 @@ impl Sources {
         let primary = parse_hex32(&record.key)?;
         let namespace = self.deps.store.namespace(format!("channel:{}", record.key));
         let apply = (self.deps.make_apply)(&record.key);
-        let bee = Autobee::open(&namespace, Some(primary), Arc::new(HandlersWrap(apply)))
-            .await
-            .ok()?;
+        let bee = Autobee::open_with_wakeup(
+            &namespace,
+            Some(primary),
+            Arc::new(HandlersWrap(apply)),
+            self.deps.wakeup.clone(),
+        )
+        .await
+        .ok()?;
         if self.deps.closing.load(Ordering::Acquire) {
             let _ = bee.close().await;
             return None;

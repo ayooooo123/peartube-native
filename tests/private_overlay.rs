@@ -25,8 +25,8 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
 use tokio::sync::{mpsc, watch};
 
 use peartube_native::private_overlay::dht::{
-    AcceptFn, Connection, ConnectionHandler, Dht, MutableRecord, NoiseConnection, NoiseOpened,
-    PendingNoise, RawStream, Server,
+    AcceptFn, Connection, ConnectionHandler, Dht, LengthFrames, MessageDuplex, MessageRead,
+    MessageWrite, MutableRecord, NoiseConnection, NoiseOpened, PendingNoise, RawStream, Server,
 };
 use peartube_native::private_overlay::swarm::RoutingState;
 use peartube_native::private_overlay::{
@@ -923,10 +923,11 @@ mod fake {
                         Ok(NoiseOpened {
                             remote_public_key: public_key,
                             is_initiator: initiator,
-                            stream: Box::new(NoisePipe {
+                            handshake_hash: None,
+                            stream: Box::new(LengthFrames::new(NoisePipe {
                                 pipe,
                                 closed: pipe_closed,
-                            }),
+                            })),
                         })
                     }
                     _ => Err(peartube_native::private_overlay::Error::dht("noise failed")),
@@ -1222,16 +1223,54 @@ fn guard_options(seed: u8) -> GuardOptions {
     }
 }
 
+/// A taken stream's empty stand-in, so a `NoiseConnection` can be read in a retry loop.
+struct ClosedStream;
+
+impl MessageDuplex for ClosedStream {
+    fn split(self: Box<Self>) -> (Box<dyn MessageRead>, Box<dyn MessageWrite>) {
+        (Box::new(ClosedRead), Box::new(ClosedWrite))
+    }
+}
+
+struct ClosedRead;
+
+impl MessageRead for ClosedRead {
+    fn read_message<'a>(&'a mut self) -> BoxFuture<'a, Result<Option<bytes::Bytes>, Error>> {
+        Box::pin(async { Ok(None) })
+    }
+}
+
+struct ClosedWrite;
+
+impl MessageWrite for ClosedWrite {
+    fn write_message<'a>(&'a mut self, _message: &'a [u8]) -> BoxFuture<'a, Result<(), Error>> {
+        Box::pin(async { Err(Error::Closed("stream closed")) })
+    }
+
+    fn shutdown(&mut self) -> BoxFuture<'_, ()> {
+        Box::pin(async {})
+    }
+}
+
 /// One source request each way over the rendezvousing stream.
 async fn exchange(a: &mut NoiseConnection, b: &mut NoiseConnection) -> bool {
+    let (mut a_read, mut a_write) = std::mem::replace(
+        &mut a.stream,
+        Box::new(ClosedStream) as Box<dyn MessageDuplex>,
+    )
+    .split();
+    let (mut b_read, mut b_write) = std::mem::replace(
+        &mut b.stream,
+        Box::new(ClosedStream) as Box<dyn MessageDuplex>,
+    )
+    .split();
     let attempt = async {
-        a.stream.write_all(b"source-request:hello").await.ok()?;
-        b.stream.write_all(b"source-request:world").await.ok()?;
-        let mut from_b = [0u8; 20];
-        let mut from_a = [0u8; 20];
-        a.stream.read_exact(&mut from_b).await.ok()?;
-        b.stream.read_exact(&mut from_a).await.ok()?;
-        (from_b == *b"source-request:world" && from_a == *b"source-request:hello").then_some(())
+        a_write.write_message(b"source-request:hello").await.ok()?;
+        b_write.write_message(b"source-request:world").await.ok()?;
+        let from_b = a_read.read_message().await.ok()??;
+        let from_a = b_read.read_message().await.ok()??;
+        (from_b.as_ref() == b"source-request:world" && from_a.as_ref() == b"source-request:hello")
+            .then_some(())
     };
     tokio::time::timeout(Duration::from_secs(6), attempt)
         .await
@@ -1588,7 +1627,6 @@ mod interop {
     use std::time::Duration;
 
     use serde_json::Value;
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::sync::mpsc;
 
     use peartube_native::private_overlay::dht::{ConnectionHandler, NoiseConnection};
@@ -1611,6 +1649,7 @@ mod interop {
 
     struct JsProcess {
         child: Child,
+        lines: std::io::Lines<std::io::BufReader<std::process::ChildStdout>>,
     }
 
     impl Drop for JsProcess {
@@ -1620,42 +1659,48 @@ mod interop {
         }
     }
 
+    impl JsProcess {
+        fn next_line(&mut self) -> String {
+            self.lines
+                .next()
+                .expect("harness printed nothing")
+                .expect("harness line")
+        }
+    }
+
     fn spawn_js(mode: &str) -> std::io::Result<JsProcess> {
+        let mut child = Command::new("node")
+            .arg(INTEROP)
+            .arg(mode)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::inherit())
+            .spawn()?;
+        let stdout = child.stdout.take().expect("stdout");
         Ok(JsProcess {
-            child: Command::new("node")
-                .arg(INTEROP)
-                .arg(mode)
-                .stdout(Stdio::piped())
-                .stderr(Stdio::inherit())
-                .spawn()?,
+            child,
+            lines: BufRead::lines(std::io::BufReader::new(stdout)),
         })
     }
 
+    /// One message off the Noise stream, newline-trimmed: the JS side writes one line per
+    /// message and reads the same, so a message is a line.
     async fn read_line(
-        stream: &mut Box<dyn peartube_native::private_overlay::dht::Duplex>,
+        stream: &mut Box<dyn peartube_native::private_overlay::dht::MessageRead>,
     ) -> String {
-        let mut line = Vec::new();
-        let mut byte = [0u8; 1];
-        loop {
-            if stream.read_exact(&mut byte).await.is_err() {
-                break;
-            }
-            if byte[0] == b'\n' {
-                break;
-            }
-            line.push(byte[0]);
+        match stream.read_message().await {
+            Ok(Some(message)) => String::from_utf8_lossy(&message)
+                .trim_end_matches('\n')
+                .to_owned(),
+            _ => String::new(),
         }
-        String::from_utf8_lossy(&line).into_owned()
     }
 
     /// Real `src/private-overlay.js` on one side (node + `hyperdht/testnet`), this port over the
     /// peeroxide implementation on the other. Both sides complete the guard/rendezvous handshake
     /// and exchange one source request each way.
     ///
-    /// Needs the `peeroxide-dht` feature and the L4 fork branch. Until that lands it fails on the
-    /// first missing capability with that capability named.
+    /// Needs node and the app checkout.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    #[ignore = "needs node, the app checkout and the peeroxide L4 branch"]
     async fn js_interop_over_peeroxide() {
         if !has_app() {
             eprintln!("skipped: set PEARTUBE_APP to the app checkout");
@@ -1663,10 +1708,7 @@ mod interop {
         }
         let mut process = spawn_js("endpoint").expect("node");
         let ready = {
-            let child = &mut process.child;
-            let stdout = child.stdout.take().expect("stdout");
-            let mut lines = BufRead::lines(std::io::BufReader::new(stdout));
-            let line = lines.next().expect("ready").expect("read");
+            let line = process.next_line();
             serde_json::from_str::<Value>(line.trim_start_matches("READY ")).expect("ready json")
         };
         let bootstrap: Vec<String> = ready["bootstrap"]
@@ -1726,27 +1768,32 @@ mod interop {
             .await
             .expect("overlay connection")
             .expect("connection channel");
-        let mut stream = connection.stream;
+        let (mut read, mut write) = connection.stream.split();
 
-        let js_request = tokio::time::timeout(Duration::from_secs(30), read_line(&mut stream))
+        let js_request = tokio::time::timeout(Duration::from_secs(30), read_line(&mut read))
             .await
             .expect("js request");
         assert!(
             js_request.contains("source-request"),
             "js said: {js_request}"
         );
-        stream
-            .write_all(b"{\"type\":\"source-request-ack\",\"from\":\"rust\"}\n")
+        write
+            .write_message(b"{\"type\":\"source-request-ack\",\"from\":\"rust\"}\n")
             .await
             .expect("ack");
-        stream
-            .write_all(b"{\"type\":\"source-request\",\"from\":\"rust\"}\n")
+        write
+            .write_message(b"{\"type\":\"source-request\",\"from\":\"rust\"}\n")
             .await
             .expect("ask");
-        let js_ack = tokio::time::timeout(Duration::from_secs(30), read_line(&mut stream))
-            .await
-            .expect("js ack");
+        let js_ack = tokio::time::timeout(Duration::from_secs(30), read_line(&mut read)).await;
+        let result = process.next_line();
+        eprintln!("js: {result}");
+        let js_ack = js_ack.expect("js ack");
         assert!(js_ack.contains("source-request-ack"), "js said: {js_ack}");
+        assert!(
+            result.contains("\"answeredRust\":true") && result.contains("\"acknowledged\":true"),
+            "js: {result}"
+        );
         swarm.destroy().await;
     }
 }

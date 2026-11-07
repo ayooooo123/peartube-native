@@ -32,9 +32,10 @@ Facts a reader of the Rust code needs but cannot see there:
   recover from dropped packets. The Rust port restarts `mdns-sd`'s query for the type instead, which
   re-asks and re-emits cached records.
 - Refcounting: `BonjourAdapter` keeps a daemon open while any advertisement or browse is open, and
-  shuts it down when the last one stops. The app has one socket per interface for the whole process
-  (`interfaceAdapter(host)`); one `mdns-sd` daemon covers every interface, so `process_adapter` is a
-  single process-wide adapter instead of a per-host map.
+  shuts it down when the last one stops. The adapter itself is **per `LanDiscovery`**
+  (`BonjourAdapter::new()` in `LanDiscovery::open`), not process-wide: `mdns-sd` never reports a
+  daemon's own registrations to its own browse, so one shared daemon would hide two nodes in one
+  process from each other. The app never hits this because each of its nodes is its own process.
 - `lanAddress`: first private IPv4 whose interface starts with `wl`, else `en`/`eth`, skipping
   internal and non-RFC1918 addresses, so VPN/cellular tunnels never win.
 
@@ -111,6 +112,21 @@ streams arrive on the swarm's connection channel, and outbound dials go through
 `swarm.dht().connect_with_nodes(..., &[Ipv4Peer { host, port }], ..)` with `establish`d secret
 streams wrapped in a `protomux::Mux` and handed to `LanBinding::on_connection`.
 
+`Network::join_overlay_topic` and `join_content` register their LAN tokens synchronously,
+independently of the asynchronous public swarm join. An unreachable public bootstrap must not
+delay same-LAN discovery; `network_private::public_routing_still_joins_its_topics` checks this
+without yielding to the public join task, and `lan_interop` checks the publisher/follower topic.
+
+The isolated DHT binds the configured host, as JS does; a loopback host must not silently become
+a wildcard listener. The JS LAN interop fixture uses the worker's `interfaceAdapter(host)` so
+loopback multicast stays on loopback too. A macOS firewall denial for unsigned test executables
+on a real interface is an environment block, not a reason to change firewall policy.
+
+Advertisement updates serialize the token snapshot, publish and replacement as one operation,
+matching JS's `_adQueue`; otherwise an old empty-token publication can overtake a topic update.
+`advertisement_updates_cannot_overtake_each_other` blocks the first host publication and verifies
+the later generation cannot pass it.
+
 Deviations from `lan.js`:
 
 - no `port`/`port + 1` socket pairing: peeroxide binds one ephemeral socket pair per DHT; the LAN
@@ -118,3 +134,13 @@ Deviations from `lan.js`:
 - no `tuneUdxSocket` buffer tuning: libudx's socket buffers stay at the platform defaults.
 - a handshake-accepted connection carries no topic list; the accept gate reads the tokens the mDNS
   bookkeeping recorded, which is what `_onIncoming` consults as well.
+- both ends may dial each other at once (`dialDirect` on the receiver, the smaller key on mDNS);
+  the connection the smaller key initiated is canonical on both sides and the other is destroyed,
+  which the other end sees as a close. This leans on three stack facts the JS stack gets for free:
+  protomux-rs holds a remote open that lands before `pair()`/`open_channel` instead of rejecting it
+  (JS attaches its handlers before the first frame is parsed); peeroxide's server- and client-side
+  UDX stream ids come from one sequence (libudx keys a socket's streams by local id alone); and a
+  `SwarmConnection`'s `slot` is kept with its stream, so a closed connection frees the peer's entry
+  and its redial gets a stream instead of a reply nobody answers.
+- a Rust publisher answers a wakeup lookup with its drained, attached writers (JS
+  `_getWakeupWriters`); a Rust follower starts downloading the bootstrap core from that announce.

@@ -46,9 +46,7 @@ where
 
 /// One event as the line a JSON host reads.
 pub(crate) fn event_line(event: &AppEvent) -> Option<String> {
-    serde_json::to_string(event)
-        .ok()
-        .map(|line| line + "\n")
+    serde_json::to_string(event).ok().map(|line| line + "\n")
 }
 
 async fn call<N, F, C, L, A, K>(

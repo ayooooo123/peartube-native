@@ -88,4 +88,16 @@ impl Storage {
     pub async fn close(&self) {
         self.store.close().await;
     }
+
+    /// `coreStorage.flush()`: memtable to disk, so the size `clearCache` measures is real.
+    pub fn flush(&self) {
+        let _ = self.store.store().flush();
+    }
+
+    /// `coreStorage.compact(options)`: rewrite the SSTs and `.blob` files now, so bytes
+    /// tombstoned by a cache clear leave the disk. Blocks; `relocate_blobs` is JS
+    /// `blobGarbageCollectionPolicy: 1` (a full wipe with no live blobs left), else policy 2.
+    pub fn compact(&self, relocate_blobs: bool) {
+        let _ = self.store.store().compact(relocate_blobs);
+    }
 }

@@ -106,7 +106,8 @@ try {
       done = runExchange(enc, 'js')
       done.then(state => {
         emit('RESULT', state)
-        finish(0)
+        // Stay up long enough for the peer to read the ack we just wrote.
+        setTimeout(() => finish(0), 2000)
       }).catch(error => {
         emit('RESULT', { error: error.message })
         finish(1)

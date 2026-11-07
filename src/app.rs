@@ -860,7 +860,10 @@ where
         };
         app_settings::normalize_app_settings(
             &request.settings,
-            request.require_channel.as_ref().is_some_and(app_settings::js_truthy),
+            request
+                .require_channel
+                .as_ref()
+                .is_some_and(app_settings::js_truthy),
             previous.as_ref(),
         )
         .map_err(|error| error.to_string())
@@ -884,16 +887,8 @@ where
         let options = crate::node::api::SearchOptions {
             source: Some(request.source),
             query: Some(request.query),
-            limit: Some(
-                request
-                    .limit
-                    .unwrap_or_else(|| Number::from(0)),
-            ),
-            offset: Some(
-                request
-                    .offset
-                    .unwrap_or_else(|| Number::from(0)),
-            ),
+            limit: Some(request.limit.unwrap_or_else(|| Number::from(0))),
+            offset: Some(request.offset.unwrap_or_else(|| Number::from(0))),
         };
         let entries = node
             .search(request.id.as_deref(), options)
@@ -934,7 +929,9 @@ where
         if let Some(entry) = &entry {
             node.warm(entry).await.map_err(|error| error.to_string())?;
         }
-        Ok(OkResult { ok: entry.is_some() })
+        Ok(OkResult {
+            ok: entry.is_some(),
+        })
     }
 
     /// `addSource`.
@@ -990,9 +987,14 @@ where
     /// `identity`.
     pub async fn identity(&mut self, request: IdentityRequest) -> Result<Identity, String> {
         let node = self.current()?;
-        node.identity(request.reveal_mnemonic.as_ref().is_some_and(app_settings::js_truthy))
-            .await
-            .map_err(|error| error.to_string())
+        node.identity(
+            request
+                .reveal_mnemonic
+                .as_ref()
+                .is_some_and(app_settings::js_truthy),
+        )
+        .await
+        .map_err(|error| error.to_string())
     }
 
     /// `revokeWriter`.
@@ -1001,7 +1003,10 @@ where
         let revoke = node
             .revoke_writer(
                 &request.writer,
-                request.purge_entries.as_ref().is_some_and(app_settings::js_truthy),
+                request
+                    .purge_entries
+                    .as_ref()
+                    .is_some_and(app_settings::js_truthy),
             )
             .await
             .map_err(|error| error.to_string())?;
@@ -1012,13 +1017,19 @@ where
     /// `rotateEpoch`.
     pub async fn rotate_epoch(&mut self) -> Result<Epoch, String> {
         let node = self.current()?;
-        let epoch = node.rotate_epoch().await.map_err(|error| error.to_string())?;
+        let epoch = node
+            .rotate_epoch()
+            .await
+            .map_err(|error| error.to_string())?;
         self.update();
         Ok(epoch)
     }
 
     /// `clearCache`: one entry's cache, or every entry's when no key is given.
-    pub async fn clear_cache(&mut self, request: ClearCacheRequest) -> Result<CacheCleared, String> {
+    pub async fn clear_cache(
+        &mut self,
+        request: ClearCacheRequest,
+    ) -> Result<CacheCleared, String> {
         let node = self.current()?;
         let cleared = node
             .clear_cache(request.key.as_deref(), None)
@@ -1031,7 +1042,9 @@ where
     /// `setCacheMax`: the playback cache ceiling, applied without reopening the node.
     pub async fn set_cache_max(&mut self, request: SetCacheMaxRequest) -> Result<CacheMax, String> {
         let node = self.current()?;
-        let cache_max_bytes = node.set_cache_max_bytes(request.max_bytes.unwrap_or(0.0)).await;
+        let cache_max_bytes = node
+            .set_cache_max_bytes(request.max_bytes.unwrap_or(0.0))
+            .await;
         self.update();
         Ok(CacheMax { cache_max_bytes })
     }
@@ -1096,10 +1109,7 @@ where
     }
 
     /// `receiverStart`: this device becomes the TV a sender pairs with.
-    pub async fn receiver_start(
-        &mut self,
-        request: ReceiverStartRequest,
-    ) -> Result<Value, String> {
+    pub async fn receiver_start(&mut self, request: ReceiverStartRequest) -> Result<Value, String> {
         let next_peer = request
             .peer_storage
             .clone()
@@ -1130,7 +1140,10 @@ where
         let events = self.events.clone();
         let options = ReceiverStart {
             name: request.name.unwrap_or_else(|| "PearTube TV".to_owned()),
-            open_auth: request.open_auth.as_ref().is_some_and(app_settings::js_truthy),
+            open_auth: request
+                .open_auth
+                .as_ref()
+                .is_some_and(app_settings::js_truthy),
             peer_storage: self.cast_peer_storage.clone(),
         };
         cast.start_local_receiver(
@@ -1311,7 +1324,10 @@ fn with_download(
         }
         _ => None,
     };
-    Ok(SearchEntry { entry, download_url })
+    Ok(SearchEntry {
+        entry,
+        download_url,
+    })
 }
 
 /// `encodeURIComponent()`: the unreserved set plus the characters it leaves alone.
@@ -1370,8 +1386,7 @@ pub type NativeApp = App<
 >;
 
 type Call = Box<
-    dyn for<'a> FnOnce(&'a mut NativeApp) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>>
-        + Send,
+    dyn for<'a> FnOnce(&'a mut NativeApp) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> + Send,
 >;
 type Subscriber = Box<dyn Fn(&AppEvent) -> bool + Send + Sync>;
 
@@ -1468,10 +1483,11 @@ impl AppHost {
     pub async fn call<T: Send + 'static>(
         &self,
         task: impl for<'a> FnOnce(
-                &'a mut NativeApp,
-            ) -> Pin<Box<dyn Future<Output = Result<T, String>> + Send + 'a>>
-            + Send
-            + 'static,
+            &'a mut NativeApp,
+        )
+            -> Pin<Box<dyn Future<Output = Result<T, String>> + Send + 'a>>
+        + Send
+        + 'static,
     ) -> Result<T, String> {
         let (reply, answered) = tokio::sync::oneshot::channel();
         let call: Call = Box::new(move |app| {

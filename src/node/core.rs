@@ -13,6 +13,7 @@ use std::sync::{Arc, Mutex, MutexGuard, OnceLock, Weak};
 use autobee::Autobee;
 use corestore::Corestore;
 use hypercore::core::Session;
+use protomux_wakeup::WakeupSwarm;
 use serde_json::{Map, Value, json};
 use tokio::io::AsyncRead;
 use tokio::sync::watch;
@@ -29,6 +30,7 @@ use super::channel::{AppendAuthority, Channel, ChannelError, Hooks};
 use super::network::{LanBinding, Network, NetworkSwarm};
 use super::sources::{Sources, SourcesDeps};
 use super::storage::Storage;
+use crate::acquire::JobSource;
 use crate::app_settings::{js_string, js_truthy};
 use crate::identity::{Channel as IdentityChannel, Identity as IdentityStore, IdentityContext};
 use crate::protocol::{hex_encode, is_hex64};
@@ -119,10 +121,19 @@ impl From<crate::protocol::UriError> for NodeError {
     }
 }
 
-/// A publish input: bytes already in memory, or a file read from disk.
+/// The acquirer's failures reach the node as its own error, as they do through the app's `put`.
+impl From<crate::acquire::AcquireError> for NodeError {
+    fn from(error: crate::acquire::AcquireError) -> Self {
+        Self(error.message())
+    }
+}
+
+/// A publish input: bytes already in memory, a file read from disk, or a resumable source the
+/// acquirer and the mirror hand over (`PutStreamFactory`).
 pub struct NodeSource {
     bytes: Option<Vec<u8>>,
     file: Option<PathBuf>,
+    stream: Option<JobSource<NodeError>>,
     position: u64,
 }
 
@@ -131,6 +142,7 @@ impl NodeSource {
         Self {
             bytes: Some(bytes.into()),
             file: None,
+            stream: None,
             position: 0,
         }
     }
@@ -139,6 +151,17 @@ impl NodeSource {
         Self {
             bytes: None,
             file: Some(path.into()),
+            stream: None,
+            position: 0,
+        }
+    }
+
+    /// A source that opens at the offset the core already holds, so a reconnect resumes.
+    pub fn resumable(stream: JobSource<NodeError>) -> Self {
+        Self {
+            bytes: None,
+            file: None,
+            stream: Some(stream),
             position: 0,
         }
     }
@@ -152,6 +175,11 @@ impl PutSource for NodeSource {
         offset: u64,
         meta: &mut BlobPutMeta,
     ) -> Result<Pin<Box<dyn AsyncRead + Send>>, NodeError> {
+        if let Some(stream) = &mut self.stream {
+            let reader = stream.open(offset, meta).await?;
+            let boxed: Box<dyn AsyncRead + Send> = reader;
+            return Ok(Box::into_pin(boxed));
+        }
         let mut cursor = 0u64;
         if let Some(bytes) = &self.bytes {
             cursor = offset.min(bytes.len() as u64);
@@ -180,10 +208,30 @@ impl PutSource for NodeSource {
     }
 
     fn on_data(&mut self, bytes: u64) {
+        if let Some(stream) = &mut self.stream {
+            stream.on_data(bytes);
+        }
         self.position = bytes;
     }
 
-    fn on_hash_state(&mut self, _state: &[u8], _bytes: u64) {}
+    fn on_hash_state(&mut self, state: &[u8], bytes: u64) {
+        if let Some(stream) = &mut self.stream {
+            stream.on_hash_state(state, bytes);
+        }
+    }
+}
+
+/// `node.put`'s source factory for this node: what the acquirer and the mirror build a source with.
+pub struct NodeStreams;
+
+impl crate::acquire::PutStreamFactory<CoreNode> for NodeStreams {
+    fn resumable(&self, source: JobSource<NodeError>) -> NodeSource {
+        NodeSource::resumable(source)
+    }
+
+    fn reader(&self, source: JobSource<NodeError>) -> NodeSource {
+        NodeSource::resumable(source)
+    }
 }
 
 /// The channel handle `identity.rs` and the blob host call back into once it exists.
@@ -352,11 +400,21 @@ impl BlobHost for Host {
     }
 
     fn flush(&self) -> super::blobs::SendFuture<'_, ()> {
+        if let Some(shared) = self.0.upgrade() {
+            shared.storage.flush();
+        }
         Box::pin(async {})
     }
 
-    fn compact(&self, _policy: Compact) -> super::blobs::SendFuture<'_, ()> {
-        Box::pin(async {})
+    fn compact(&self, policy: Compact) -> super::blobs::SendFuture<'_, ()> {
+        let shared = self.0.upgrade();
+        // JS: forced blob relocation only for a full wipe with no local blobs left.
+        let relocate = policy.full && !policy.streaming && !policy.has_local_blobs;
+        Box::pin(async move {
+            if let Some(shared) = shared {
+                let _ = tokio::task::spawn_blocking(move || shared.storage.compact(relocate)).await;
+            }
+        })
     }
 }
 
@@ -383,6 +441,9 @@ pub struct Shared {
     pub storage: Storage,
     pub opts: Value,
     pub closing: Arc<AtomicBool>,
+    /// The node's one wakeup swarm, shared by the channel and every followed
+    /// channel: a connection pairs wakeup once, so there can only be one.
+    pub wakeup: Arc<WakeupSwarm>,
     pub channel: OnceLock<Arc<Channel>>,
     pub net: OnceLock<Arc<Network>>,
     pub blobs: OnceLock<Blobs<Arc<Channel>, Arc<Network>, Host>>,
@@ -693,6 +754,8 @@ impl CoreNode {
         if let Some(channel) = self.inner.channel.get() {
             channel.close().await;
         }
+        // Every bee shares this swarm and none of them owns it.
+        self.inner.wakeup.destroy();
         self.inner.storage.close().await;
         Ok(())
     }
@@ -709,11 +772,13 @@ pub async fn create_node(options: Value) -> Result<Arc<CoreNode>, NodeError> {
     let storage = Storage::open(&storage_path, worklet)?;
     let closing = Arc::new(AtomicBool::new(false));
     let handle = ChannelHandle::default();
+    let wakeup = Arc::new(WakeupSwarm::new(|_, _| {}));
 
     let shared: Arc<Shared> = Arc::new_cyclic(|_weak| Shared {
         storage,
         opts: options.clone(),
         closing: closing.clone(),
+        wakeup: wakeup.clone(),
         channel: OnceLock::new(),
         net: OnceLock::new(),
         blobs: OnceLock::new(),
@@ -894,6 +959,7 @@ pub async fn create_node(options: Value) -> Result<Arc<CoreNode>, NodeError> {
         founder,
         apply,
         hooks,
+        wakeup.clone(),
         closing.clone(),
         worklet,
     )
@@ -1017,6 +1083,7 @@ pub async fn create_node(options: Value) -> Result<Arc<CoreNode>, NodeError> {
     let sources = Sources::new(
         Arc::new(SourcesDeps {
             store: shared.storage.store().clone(),
+            wakeup: wakeup.clone(),
             closing: closing.clone(),
             update: {
                 let weak = weak.clone();
@@ -1031,9 +1098,11 @@ pub async fn create_node(options: Value) -> Result<Arc<CoreNode>, NodeError> {
                 Arc::new(move |id: &str| {
                     if let Some(shared) = weak.upgrade()
                         && let Some(net) = shared.net.get()
-                        && let Some(channel) = shared.channel.get()
+                        // `channel:<key>` names the followed source, whose own discovery key is
+                        // the topic `lan.js` joins (`bee.key` / `bee.discoveryKey` in sources.js).
+                        && let Some(key) = id.strip_prefix("channel:").and_then(parse_hex32)
                     {
-                        net.join_overlay_topic(id, channel.key());
+                        net.join_overlay_topic(id, key);
                     }
                 })
             },

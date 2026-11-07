@@ -20,6 +20,7 @@ use corestore::{Corestore, GetOptions as StoreGetOptions};
 use hyperbee::{Bee, RangeOptions};
 use hypercore::core::Session;
 use hypercore::crypto::KeyPair;
+use protomux_wakeup::WakeupSwarm;
 use serde_json::Value;
 
 use super::apply::Apply;
@@ -168,7 +169,8 @@ impl Channel {
     /// Boots the tracker (`new Autobee(chNs, keyOrNull, opts)`).
     ///
     /// `primary` is the channel key resolved before the store opens (the target key, the founder
-    /// key pair's public key, or the stored local core's key).
+    /// key pair's public key, or the stored local core's key). `wakeup` is the node's swarm,
+    /// shared with every followed channel: one pairing owner per connection, as in `channel.js`.
     #[allow(clippy::too_many_arguments)] // the reference's tracker fields, in order
     pub async fn open(
         tracker: Corestore,
@@ -177,6 +179,7 @@ impl Channel {
         founder: Option<KeyPair>,
         apply: Apply,
         hooks: Hooks,
+        wakeup: Arc<WakeupSwarm>,
         closing: Arc<AtomicBool>,
         worklet: bool,
     ) -> Result<Arc<Self>, ChannelError> {
@@ -185,7 +188,7 @@ impl Channel {
             apply,
             key_pair: founder,
         });
-        let auto = Autobee::open(&tracker, target, handlers).await?;
+        let auto = Autobee::open_with_wakeup(&tracker, target, handlers, wakeup).await?;
         let primary_key = hex_encode(&primary);
         Ok(Arc::new(Self {
             auto,
@@ -224,8 +227,10 @@ impl Channel {
         self.auto.key
     }
 
+    /// `channel.writable`: the local writer is granted and not removed (JS `base.writable`), not
+    /// "we hold the bootstrap key" — a granted writer is writable, a stranger never is.
     pub fn writable(&self) -> bool {
-        self.auto.bootstrap.writable()
+        self.auto.writable()
     }
 
     pub fn local_key(&self) -> String {

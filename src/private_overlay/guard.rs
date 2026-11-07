@@ -404,6 +404,7 @@ impl Inner {
             .map_err(|_| Error::Rejected("Guard unreachable"))?;
         let rpc = attach_rpc_channel(&mux, Arc::clone(&conn), None)
             .map_err(|_| Error::Rejected("Guard unreachable"))?;
+        mux.ready();
         rpc.request(op::HELLO, op::HELLO, b"hop", 4000)
             .await
             .map_err(|_| Error::Rejected("Guard unreachable"))?;
@@ -874,6 +875,7 @@ async fn handle_connection(inner: Arc<Inner>, conn: Arc<dyn Connection>) {
             return;
         }
     };
+    mux.ready();
     *session.rpc.lock().unwrap_or_else(|e| e.into_inner()) = Some(Arc::clone(&rpc));
     let inner_closed = Arc::clone(&inner);
     tokio::spawn(async move {

@@ -1,6 +1,5 @@
 //! `privateRouting` must never reach the public DHT or the LAN: the private overlay owns that
-//! discovery, and this build does not ship it, so a private-routed node announces nothing and
-//! reports no private traffic.
+//! discovery. A node whose overlay cannot start announces nothing at all.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -73,7 +72,12 @@ async fn private_routing_announces_nothing_public_or_lan() {
     let lan = Arc::new(SpyLan::default());
     net.set_lan(Some(lan.clone())).await.expect("set lan");
 
-    assert_eq!(net.overlay_topic_count(), 0, "no overlay topic join");
+    // The overlay owns the discovery: the topic is joined there, not on the public swarm.
+    assert_eq!(
+        net.overlay_topic_count(),
+        1,
+        "the overlay joins the channel"
+    );
     assert!(net.content_topics().is_empty(), "no content topic join");
     assert_eq!(lan.joins.load(Ordering::Relaxed), 0, "no LAN topic join");
     assert!(
@@ -82,15 +86,15 @@ async fn private_routing_announces_nothing_public_or_lan() {
     );
     assert!(!net.has_lan());
 
-    // `joinPeer` would dial through the public DHT, which private routing may not use.
+    // `joinPeer` dials through the overlay's guards, never the public DHT.
     assert!(
-        !net.join_peer(&"ab".repeat(32), false),
-        "no public dial for a private-routed peer"
+        net.join_peer(&"ab".repeat(32), false),
+        "the private overlay takes the dial"
     );
     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
     assert_eq!(net.connection_count(), 0, "no public connect happened");
 
-    // Nothing carries private bytes, so nothing may be reported as private.
+    // No peer answered, so nothing carries private bytes.
     tokio::time::sleep(std::time::Duration::from_millis(600)).await;
     let sample = net.sample();
     assert_eq!(sample.routes.private.rx_bytes, 0);
@@ -99,21 +103,27 @@ async fn private_routing_announces_nothing_public_or_lan() {
     net.close().await;
 }
 
-#[tokio::test(flavor = "multi_thread")]
+#[tokio::test]
 async fn public_routing_still_joins_its_topics() {
     let tmp = tempfile::tempdir().unwrap();
     let net = network(&tmp.path().join("public"), false).await;
-    net.join_overlay_topic("channel:test", [7u8; 32]);
-    net.join_content([9u8; 32]);
     let lan = Arc::new(SpyLan::default());
     net.set_lan(Some(lan.clone())).await.expect("set lan");
+    net.join_overlay_topic("channel:test", [7u8; 32]);
+    net.join_content([9u8; 32]);
 
     assert_eq!(net.overlay_topic_count(), 1);
     assert_eq!(net.content_topics().len(), 1);
-    assert!(
-        lan.joins.load(Ordering::Relaxed) >= 2,
-        "both joined topics ride the LAN"
+    assert_eq!(
+        lan.joins.load(Ordering::Relaxed),
+        2,
+        "LAN joins are synchronous, without waiting for public discovery"
     );
+    let replacement = Arc::new(SpyLan::default());
+    net.set_lan(Some(replacement.clone()))
+        .await
+        .expect("replace lan");
+    assert_eq!(replacement.joins.load(Ordering::Relaxed), 2);
     assert!(net.has_lan());
     assert!(
         net.join_peer(&"ab".repeat(32), false),

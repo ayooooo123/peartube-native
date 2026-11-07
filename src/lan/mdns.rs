@@ -10,13 +10,15 @@ use std::collections::HashMap;
 use std::fmt;
 use std::net::{IpAddr, Ipv4Addr};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, LazyLock, Mutex};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use mdns_sd::{
     DaemonEvent, RecvTimeoutError, ResolvedService, ServiceDaemon, ServiceEvent, ServiceInfo,
 };
 use sha2::{Digest, Sha256};
+
+use super::host::{HostAdapter, HostAdvertisement, HostBrowse};
 
 /// Service type the app advertises (`SERVICE_TYPE` in `src/lan.js`).
 pub const SERVICE_TYPE: &str = "hyperdht-mdns";
@@ -458,6 +460,46 @@ impl Drop for BrowseHandle {
     }
 }
 
+/// The Bonjour backend `SelfAddressAdapter` wraps: this host's `mdns-sd` daemon, or the
+/// platform's daemon on a device that denies raw multicast (iOS, see [`super::host`]).
+#[derive(Clone)]
+pub enum Adapter {
+    Daemon(BonjourAdapter),
+    Host(Arc<HostAdapter>),
+}
+
+/// A live advertisement from either backend; dropping it stops it.
+pub enum Advert {
+    Daemon(Advertisement),
+    Host(HostAdvertisement),
+}
+
+impl Advert {
+    /// `svc.stop()`.
+    pub fn stop(&self) {
+        match self {
+            Self::Daemon(advertisement) => advertisement.stop(),
+            Self::Host(advertisement) => advertisement.stop(),
+        }
+    }
+}
+
+/// A live browse from either backend; dropping it stops it.
+pub enum Browse {
+    Daemon(BrowseHandle),
+    Host(HostBrowse),
+}
+
+impl Browse {
+    /// `browser.stop()`.
+    pub fn stop(&self) {
+        match self {
+            Self::Daemon(browse) => browse.stop(),
+            Self::Host(browse) => browse.stop(),
+        }
+    }
+}
+
 #[derive(Clone)]
 struct Sub {
     id: u64,
@@ -781,7 +823,7 @@ fn subscribers(state: &BrowseState) -> Vec<Sub> {
 /// instead of through an mDNS reflector, and re-browses while keeping the shared daemon open.
 #[derive(Clone)]
 pub struct SelfAddressAdapter {
-    inner: BonjourAdapter,
+    inner: Adapter,
     host: Ipv4Addr,
     rebrowse: Option<Duration>,
 }
@@ -789,6 +831,11 @@ pub struct SelfAddressAdapter {
 impl SelfAddressAdapter {
     /// Wrap `inner`, stamping `host` and re-browsing every [`DEFAULT_REBROWSE`].
     pub fn new(inner: BonjourAdapter, host: Ipv4Addr) -> Self {
+        Self::with_adapter(Adapter::Daemon(inner), host)
+    }
+
+    /// Wrap either backend, stamping `host` and re-browsing every [`DEFAULT_REBROWSE`].
+    pub fn with_adapter(inner: Adapter, host: Ipv4Addr) -> Self {
         Self {
             inner,
             host,
@@ -803,7 +850,7 @@ impl SelfAddressAdapter {
         rebrowse: Option<Duration>,
     ) -> Self {
         Self {
-            inner,
+            inner: Adapter::Daemon(inner),
             host,
             rebrowse,
         }
@@ -819,10 +866,15 @@ impl SelfAddressAdapter {
         &self,
         record: &Record,
         on_error: Option<ErrorSink>,
-    ) -> Result<Advertisement, MdnsError> {
+    ) -> Result<Advert, MdnsError> {
         let mut record = record.clone();
         record.txt.push(("h".to_string(), self.host.to_string()));
-        self.inner.advertise(&record, self.host, on_error)
+        match &self.inner {
+            Adapter::Daemon(bonjour) => bonjour
+                .advertise(&record, self.host, on_error)
+                .map(Advert::Daemon),
+            Adapter::Host(host) => host.advertise(&record, on_error).map(Advert::Host),
+        }
     }
 
     /// Browse, preferring a peer's stamped `h` over whatever address mDNS resolved.
@@ -831,7 +883,7 @@ impl SelfAddressAdapter {
         on_up: ServiceSink,
         on_down: Option<ServiceSink>,
         on_error: Option<ErrorSink>,
-    ) -> Result<BrowseHandle, MdnsError> {
+    ) -> Result<Browse, MdnsError> {
         let up: ServiceSink = Arc::new(move |service: &DiscoveredService| {
             let mut service = service.clone();
             if let Ok(h) = txt_get(&service.txt, "h").parse::<Ipv4Addr>() {
@@ -839,15 +891,13 @@ impl SelfAddressAdapter {
             }
             on_up(&service);
         });
-        self.inner.browse(self.rebrowse, up, on_down, on_error)
+        match &self.inner {
+            Adapter::Daemon(bonjour) => bonjour
+                .browse(self.rebrowse, up, on_down, on_error)
+                .map(Browse::Daemon),
+            Adapter::Host(host) => host.browse(up, on_down, on_error).map(Browse::Host),
+        }
     }
-}
-
-/// One daemon for the whole process, like `interfaceAdapter()`: LAN discovery, the cast receiver
-/// and the cast controller all share it instead of each parsing every mDNS packet themselves.
-pub fn process_adapter(host: Ipv4Addr) -> SelfAddressAdapter {
-    static SHARED: LazyLock<BonjourAdapter> = LazyLock::new(BonjourAdapter::new);
-    SelfAddressAdapter::new(SHARED.clone(), host)
 }
 
 #[cfg(test)]

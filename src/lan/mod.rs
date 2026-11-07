@@ -1,18 +1,26 @@
 //! LAN discovery, ported from the app's `src/lan.js`.
 //!
-//! [`mdns`] carries the mDNS half (the `hyperdht-mdns` record and the refcounted bonjour adapter).
-//! The isolated LAN HyperDHT half is specified in `docs/port-notes-lan.md`.
+//! [`mdns`] carries the mDNS half (the `hyperdht-mdns` record and the refcounted bonjour adapter);
+//! [`discovery`] is the isolated LAN HyperDHT half (`docs/port-notes-lan.md`); [`host`] is
+//! `ios/bonjour.cjs`, the adapter that asks the platform's Bonjour daemon over the line protocol
+//! on a device that denies raw multicast.
 
+pub mod discovery;
+pub mod host;
 pub mod mdns;
 
 use std::net::{IpAddr, Ipv4Addr};
+use std::sync::Arc;
 
+pub use discovery::{DIAL_AFTER, LanDiscovery, LanError};
+pub use peeroxide::KeyPair;
+
+pub use host::{HostAdapter, HostAdvertisement, HostBrowse};
 pub use mdns::{
-    Advertisement, BonjourAdapter, BrowseHandle, DEFAULT_REBROWSE, DiscoveredService, ErrorSink,
-    MAX_SHARD_TOPICS, MAX_TXT_BYTES, MdnsError, ParsedRecord, Record, SERVICE_DOMAIN,
+    Adapter, Advert, BonjourAdapter, Browse, BrowseHandle, DEFAULT_REBROWSE, DiscoveredService,
+    ErrorSink, MAX_SHARD_TOPICS, MAX_TXT_BYTES, MdnsError, ParsedRecord, Record, SERVICE_DOMAIN,
     SERVICE_PROTOCOL, SERVICE_TYPE, SelfAddressAdapter, ServiceSink, TOPIC_PREFIX, TOPICS_PER_TXT,
-    ad_nonce, build_txt, create_records, create_records_with, parse_record, process_adapter,
-    topic_token,
+    ad_nonce, build_txt, create_records, create_records_with, parse_record, topic_token,
 };
 
 /// One entry of the host's interface table, as `os.networkInterfaces()` reports it.
@@ -47,6 +55,90 @@ pub fn lan_address(ifaces: &[IfaceAddress<'_>]) -> Option<Ipv4Addr> {
 fn is_private(ip: Ipv4Addr) -> bool {
     let [a, b, ..] = ip.octets();
     a == 10 || (a == 192 && b == 168) || (a == 172 && (16..=31).contains(&b))
+}
+
+/// The host's interfaces, as `os.networkInterfaces()` reports them.
+async fn interfaces() -> Result<Vec<(String, IpAddr, bool)>, LanError> {
+    let interfaces = if_addrs::get_if_addrs()
+        .map_err(|error| LanError::new(error.to_string()))?
+        .into_iter()
+        .map(|interface| {
+            (
+                interface.name.clone(),
+                interface.ip(),
+                interface.is_loopback(),
+            )
+        })
+        .collect();
+    Ok(interfaces)
+}
+
+async fn open_lan(
+    node: &crate::node::core::CoreNode,
+    adapter: SelfAddressAdapter,
+) -> Result<Arc<dyn crate::node::network::LanBinding>, LanError> {
+    let key_pair = node.net().key_pair().clone();
+    let lan = LanDiscovery::open_with_adapter(adapter, key_pair).await?;
+    Ok(lan)
+}
+
+/// The default LAN adapter: the host's interfaces and one isolated DHT per address.
+pub struct Factory;
+
+impl crate::node::api::LanFactory<crate::node::core::CoreNode> for Factory {
+    type Error = LanError;
+
+    async fn interfaces(&self) -> Result<Vec<(String, IpAddr, bool)>, LanError> {
+        interfaces().await
+    }
+
+    async fn create(
+        &self,
+        host: Ipv4Addr,
+        node: &crate::node::core::CoreNode,
+    ) -> Result<Arc<dyn crate::node::network::LanBinding>, LanError> {
+        let adapter = SelfAddressAdapter::new(BonjourAdapter::new(), host);
+        open_lan(node, adapter).await
+    }
+
+    async fn host_event(&self, _event: serde_json::Value) {}
+}
+
+/// The same adapter for a platform that denies raw multicast (iOS): Bonjour requests are lines to
+/// the host (`ios/bonjour.cjs`), and its answers arrive through [`crate::node::api::LanFactory::host_event`].
+pub struct HostFactory {
+    adapter: Arc<HostAdapter>,
+}
+
+impl HostFactory {
+    /// `send` writes one request line to the host.
+    pub fn new(send: impl Fn(serde_json::Value) + Send + Sync + 'static) -> Self {
+        Self {
+            adapter: Arc::new(HostAdapter::new(send)),
+        }
+    }
+}
+
+impl crate::node::api::LanFactory<crate::node::core::CoreNode> for HostFactory {
+    type Error = LanError;
+
+    async fn interfaces(&self) -> Result<Vec<(String, IpAddr, bool)>, LanError> {
+        interfaces().await
+    }
+
+    async fn create(
+        &self,
+        host: Ipv4Addr,
+        node: &crate::node::core::CoreNode,
+    ) -> Result<Arc<dyn crate::node::network::LanBinding>, LanError> {
+        let adapter =
+            SelfAddressAdapter::with_adapter(Adapter::Host(Arc::clone(&self.adapter)), host);
+        open_lan(node, adapter).await
+    }
+
+    async fn host_event(&self, event: serde_json::Value) {
+        self.adapter.dispatch(&event);
+    }
 }
 
 #[cfg(test)]
