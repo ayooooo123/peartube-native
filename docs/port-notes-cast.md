@@ -119,3 +119,7 @@ port opens P2P sockets itself; `src/cast/adapters.rs` fills every seam for the r
   or forward `PEER_HANDSHAKE`, and replies with error code 1 instead of reaching the receiver.
 - 29 module unit tests sit next to the code (`cargo test --lib cast`); clippy is clean for
   `src/cast/**`, `tests/cast.rs` and `tests/cast_default.rs`.
+
+## Private routing
+
+Under `privateRouting` the cast Noise RPC has no public DHT: `NodeDht::connect` fails with "Private routing is on: casting over the public DHT is unavailable", and a local receiver starts without a public DHT server. JS behaves the same way, because there `node.dht` is the overlay facade, which has no `connect` or `createServer`. Paired and LAN cast paths are unaffected.

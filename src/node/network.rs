@@ -719,6 +719,12 @@ impl Network {
         &self.dht
     }
 
+    /// The DHT for direct dials by key (cast's Noise RPC). `None` under `privateRouting`, as in JS,
+    /// where `node.dht` is the overlay's facade with no `connect`/`createServer`.
+    pub fn public_dht(&self) -> Option<&HyperDhtHandle> {
+        (!self.private_routing).then_some(&self.dht)
+    }
+
     pub fn swarm(&self) -> &SwarmHandle {
         &self.swarm
     }

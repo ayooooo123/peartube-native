@@ -335,7 +335,9 @@ impl DhtConnect for NodeDht {
         let runtime = Arc::clone(&self.runtime);
         Box::pin(async move {
             let node = node.ok_or_else(|| DhtError::other("P2P node is not started"))?;
-            let handle = node.dht().clone();
+            let handle = node.net().public_dht().cloned().ok_or_else(|| {
+                DhtError::other("Private routing is on: casting over the public DHT is unavailable")
+            })?;
             let key_pair = node.net().key_pair().clone();
             let relays = relay_through
                 .map(|list| relays_of(&list))
@@ -645,9 +647,14 @@ impl CastApi for Service {
         Box::pin(async move {
             let identity = ReceiverIdentity::load_or_create(&self.storage, &options.name)
                 .map_err(|error| error.to_string())?;
-            let dht_server = identity.seed_bytes().map(|seed| {
+            // Under privateRouting the receiver gets no public DHT server, as JS's overlay `dht`
+            // has no `createServer`; its LAN HTTP surface is unchanged.
+            let node = (self.node)();
+            let private = node.as_ref().is_some_and(|node| node.private_routing());
+            let dht_server = identity.seed_bytes().filter(|_| !private).map(|seed| {
                 let key_pair = KeyPair::from_seed(seed);
-                let bootstrap = (self.node)()
+                let bootstrap = node
+                    .as_ref()
                     .map(|node| bootstrap_list(node.bootstrap().as_ref()))
                     .unwrap_or_default();
                 Arc::new(NodeDhtServer::new(key_pair, bootstrap)) as Arc<dyn DhtServer>

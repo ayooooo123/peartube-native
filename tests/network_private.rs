@@ -100,6 +100,10 @@ async fn private_routing_announces_nothing_public_or_lan() {
     assert_eq!(sample.routes.private.rx_bytes, 0);
     assert_eq!(sample.routes.private.tx_bytes, 0);
     assert_eq!(sample.routes.private.peers, 0);
+    assert!(
+        net.public_dht().is_none(),
+        "cast's Noise RPC gets no public DHT to dial or serve on"
+    );
     net.close().await;
 }
 
@@ -129,5 +133,6 @@ async fn public_routing_still_joins_its_topics() {
         net.join_peer(&"ab".repeat(32), false),
         "a public-routed node dials the peer"
     );
+    assert!(net.public_dht().is_some());
     net.close().await;
 }
