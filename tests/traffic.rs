@@ -287,6 +287,7 @@ fn has_bool(value: &Value, key: &str, expected: bool) -> bool {
 }
 
 #[tokio::test]
+#[ignore = "runs the PearTube app's src/traffic.js (checkout at ../peartube or PEARTUBE_APP)"]
 async fn decisions_match_the_app() {
     for scenario in [scenario_a(), scenario_b()] {
         let from_js = js_decisions(&scenario);
