@@ -28,14 +28,14 @@ Facts a reader of the Rust code needs but cannot see there:
 - `h` (only from `selfAddressAdapter`) carries the advertiser's LAN IPv4, so a peer can dial the
   address instead of a resolved/reflected one. The browse wrapper prefers `h` over resolved A
   records when it parses as IPv4.
-- Rebrowse: the app restarts its browse every 10 s (`DEFAULT_REBROWSE`) on the same socket, to
-  recover from dropped packets. The Rust port restarts `mdns-sd`'s query for the type instead, which
-  re-asks and re-emits cached records.
-- Refcounting: `BonjourAdapter` keeps a daemon open while any advertisement or browse is open, and
-  shuts it down when the last one stops. The adapter itself is **per `LanDiscovery`**
-  (`BonjourAdapter::new()` in `LanDiscovery::open`), not process-wide: `mdns-sd` never reports a
-  daemon's own registrations to its own browse, so one shared daemon would hide two nodes in one
-  process from each other. The app never hits this because each of its nodes is its own process.
+- Rebrowse: both browsers send one IPv4 PTR query immediately and every 10 s
+  (`DEFAULT_REBROWSE`), keeping their multicast socket open. Rust parses PTR/SRV/TXT/A from the
+  same response packet, including goodbye PTRs and the sender-address fallback, like
+  `bonjour-service`. It does not run `mdns-sd`'s automatic resolver: stale advertisement
+  generations otherwise trigger repeated SRV/TXT/address queries and thousands of cache timers.
+- Refcounting: `BonjourAdapter` shares its advertiser daemon and browser socket across open users.
+  The browser blocks in `mio::Poll`; closing its last handle wakes it immediately. Each
+  `LanDiscovery` owns its adapter, and the advertiser closes with its last user.
 - `lanAddress`: first private IPv4 whose interface starts with `wl`, else `en`/`eth`, skipping
   internal and non-RFC1918 addresses, so VPN/cellular tunnels never win.
 
@@ -44,11 +44,9 @@ Deviations from the JavaScript, all deliberate:
 | JS | Rust | Why |
 | --- | --- | --- |
 | `bonjour-service` adds an A record for every non-internal interface | the caller passes one LAN IPv4, used as the A record and as the host name (`<ip>.local.`) | `mdns-sd` needs explicit addresses; one address is all a LAN node needs |
-| first IPv4 in `service.addresses` | addresses sorted, then the first | `mdns-sd` resolves into a `HashSet` |
-| `referer.address` fallback in `serviceIPv4` | dropped | `mdns-sd` has no referer; TXT `h` covers the case the fallback was for |
 | `Number()` coercion for `port`/`tc` | decimal parse (`""` → 0) | our own records are plain decimals; exotic numeric strings were never valid |
 | TXT keys looked up by exact case | case-insensitive | RFC 6763 §6.4, and `mdns-sd` resolves/filters them case-insensitively |
-| `browser.on('up')` may fire repeatedly per service | same (resolved events repeat on re-announcement); `down` carries the last resolved service | `ServiceRemoved` only carries the name; the app's `down` also carries the cached service |
+| `browser.on('up')` may fire repeatedly per service | same on complete response packets; `down` carries the last observed service | no DNS cache crawl or hostname lookup is needed for TXT `h` |
 | `bonjour-service` probes before its first announcement (750–1000 ms) | `set_requires_probe(false)` | probing could rename the instance and lose the generation/shard suffix; the nonce already prevents collisions |
 
 ## Isolated LAN DHT half (ported)
@@ -127,9 +125,9 @@ The larger-key fallback now dials after 3000 ms instead of calling `consider` an
 re-arming itself. `larger_key_dials_after_the_fallback_delay` withholds discovery from the smaller
 key and requires the larger key to connect after that delay without multicast.
 
-Cadence comparison (`bonjour-service` installed in the app vs `mdns-sd 0.21.7`): JS browses
-immediately and every 10 s; Rust adds 10–50 ms initial jitter and retries at 1/2/4 s before its
-10 s rebrowse. JS announces after probing, then repeats at 3/9/27 s intervals; Rust announces
+Cadence comparison (`bonjour-service` installed in the app vs `mdns-sd 0.21.7`): both browsers
+send one PTR immediately and every 10 s, over IPv4 only. Memberships are refreshed every 5 s.
+JS announces after probing, then repeats at 3/9/27 s intervals; Rust's advertiser announces
 immediately and again after 1.1–1.15 s. Both use SRV/A TTL 120 s and TXT TTL 4500 s; PTR is
 28800 s in JS, 4500 s in Rust. Neither waits for TTL expiry to browse or dial.
 

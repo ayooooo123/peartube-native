@@ -1036,6 +1036,7 @@ dependencies = [
  "if-addrs 0.13.4",
  "libudx",
  "mdns-sd",
+ "mio",
  "peeroxide",
  "peeroxide-dht",
  "protomux-rs",
@@ -1044,6 +1045,8 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "simple-dns",
+ "socket2",
  "tempfile",
  "tokio",
  "unicode-normalization",
@@ -1489,6 +1492,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "77549399552de45a898a580c1b41d445bf730df867cc44e6c0233bbc4b8329de"
 dependencies = [
  "rand_core 0.6.4",
+]
+
+[[package]]
+name = "simple-dns"
+version = "0.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6f6dbb5d714bdbc8d8f9d0f556c4e914384b794af849092033513f0898245f88"
+dependencies = [
+ "bitflags",
 ]
 
 [[package]]

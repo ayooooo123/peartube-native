@@ -119,9 +119,8 @@ pub struct LanDiscovery {
 impl LanDiscovery {
     /// Opens the isolated DHT, registers its server and starts browsing mDNS.
     pub async fn open(host: Ipv4Addr, key_pair: KeyPair) -> Result<Arc<Self>, LanError> {
-        // One daemon per discovery, as `createLan`'s default `selfAddressAdapter(host)` does:
-        // `mdns-sd` never reports its own registrations back to its own browse, so a shared
-        // daemon would hide two same-process nodes from each other.
+        // Each discovery owns its advertisements and browser; closing it must not stop another
+        // node's discovery when tests host several nodes in one process.
         Self::open_with_adapter(
             SelfAddressAdapter::new(BonjourAdapter::new(), host),
             key_pair,

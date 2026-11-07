@@ -1,24 +1,22 @@
 //! mDNS half of the app's `src/lan.js`: PearTube's `hyperdht-mdns` record, its TXT sharding, the
-//! parser, and the refcounted bonjour adapter, on top of the `mdns-sd` crate.
-//!
-//! `mdns-sd` was chosen over `astro-dnssd`/`libmdns` because it is pure Rust, needs no `unsafe` in
-//! this crate, runs its own daemon thread (no async runtime required), keeps TXT keys in their
-//! original case on the wire, and hands us resolved A records directly, which is what
-//! `bonjour-service` does for the app.
+//! parser, and the refcounted bonjour adapter. `mdns-sd` advertises; the packet-local IPv4
+//! browser follows `bonjour-service` without resolving stale cached advertisement generations.
 
 use std::collections::HashMap;
 use std::fmt;
 use std::net::{IpAddr, Ipv4Addr};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
+#[cfg(test)]
+use std::time::Instant;
 
-use mdns_sd::{
-    DaemonEvent, RecvTimeoutError, ResolvedService, ServiceDaemon, ServiceEvent, ServiceInfo,
-};
+use mdns_sd::{DaemonEvent, IfKind, ServiceDaemon, ServiceInfo};
 use sha2::{Digest, Sha256};
 
 use super::host::{HostAdapter, HostAdvertisement, HostBrowse};
+
+mod browse;
 
 /// Service type the app advertises (`SERVICE_TYPE` in `src/lan.js`).
 pub const SERVICE_TYPE: &str = "hyperdht-mdns";
@@ -338,7 +336,7 @@ pub struct DiscoveredService {
     pub name: String,
     /// SRV port.
     pub port: u16,
-    /// Resolved IPv4 addresses, sorted so [`Self::ipv4`] is stable.
+    /// IPv4 addresses in response order, or the packet sender when no A record was included.
     pub addresses: Vec<Ipv4Addr>,
     /// TXT pairs.
     pub txt: Vec<(String, String)>,
@@ -353,28 +351,6 @@ impl DiscoveredService {
     /// Decode this service, as the app does in `_onService`.
     pub fn parse(&self) -> Option<ParsedRecord> {
         parse_record(&self.name, self.port, &self.txt)
-    }
-}
-
-fn service_from_resolved(resolved: &ResolvedService) -> DiscoveredService {
-    let suffix = format!(".{}", resolved.ty_domain);
-    let name = resolved
-        .fullname
-        .strip_suffix(&suffix)
-        .unwrap_or(&resolved.fullname)
-        .to_string();
-    let mut addresses: Vec<Ipv4Addr> = resolved.get_addresses_v4().into_iter().collect();
-    // `mdns-sd` resolves into a set; sort so the picked address does not depend on hash order.
-    addresses.sort_unstable();
-    DiscoveredService {
-        name,
-        port: resolved.get_port(),
-        addresses,
-        txt: resolved
-            .get_properties()
-            .iter()
-            .map(|p| (p.key().to_string(), p.val_str().to_string()))
-            .collect(),
     }
 }
 
@@ -439,10 +415,7 @@ impl BrowseHandle {
                 .is_some_and(|state| Arc::ptr_eq(state, &self.state));
             drop(browses);
             if ours {
-                // The queued command ends the pump's receiver; the pump then exits on its flag.
-                if let Some(daemon) = self.inner.daemon() {
-                    let _ = daemon.stop_browse(&self.state.ty);
-                }
+                let _ = self.state.wake.wake();
                 self.inner
                     .browses
                     .lock()
@@ -511,10 +484,10 @@ struct BrowseState {
     ty: String,
     stop: AtomicBool,
     subs: Mutex<Vec<Sub>>,
+    wake: Arc<mio::Waker>,
 }
 
-/// Refcounted `mdns-sd` wrapper: overlapping advertisements and browses share one daemon (the app
-/// shares one multicast socket the same way), and the daemon closes with the last user.
+/// Refcounted advertiser and IPv4 browser; both close when their last user stops.
 #[derive(Clone)]
 pub struct BonjourAdapter {
     inner: Arc<Inner>,
@@ -607,10 +580,10 @@ impl BonjourAdapter {
         })
     }
 
-    /// Browse the PearTube service; `rebrowse` restarts the query on that cadence while the daemon
-    /// (and its socket) stays open, like `selfAddressAdapter()` does every 10 s.
+    /// Browse with one PTR query per `rebrowse`, matching `bonjour-service`.
     pub fn browse(
         &self,
+        host: Ipv4Addr,
         rebrowse: Option<Duration>,
         on_up: ServiceSink,
         on_down: Option<ServiceSink>,
@@ -631,13 +604,27 @@ impl BonjourAdapter {
                     Arc::clone(state)
                 }
                 None => {
+                    let listener = match browse::Listener::open(host) {
+                        Ok(listener) => listener,
+                        Err(error) => {
+                            drop(browses);
+                            self.inner.release(on_error.as_ref());
+                            return Err(MdnsError::Daemon(error.to_string()));
+                        }
+                    };
                     let state = Arc::new(BrowseState {
                         ty: SERVICE_DOMAIN.to_string(),
                         stop: AtomicBool::new(false),
                         subs: Mutex::new(vec![sub]),
+                        wake: listener.wake.clone(),
                     });
                     browses.insert(SERVICE_DOMAIN.to_string(), Arc::clone(&state));
-                    spawn_pump(&self.inner, &state, rebrowse);
+                    let inner = self.inner.clone();
+                    let running = state.clone();
+                    std::thread::Builder::new()
+                        .name("mDNS_browser".into())
+                        .spawn(move || listener.run(inner, running, rebrowse))
+                        .expect("spawn mDNS browser");
                     state
                 }
             }
@@ -660,9 +647,14 @@ impl BonjourAdapter {
         if let Some(daemon) = slot.as_ref() {
             return Ok(daemon.clone());
         }
-        let daemon = match ServiceDaemon::new() {
+        let daemon = match ServiceDaemon::new().and_then(|daemon| {
+            // bonjour-service's multicast-dns uses udp4; IPv6 adds no LAN peers.
+            daemon.disable_interface(IfKind::IPv6)?;
+            Ok(daemon)
+        }) {
             Ok(daemon) => daemon,
             Err(err) => {
+                drop(slot);
                 self.inner.release(on_error);
                 return Err(MdnsError::Daemon(err.to_string()));
             }
@@ -683,10 +675,6 @@ impl BonjourAdapter {
 }
 
 impl Inner {
-    fn daemon(&self) -> Option<ServiceDaemon> {
-        self.daemon.lock().expect("lan mdns daemon").clone()
-    }
-
     fn release(&self, on_error: Option<&ErrorSink>) {
         if let Some(sink) = on_error {
             self.remove_error_sink(sink);
@@ -740,81 +728,6 @@ fn host_name(address: Ipv4Addr) -> String {
     format!("{address}.local.")
 }
 
-fn spawn_pump(inner: &Arc<Inner>, state: &Arc<BrowseState>, rebrowse: Option<Duration>) {
-    let inner = Arc::clone(inner);
-    let state = Arc::clone(state);
-    std::thread::spawn(move || pump(inner, state, rebrowse));
-}
-
-/// One browse per service type, fanned out to every subscriber: `mdns-sd` keeps a single querier
-/// per type, so a second `browse()` would silently replace the first one's events.
-fn pump(inner: Arc<Inner>, state: Arc<BrowseState>, rebrowse: Option<Duration>) {
-    // A century of waiting still ends when `stop_browse` disconnects the receiver.
-    const NO_REBROWSE: Duration = Duration::from_secs(3600);
-    let ty = state.ty.clone();
-    let mut known: HashMap<String, DiscoveredService> = HashMap::new();
-    while !state.stop.load(Ordering::SeqCst) {
-        let Some(daemon) = inner.daemon() else {
-            break;
-        };
-        let events = match daemon.browse(&ty) {
-            Ok(events) => events,
-            Err(err) => {
-                inner.report(&err.to_string());
-                break;
-            }
-        };
-        let deadline = Instant::now() + rebrowse.unwrap_or(NO_REBROWSE);
-        loop {
-            let wait = deadline.saturating_duration_since(Instant::now());
-            if wait.is_zero() {
-                break;
-            }
-            match events.recv_timeout(wait) {
-                Ok(event) => dispatch(&state, event, &mut known),
-                Err(RecvTimeoutError::Timeout) => break,
-                Err(RecvTimeoutError::Disconnected) => {
-                    if state.stop.load(Ordering::SeqCst) {
-                        return;
-                    }
-                    break;
-                }
-            }
-        }
-        if !state.stop.load(Ordering::SeqCst) {
-            let _ = daemon.stop_browse(&ty);
-        }
-    }
-}
-
-fn dispatch(
-    state: &BrowseState,
-    event: ServiceEvent,
-    known: &mut HashMap<String, DiscoveredService>,
-) {
-    match event {
-        ServiceEvent::ServiceResolved(resolved) => {
-            let service = service_from_resolved(&resolved);
-            known.insert(resolved.fullname.to_lowercase(), service.clone());
-            for sub in subscribers(state) {
-                (sub.up)(&service);
-            }
-        }
-        // `ServiceRemoved` carries only the name, so reply from our own last resolution, which is
-        // what the app's `down` event holds too.
-        ServiceEvent::ServiceRemoved(_, fullname) => {
-            if let Some(service) = known.remove(&fullname.to_lowercase()) {
-                for sub in subscribers(state) {
-                    if let Some(down) = &sub.down {
-                        down(&service);
-                    }
-                }
-            }
-        }
-        _ => {}
-    }
-}
-
 fn subscribers(state: &BrowseState) -> Vec<Sub> {
     state.subs.lock().expect("lan mdns subscribers").clone()
 }
@@ -843,7 +756,7 @@ impl SelfAddressAdapter {
         }
     }
 
-    /// Override the rebrowse cadence (`None` browses once and lets `mdns-sd` retransmit).
+    /// Override the rebrowse cadence (`None` sends only the initial query).
     pub fn with_rebrowse(
         inner: BonjourAdapter,
         host: Ipv4Addr,
@@ -893,7 +806,7 @@ impl SelfAddressAdapter {
         });
         match &self.inner {
             Adapter::Daemon(bonjour) => bonjour
-                .browse(self.rebrowse, up, on_down, on_error)
+                .browse(self.host, self.rebrowse, up, on_down, on_error)
                 .map(Browse::Daemon),
             Adapter::Host(host) => host.browse(up, on_down, on_error).map(Browse::Host),
         }

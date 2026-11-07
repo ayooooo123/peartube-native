@@ -22,6 +22,9 @@ peeroxide = { path = "../peeroxide/peeroxide" }
 libudx = { path = "../peeroxide/libudx" }
 byte-stream-rs = { path = "../byte-stream-rs" }
 mdns-sd = "0.21"
+simple-dns = "0.13"
+socket2 = { version = "0.6", features = ["all"] }
+mio = { version = "1", features = ["net", "os-poll"] }
 if-addrs = "0.13"
 rand = "0.8"
 serde = { version = "1", features = ["derive"] }
