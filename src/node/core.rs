@@ -1780,11 +1780,13 @@ mod tests {
         }))
         .await
         .unwrap();
-        let announce = |title: &str| json!({
-            "type": "announce", "id": "imdb:tt0000001", "title": title, "size": 1,
-            "sha256": "33".repeat(32), "blobs": "22".repeat(32),
-            "blob": { "blockOffset": 0, "blockLength": 1, "byteOffset": 0, "byteLength": 1 }
-        });
+        let announce = |title: &str| {
+            json!({
+                "type": "announce", "id": "imdb:tt0000001", "title": title, "size": 1,
+                "sha256": "33".repeat(32), "blobs": "22".repeat(32),
+                "blob": { "blockOffset": 0, "blockLength": 1, "byteOffset": 0, "byteLength": 1 }
+            })
+        };
         node.append(announce("Original")).await.unwrap();
         let options = SearchOptions::default();
         let first = node.search(None, options.clone()).await.unwrap();
