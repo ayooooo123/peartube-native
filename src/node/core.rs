@@ -545,7 +545,10 @@ impl CoreNode {
             blob_bytes,
             cached_bytes,
             cache_max_bytes: blobs.cache_max_bytes(),
-            peers: net.connection_count(),
+            // JS `swarm.connections.size`: the swarm's own peers; LAN ones count only in lanPeers.
+            peers: net
+                .connection_count()
+                .saturating_sub(net.lan_connection_count()),
             lan_peers: net.lan_connection_count(),
             down_bps: serde_json::Number::from_f64(sample.down_bps).unwrap_or_else(|| 0.into()),
             up_bps: serde_json::Number::from_f64(sample.up_bps).unwrap_or_else(|| 0.into()),
