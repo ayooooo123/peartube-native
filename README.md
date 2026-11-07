@@ -1,57 +1,92 @@
 # peartube-native
 
-Native backend for PearTube: the channel protocol and mnemonic identity, wire-identical to the
-app's `src/protocol.js` and `src/mnemonic.js`.
+Rust backend for PearTube, replacing the app's Bare worklet. It ports the worker,
+node, discovery, media and protocol logic onto the sibling Rust Hypercore stack.
+The JavaScript app is the reference; parity is covered by fixtures and mixed-node
+tests, not a claim that every runtime behavior is identical.
 
-## What it does
+## Hosts
 
-- `protocol`: entry/blob constants, `is_uniform_512`, `describe_entry`, `clean_text`, `clean_name`,
-  watch/receiver/access URI formatting, `parse_uri`, `decode_op`, `is_system_view_key`.
-- `mnemonic`: BIP-39 generation/validation, `derive_identity` (genesis writer, channel key,
-  detached owner signer, vault root), claim signing/verification, epoch keys, and XSalsa20-Poly1305
-  video key wrapping.
-- `art`: the relay's small bounded http(s) client (redirects, timeout, byte cap), the Cinemeta
-  metadata lookup with its negative cache, and poster/backdrop URLs.
-- `identify`: `parse_name`, the HEAD probe that tells a media file from a page, `ubit info`/`ubit get`
-  with the app's argv, statuses and NDJSON progress, Cinemeta suggestions, and the `clip:` id.
+In-process Rust hosts call the typed async `app::App` service through `AppHost` /
+`NativeApp` and subscribe to typed events. `lifecycle` adapts JSON lines to the
+same service; `backend::Backend` owns its runtime thread and line callback.
+[`ffi/`](ffi/README.md) exposes that JSON-line backend through a C ABI for JNI
+and Swift hosts, including suspend, resume and shutdown. See its header and
+README for ownership and threading requirements.
 
-A Rust node derives the same channel keys, owner keys, claim signatures, epoch keys and wrapped
-video keys as the JS app from the same recovery phrase, and parses/formats the same URIs and ops.
+## Module map
 
-## JavaScript parity
+Paths on the right are in the PearTube app unless otherwise stated.
 
-The app is the reference. `fixtures/js-reference.json` is generated from the app's own logic
-(copied into `fixtures/gen`) and checked by `tests/js_fixtures.rs`:
+| Rust | JavaScript reference / role |
+| --- | --- |
+| `app`, `lifecycle`, `backend`, `ipc` | `worklet/worker.js`: typed worker methods and events, JSON framing, serialized lifecycle and backend thread |
+| `http` | `src/http.js`: loopback API, media and event endpoints |
+| `acquire`, `mirror` | `src/acquire.js`, `src/mirror.js`: acquisition jobs and mirror plugins |
+| `cast` | `src/cast.js`, `src/cast-ui.js`: controller, receiver, pairing and media serving |
+| `lan` | `src/lan.js`: mDNS and isolated LAN DHT; worker host Bonjour events and interface selection |
+| `hiverelay`, `traffic`, `private_overlay` | `src/hiverelay.js`, `src/traffic.js`, `src/private-overlay.js`: relay protocol, traffic gate and private routing |
+| `node/storage`, `network`, `channel`, `apply`, `sources`, `catalog`, `blobs` | Corresponding `src/node/*.js`: storage, replication, channel operations, source and catalog management, blob storage and streaming |
+| `node/core`, `node/factory` | `src/index.js`: compose and open the native node; default worker factory |
+| `protocol`, `mnemonic`, `identity` | `src/protocol.js`, `src/mnemonic.js`, `src/identity.js`: wire formats, recovery and keys, identity storage |
+| `settings`, `resolution` | App settings and media resolution selection |
+| `art`, `identify` | `src/art.js`, `src/identify.js`: artwork lookup, media identification and `ubit` integration |
+
+The node contract, JSON shapes and adapter details are in [docs/node-api.md](docs/node-api.md).
+
+## Evidence
+
+The fixture tests replay outputs generated from app code; interop tests run the
+real JS and Rust sides together. Tests using fakes are identified below rather
+than presented as live network parity.
+
+- `tests/js_fixtures.rs`: protocol and mnemonic reference vectors, including JS opening Rust-wrapped keys.
+- `tests/identity_fixtures.rs`, `tests/settings_fixtures.rs`: JS identity and settings results, file bytes and modes; JS reads Rust-written files.
+- `tests/resolution_fixtures.rs`: JS media resolution fixture results.
+- `tests/art_identify.rs`: JS artwork and identification results against scripted HTTP and fake `ubit`.
+- `tests/http.rs`: JS API responses, status and headers against a scripted node.
+- `tests/acquire_mirror.rs`: JS acquisition and mirror call and JSON traces against scripted dependencies.
+- `tests/apply.rs`: JS apply operations, host calls and view bytes on a real Hyperbee.
+- `tests/blobs.rs`: JS blob operations, core keys, announce fields, encrypted and plain block bytes, and cache decisions.
+- `tests/cast.rs`: JS cast fixtures and receiver/controller interop over HTTP and a TCP secret-stream stand-in. `tests/cast_default.rs` exercises the real default adapters and a JS receiver on a local testnet.
+- `tests/hiverelay.rs`: JS relay wire vectors and secret-stream interop.
+- `tests/traffic.rs`: JS traffic-gate decisions and npm Protomux busy-channel interop.
+- `tests/private_overlay.rs`: JS overlay vectors and behavior with a fake DHT, plus JS interop. `tests/network_private.rs` checks private routing fails closed and public routing joins topics; it is not a JS comparison.
+- `tests/lan_mdns.rs`: JS TXT records and parsing plus live Bonjour interop. `tests/lan_interop.rs`: JS/Rust and Rust/Rust isolated LAN discovery, streaming and connection rules.
+- `tests/node_api_shapes.rs`: node JSON shape round trips. `tests/node_mixed.rs`: real JS/Rust publication, following, streaming and restart on a local HyperDHT testnet.
+- `tests/network_mixed_a.rs`, `network_mixed_b.rs`, `network_mixed_c.rs`: mixed JS/Rust slices of the app's `network.test.js`. A covers acquisition, interrupted transfers, restart and HTTP resume; B covers ACL, malformed announces and convergence; C covers private-routing fail-closed, cache clearing and eviction. Roles are swapped where applicable.
+- `tests/ipc.rs`: framing and a scripted `worker.js` scenario compared line for line, including JSON bytes, with identical fakes and clock. `tests/backend_default.rs` checks the real default backend's loopback API, LAN and shutdown rather than comparing JS.
+
+## Running tests
+
+Rust 1.90 or newer, Node.js and npm are required. Clone the sibling path
+dependencies listed in `Cargo.toml` and their transitive dependencies alongside
+this repository; CI lists the required repositories. Install both JS dependency
+sets before running JS-backed tests:
 
 ```sh
-cd fixtures/gen && npm install && npm run gen
-cargo test -- --include-ignored
+(cd fixtures/gen && npm install)
+(cd tests/js && npm install)
+cargo test --workspace -- --include-ignored
 ```
 
-`--include-ignored` also un-ignores the cross-check that opens Rust-produced wrappings with the JS
-reference; it reports a skip when `fixtures/gen/node_modules` is absent.
+Some ignored interop tests also need a PearTube app checkout with its npm
+dependencies installed. Set `PEARTUBE_APP` to that checkout; tests may report a
+skip when prerequisites are absent. LAN tests require working multicast and a
+usable interface. The mixed network slices are run individually with
+`-- --include-ignored --test-threads=1`; slice A documents a `PEARTUBE_ACQUIRE`
+copy needed for the app's announcing-job restart bug. See
+[docs/node-api.md](docs/node-api.md) and the test sources for the harnesses.
+Fixtures are committed; regenerate the protocol/mnemonic reference with
+`(cd fixtures/gen && npm run gen)` when changing its reference inputs.
 
-`fixtures/art-identify-reference.json` is generated the same way from the app's `src/art.js` and
-`src/identify.js`, and replayed by `tests/art_identify.rs` (node only, no npm install needed):
+## Known gaps and differences
 
-```sh
-cd fixtures/gen && node art-identify.mjs && cd ../.. && cargo test --test art_identify
-```
-
-Parity notes:
-
-- Lengths and slices use UTF-16 code units, and truncation applies `toWellFormed` semantics, so a
-  cut surrogate pair becomes U+FFFD exactly like the app.
-- JS whitespace, `encodeURIComponent`/`decodeURIComponent`, and `Number(string)` semantics are
-  reproduced for the values these formats carry.
-- Rust strings cannot hold lone surrogates, so a JS string that already contains one cannot be
-  represented through this API; JSON itself cannot portably carry it either.
-- Receiver ports are `f64` and are serialized as integers when integral; exponent-form port numbers
-  (`1e+21`) keep Rust's formatting rather than JavaScript's.
-- `art::send`'s timeout covers the whole exchange; the app's `req.setTimeout` only covered socket
-  inactivity, so a slow trickle keeps waiting there.
-- A reply over `max_bytes` is a normal error here; the app's `request.destroy(err)` surfaces as an
-  uncaught socket error instead, so that case is only asserted on the Rust side.
+- `p2p-replicate` and `hiverelay-seed` mirror plugins are not built in; hosts can register plugins with `MirrorHost::register`.
+- The default cast adapter has no `PeerFactory`: a load targeting a different network reuses the current node. Continuous read-ahead retargeting and `holdIfThin` are not wired; retry window timing differs. See [cast notes](docs/port-notes-cast.md).
+- LAN mDNS and the isolated DHT are implemented, but the real-interface interoperability matrix remains unverified on a firewalled Mac. Loopback does not establish real-interface coverage. See [LAN notes](docs/port-notes-lan.md).
+- Corestore storage tuning uses engine defaults; blob flush/compaction are unavailable, free space is unknown, and traffic RTT/retransmit counters remain zero. See [node notes](docs/node-api.md).
+- Rust cannot represent already-lone JS surrogates; exponent-form receiver ports can format differently. Artwork HTTP timeout covers the whole exchange, unlike the JS socket inactivity timeout. See [identify/art notes](docs/port-notes-identify-art.md).
 
 ## License
 

@@ -28,8 +28,48 @@ jobs:
           path: protomux-rs
       - uses: actions/checkout@v4
         with:
+          repository: ${{ github.repository_owner }}/protomux-wakeup-rs
+          path: protomux-wakeup-rs
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/hyperschema-rs
+          path: hyperschema-rs
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/hypercore-id-encoding-rs
+          path: hypercore-id-encoding-rs
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/hypercore-storage-rs
+          path: hypercore-storage-rs
+      - uses: actions/checkout@v4
+        with:
           repository: ${{ github.repository_owner }}/hypercore-rs
           path: hypercore-rs
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/corestore-rs
+          path: corestore-rs
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/hyperbee-rs
+          path: hyperbee-rs
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/hyperblobs-rs
+          path: hyperblobs-rs
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/byte-stream-rs
+          path: byte-stream-rs
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/autobee-rs
+          path: autobee-rs
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/peeroxide
+          path: peeroxide
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
@@ -37,6 +77,6 @@ jobs:
         with:
           node-version: 22
       - run: for d in tests/js fixtures/gen; do [ -f $d/package.json ] && (cd $d && npm ci); done; true
-      - run: cargo fmt --check
-      - run: cargo clippy --all-targets -- -D warnings
-      - run: cargo test -- --include-ignored
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace -- --include-ignored
