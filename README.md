@@ -34,6 +34,10 @@ Paths on the right are in the PearTube app unless otherwise stated.
 
 The node contract, JSON shapes and adapter details are in [docs/node-api.md](docs/node-api.md).
 
+Custom bootstrap names are resolved with peeroxide's IPv4-preferring DNS resolver before
+selecting the DHT bind address. A loopback name therefore binds like its numeric address;
+otherwise the Noise handshake advertises non-loopback interfaces and misses a local testnet.
+
 ## Evidence
 
 The fixture tests replay outputs generated from app code; interop tests run the
@@ -84,7 +88,7 @@ Fixtures are committed; regenerate the protocol/mnemonic reference with
 
 - `p2p-replicate` and `hiverelay-seed` mirror plugins are not built in; hosts can register plugins with `MirrorHost::register`.
 - The default cast adapter has no `PeerFactory`: a load targeting a different network reuses the current node. Continuous read-ahead retargeting and `holdIfThin` are not wired; retry window timing differs. See [cast notes](docs/port-notes-cast.md).
-- LAN mDNS and the isolated DHT are implemented, but the real-interface interoperability matrix remains unverified on a firewalled Mac. Loopback does not establish real-interface coverage. See [LAN notes](docs/port-notes-lan.md).
+- LAN mDNS and the isolated DHT are implemented, but the real-interface interoperability matrix remains environment-blocked on this Mac. A standalone raw UDP probe also receives no LAN multicast; an ALF “permitted” query alone does not establish delivery. See [LAN notes](docs/port-notes-lan.md).
 - Corestore storage tuning uses engine defaults; blob flush/compaction are unavailable, free space is unknown, and traffic RTT/retransmit counters remain zero. See [node notes](docs/node-api.md).
 - Rust cannot represent already-lone JS surrogates; exponent-form receiver ports can format differently. Artwork HTTP timeout covers the whole exchange, unlike the JS socket inactivity timeout. See [identify/art notes](docs/port-notes-identify-art.md).
 

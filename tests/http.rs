@@ -1122,8 +1122,10 @@ fn mp4_header() -> Vec<u8> {
         .unwrap();
     case.hex
         .as_bytes()
-        .chunks_exact(2)
-        .map(|pair| u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).unwrap())
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|pair: &[u8; 2]| u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).unwrap())
         .collect()
 }
 

@@ -89,8 +89,8 @@ pub fn bootstrap_list(value: Option<&Value>) -> Vec<String> {
 
 fn is_loopback(bootstrap: &[String]) -> bool {
     bootstrap.iter().any(|node| {
-        let host = node.split('@').next_back().unwrap_or(node);
-        host.starts_with("127.")
+        node.parse::<std::net::SocketAddr>()
+            .is_ok_and(|address| address.ip().is_loopback())
     })
 }
 
@@ -506,6 +506,9 @@ impl Network {
         private_routing: bool,
         closing: Arc<AtomicBool>,
     ) -> Result<Arc<Self>, std::io::Error> {
+        // Resolve before choosing the bind: wildcard Noise addresses omit loopback interfaces.
+        let bootstrap =
+            peeroxide_dht::rpc::resolve_bootstrap_nodes(&resolve_bootstrap(bootstrap)).await;
         let host = base.unwrap_or_else(|| {
             if is_loopback(&bootstrap) {
                 "127.0.0.1".to_owned()
@@ -513,7 +516,6 @@ impl Network {
                 "0.0.0.0".to_owned()
             }
         });
-        let bootstrap = resolve_bootstrap(bootstrap);
         let private_host = host.clone();
         let private_bootstrap = bootstrap.clone();
         let mut config = SwarmConfig::default();
@@ -1234,6 +1236,19 @@ impl super::api::Swarm for NetworkSwarm {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn hostname_bootstraps_choose_the_same_bind_as_their_ipv4_address() {
+        let named = peeroxide_dht::rpc::resolve_bootstrap_nodes(&[
+            "localhost:49737".to_owned(),
+            "127.0.0.2@bootstrap.invalid:49738".to_owned(),
+        ])
+        .await;
+        assert_eq!(named, ["127.0.0.1:49737", "127.0.0.2:49738"]);
+        assert!(is_loopback(&named));
+        assert!(!is_loopback(&["127.example:49737".to_owned()]));
+        assert!(!is_loopback(&["10.0.0.1:49737".to_owned()]));
+    }
 
     /// The app sends no bootstrap (the normal case): an empty list must reach the public DHT.
     #[test]

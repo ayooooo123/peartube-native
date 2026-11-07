@@ -4,8 +4,10 @@ use serde_json::Value;
 use std::process::Command;
 fn hex_decode(s: &str) -> Option<Vec<u8>> {
     s.as_bytes()
-        .chunks_exact(2)
-        .map(|p| u8::from_str_radix(std::str::from_utf8(p).ok()?, 16).ok())
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|p: &[u8; 2]| u8::from_str_radix(std::str::from_utf8(p).ok()?, 16).ok())
         .collect()
 }
 fn hex_encode(b: &[u8]) -> String {

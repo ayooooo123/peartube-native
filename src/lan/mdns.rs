@@ -916,6 +916,54 @@ mod tests {
     const TOPIC_0_TOKEN: &str = "P7QAGHZlaitUh7x7nrW4h26d8rmK4_UsVARsSY5kT4k";
 
     #[test]
+    #[ignore = "requires multicast reception on loopback"]
+    fn independent_daemons_receive_each_others_loopback_advertisements() {
+        let host = Ipv4Addr::LOCALHOST;
+        let a = SelfAddressAdapter::new(BonjourAdapter::new(), host);
+        let b = SelfAddressAdapter::new(BonjourAdapter::new(), host);
+        let (tx, rx) = std::sync::mpsc::channel();
+        let a_tx = tx.clone();
+        let _a_browse = a
+            .browse(
+                Arc::new(move |service| {
+                    let _ = a_tx.send((0, service.clone()));
+                }),
+                None,
+                None,
+            )
+            .unwrap();
+        let _b_browse = b
+            .browse(
+                Arc::new(move |service| {
+                    let _ = tx.send((1, service.clone()));
+                }),
+                None,
+                None,
+            )
+            .unwrap();
+        let keys = [hex(&[31; 32]), hex(&[32; 32])];
+        let token = topic_token(b"loopback-receive-regression");
+        let a_record = create_records(&keys[0], 48241, std::slice::from_ref(&token));
+        let b_record = create_records(&keys[1], 48242, std::slice::from_ref(&token));
+        let _a_advert = a.advertise(&a_record[0], None).unwrap();
+        let _b_advert = b.advertise(&b_record[0], None).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(15);
+        let mut received = [false; 2];
+        while !received.iter().all(|seen| *seen) {
+            let (side, service) = rx
+                .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+                .expect("each daemon must resolve the other daemon's multicast response");
+            if let Some(record) = service.parse()
+                && record.peer_key_hex == keys[1 - side]
+            {
+                assert_eq!(service.addresses, [host]);
+                assert_eq!(record.tokens.as_slice(), std::slice::from_ref(&token));
+                received[side] = true;
+            }
+        }
+    }
+
+    #[test]
     fn topic_tokens_match_the_app() {
         assert_eq!(topic_token(b"topic-0"), TOPIC_0_TOKEN);
         assert_eq!(TOPIC_0_TOKEN.len(), 43);

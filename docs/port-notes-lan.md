@@ -6,7 +6,7 @@
    topic tokens) as a `hyperdht-mdns._udp` service, and browse for the same. Ported in
    `src/lan/mdns.rs` + `src/lan/mod.rs`.
 2. **Isolated LAN HyperDHT** — a private, bootstrap-free DHT whose only addresses are the ones mDNS
-   handed out. Not ported yet; the behaviour below is what the port must reproduce.
+   handed out. Ported in `src/lan/discovery.rs`.
 
 ## mDNS half (ported)
 
@@ -144,3 +144,29 @@ Deviations from `lan.js`:
   and its redial gets a stream instead of a reply nobody answers.
 - a Rust publisher answers a wakeup lookup with its drained, attached writers (JS
   `_getWakeupWriters`); a Rust follower starts downloading the bootstrap core from that announce.
+
+## Multicast receive regression and environment evidence (2026-11-07)
+
+`cargo test --lib independent_daemons_receive_each_others_loopback_advertisements -- --ignored`
+checks actual PTR/SRV/TXT/A resolution between independent adapters, including topic parsing
+and the self-address wrapper. It requires working multicast even on loopback.
+
+On this Mac's `en0` (`10.0.10.210`), a standalone `mdns-sd 0.21.7` daemon joined the IPv4
+group and advertised successfully but cached no received records. A separate minimal
+`socket2`/`std::net::UdpSocket` probe, with no PearTube or mDNS parser, also received no
+multicast, including its own sends. On port 48240 it received a Node sender's loopback
+unicast but neither LAN-address unicast nor multicast; on 5353 it received none. Probe
+sources are in the stack's `_scratch/lan-sol-probe/`.
+
+ALF was enabled. `socketfilterfw --getappblocked` reported “permitted” for the exact
+`peartube-native/target/LanSol/debug/raw` and `debug/lan-sol-probe` paths, but neither path
+appeared in `--listapps`. This proves a receive block outside PearTube's adapter; it does
+not identify ALF, local-network privacy, or another OS policy as the specific cause.
+No firewall settings were changed. The new focused multicast test also timed out here;
+loopback is not a substitute for the required real-interface a/b/c three-run matrix.
+
+With the final code, real-interface cases a, b and c each timed out (c reported zero
+discovered peers and connections). The b three-run command stopped after its first
+failure; none is reported as a three-run pass. Plain `cargo test` passed 168 tests
+(44 ignored), and warnings-denied all-target Clippy passed on Rust 1.96.1.
+The session's `target/LanSol` build directory was removed after recording evidence.
