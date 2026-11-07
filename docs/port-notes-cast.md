@@ -122,4 +122,4 @@ port opens P2P sockets itself; `src/cast/adapters.rs` fills every seam for the r
 
 ## Private routing
 
-Under `privateRouting` the cast Noise RPC has no public DHT: `NodeDht::connect` fails with "Private routing is on: casting over the public DHT is unavailable", and a local receiver starts without a public DHT server. JS behaves the same way, because there `node.dht` is the overlay facade, which has no `connect` or `createServer`. Paired and LAN cast paths are unaffected.
+Under `privateRouting` the cast Noise RPC has no public DHT: `NodeDht::connect` fails with "Private routing is on: casting over the public DHT is unavailable", and a local receiver starts without a public DHT server. JS behaves the same way, because there `node.dht` is the overlay facade, which has no `connect` or `createServer`. So pairing or attaching by Noise key fails, while LAN-addressed casting (HTTP to a receiver's LAN address) is unchanged.
