@@ -58,8 +58,23 @@ than presented as live network parity.
 - `tests/private_overlay.rs`: JS overlay vectors and behavior with a fake DHT, plus JS interop. `tests/network_private.rs` checks private routing fails closed and public routing joins topics; it is not a JS comparison.
 - `tests/lan_mdns.rs`: JS TXT records and parsing plus live Bonjour interop. `tests/lan_interop.rs`: JS/Rust and Rust/Rust isolated LAN discovery, streaming and connection rules.
 - `tests/node_api_shapes.rs`: node JSON shape round trips. `tests/node_mixed.rs`: real JS/Rust publication, following, streaming and restart on a local HyperDHT testnet.
+  Its opt-in `catalog_search_and_update_latency` case measures metadata-only local
+  append/apply/list latency for 552 entries; this is not a replication latency test.
 - `tests/network_mixed_a.rs`, `network_mixed_b.rs`, `network_mixed_c.rs`: mixed JS/Rust slices of the app's `network.test.js`. A covers acquisition, interrupted transfers, restart and HTTP resume; B covers ACL, malformed announces and convergence; C covers private-routing fail-closed, cache clearing and eviction. Roles are swapped where applicable.
 - `tests/ipc.rs`: framing and a scripted `worker.js` scenario compared line for line, including JSON bytes, with identical fakes and clock. `tests/backend_default.rs` checks the real default backend's loopback API, LAN and shutdown rather than comparing JS.
+
+Catalog snapshots keep one JSON copy of each followed entry: restored snapshots
+are consumed during hydration, and persistence does not retain another in-memory
+copy. RocksDB's runtime cache and memtable budgets are shared across Corestores
+in a process (see `../hypercore-storage-rs/README.md`); the JS storage format is
+unchanged.
+Search reuses the fresh awake-source scan returned by snapshot refresh instead
+of walking each view twice; sleeping sources still use their merged snapshot.
+Snapshot refresh notifies only when the merged records actually change, avoiding
+an update/refresh loop when the offline snapshot contains more rows than the live
+view; unchanged rows keep their existing JSON allocation.
+Blob wake observers do not retain sessions: Corestore's peer/session-aware GC
+can reclaim an owned or cached core after its last reader and peer leave.
 
 ## Running tests
 

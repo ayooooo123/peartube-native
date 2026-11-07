@@ -57,7 +57,6 @@ pub struct Item {
 #[derive(Default)]
 struct Cache {
     entries: Vec<Item>,
-    by_sub: HashMap<String, Value>,
     discovered: Vec<DiscoveredSource>,
     hydrated: bool,
     synced_at: u64,
@@ -117,30 +116,33 @@ impl SourceRecord {
     }
 
     /// `indexChannelRecords(target, entriesList, discoveredList, { merge })`.
-    fn index(&self, entries: &[Item], discovered: &[DiscoveredSource], merge: bool) {
+    fn index(&self, entries: &[Item], discovered: &[DiscoveredSource], merge: bool) -> bool {
         let mut cache = lock(&self.cache);
-        let mut by_sub = if merge {
-            cache.by_sub.clone()
-        } else {
-            HashMap::new()
-        };
+        let mut changed = (!merge && !cache.entries.is_empty()) || cache.discovered != discovered;
         let mut items: HashMap<String, Item> = if merge {
-            cache
-                .entries
-                .iter()
-                .cloned()
+            std::mem::take(&mut cache.entries)
+                .into_iter()
                 .map(|item| (item.sub.clone(), item))
                 .collect()
         } else {
             HashMap::new()
         };
         for item in entries {
-            by_sub.insert(item.sub.clone(), item.entry.clone());
-            items.insert(item.sub.clone(), item.clone());
+            if let Some(previous) = items.get_mut(&item.sub) {
+                if previous.entry != item.entry {
+                    *previous = item.clone();
+                    changed = true;
+                }
+            } else {
+                items.insert(item.sub.clone(), item.clone());
+                changed = true;
+            }
         }
         cache.entries = items.into_values().collect();
-        cache.by_sub = by_sub;
-        cache.discovered = discovered.to_vec();
+        if cache.discovered != discovered {
+            cache.discovered = discovered.to_vec();
+        }
+        changed
     }
 }
 
@@ -178,8 +180,12 @@ impl Sources {
         let saved = std::fs::read_to_string(&deps.cache_file)
             .ok()
             .and_then(|text| serde_json::from_str::<Value>(&text).ok())
-            .and_then(|value| value.get("channels").cloned())
-            .and_then(|value| value.as_object().cloned())
+            .and_then(|mut value| {
+                value
+                    .get_mut("channels")
+                    .and_then(Value::as_object_mut)
+                    .map(std::mem::take)
+            })
             .unwrap_or_default();
         let sources = Arc::new(Self {
             deps,
@@ -250,7 +256,7 @@ impl Sources {
     }
 
     fn load_cached(&self, record: &SourceRecord) {
-        let saved = lock(&self.saved).get(&record.key).cloned();
+        let saved = lock(&self.saved).remove(&record.key);
         let Some(saved) = saved else {
             return;
         };
@@ -454,15 +460,16 @@ impl Sources {
 
     /// `refreshSourceCache(src)`.
     pub async fn refresh(&self, key: &str, force: bool) -> bool {
-        let Some(record) = self.get(key) else {
-            return false;
-        };
+        self.refresh_entries(key, force).await.is_some()
+    }
+
+    /// Refreshes the saved snapshot and returns this scan's authoritative awake view.
+    pub(crate) async fn refresh_entries(&self, key: &str, force: bool) -> Option<Vec<Item>> {
+        let record = self.get(key)?;
         if self.deps.closing.load(Ordering::Acquire) {
-            return false;
+            return None;
         }
-        let Some(bee) = record.bee() else {
-            return false;
-        };
+        let bee = record.bee()?;
         if force {
             if record.hydrated() {
                 record.touch(&self.clock);
@@ -473,8 +480,7 @@ impl Sources {
             let _ = tokio::time::timeout(Duration::from_secs(1), bee.update()).await;
         }
         let (entries, discovered) = self.scan(&record, &bee).await;
-        let previous = lock(&record.cache).entries.len();
-        record.index(&entries, &discovered, true);
+        let changed = record.index(&entries, &discovered, true);
         {
             let mut cache = lock(&record.cache);
             cache.view_version = cache.view_version.saturating_add(1);
@@ -487,10 +493,10 @@ impl Sources {
         if lock(&record.cache).hydrated {
             self.dirty.store(true, Ordering::Release);
         }
-        if entries.len() != previous {
+        if changed {
             (self.deps.update)();
         }
-        true
+        Some(entries)
     }
 
     /// `addSource(spec, wake)`.
@@ -646,13 +652,11 @@ impl Sources {
                 }),
             );
         }
-        let payload = json!({ "version": 1, "channels": channels });
-        let Ok(text) = serde_json::to_string(&payload) else {
-            return;
-        };
+        let mut payload = json!({ "version": 1 });
+        payload["channels"] = Value::Object(channels);
         let tmp = self.deps.cache_file.with_extension("json.tmp");
         let write = || -> std::io::Result<()> {
-            use std::io::Write;
+            use std::io::{BufWriter, Write};
             #[cfg(unix)]
             let mut options = {
                 use std::os::unix::fs::OpenOptionsExt;
@@ -662,13 +666,14 @@ impl Sources {
             };
             #[cfg(not(unix))]
             let mut options = std::fs::OpenOptions::new();
-            let mut file = options.write(true).create(true).truncate(true).open(&tmp)?;
-            file.write_all(text.as_bytes())?;
-            drop(file);
+            let file = options.write(true).create(true).truncate(true).open(&tmp)?;
+            let mut writer = BufWriter::new(file);
+            serde_json::to_writer(&mut writer, &payload).map_err(std::io::Error::other)?;
+            writer.flush()?;
+            drop(writer);
             std::fs::rename(&tmp, &self.deps.cache_file)
         };
         let _ = write();
-        *lock(&self.saved) = channels.into_iter().collect();
     }
 
     pub fn flush_if_dirty(&self) {
@@ -729,4 +734,43 @@ pub fn topic_key(hex_key: &str) -> Option<[u8; 32]> {
 /// The hex of a core key.
 pub fn key_hex(key: &[u8; 32]) -> String {
     hex(key)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn source_index_keeps_partial_snapshots_and_replaces_matching_rows() {
+        let record = SourceRecord {
+            key: String::new(),
+            alias: Mutex::new(String::new()),
+            cache: Mutex::new(Cache::default()),
+            bee: Mutex::new(None),
+            opening: tokio::sync::Mutex::new(()),
+            touched_at: AtomicU64::new(0),
+            rev: AtomicU64::new(0),
+        };
+        let item = |sub: &str, title: &str| Item {
+            sub: sub.to_owned(),
+            entry: json!({"type": "announce", "title": title}),
+        };
+        assert!(record.index(&[item("a", "old"), item("b", "kept")], &[], false));
+        assert!(record.index(&[item("a", "new")], &[], true));
+        // A partial live scan must not report the retained offline row as a change.
+        assert!(!record.index(&[item("a", "new")], &[], true));
+        assert!(!record.index(&[], &[], true));
+        let entries = record.entries();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(
+            entries.iter().find(|i| i.sub == "a").unwrap().entry["title"],
+            "new"
+        );
+        assert_eq!(
+            entries.iter().find(|i| i.sub == "b").unwrap().entry["title"],
+            "kept"
+        );
+        record.index(&[], &[], false);
+        assert!(record.entries().is_empty());
+    }
 }

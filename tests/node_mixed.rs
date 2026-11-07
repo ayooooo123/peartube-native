@@ -449,3 +449,46 @@ fn js_follows_rust_published_video_and_node_resumes() {
     let _ = std::fs::remove_dir_all(&storage);
     let _ = &mut testnet;
 }
+
+#[test]
+#[ignore = "local 552-entry catalog search and update benchmark; needs the JS testnet"]
+fn catalog_search_and_update_latency() {
+    let runtime = runtime();
+    let mut testnet = spawn_js("testnet", &[]);
+    let bootstrap = testnet.result()["bootstrap"].clone();
+    let owner_dir = tempfile::tempdir().unwrap();
+    runtime.block_on(async {
+        let owner = rust_node(json!({
+            "storage": owner_dir.path(), "bootstrap": bootstrap,
+        })).await;
+        let announce = |i: u64| json!({
+            "type": "announce", "id": format!("imdb:tt{i:07}"),
+            "title": format!("Catalog fixture {i}"), "size": 524288,
+            "sha256": format!("{i:064x}"), "blobs": format!("{:064x}", i + 1000),
+            "blob": { "blockOffset": 0, "blockLength": 1, "byteOffset": 0, "byteLength": 524288 },
+        });
+        owner.append(announce(0)).await.unwrap();
+        for i in 1..552 {
+            owner.append(announce(i)).await.unwrap();
+        }
+        let options = peartube_native::node::api::SearchOptions::default();
+        assert_eq!(owner.search(None, options.clone()).await.unwrap().len(), 552, "publisher fixture");
+        let mut search_ms = Vec::new();
+        for _ in 0..15 {
+            let started = Instant::now();
+            assert_eq!(owner.search(None, options.clone()).await.unwrap().len(), 552);
+            search_ms.push(started.elapsed().as_secs_f64() * 1000.0);
+        }
+        search_ms.sort_by(f64::total_cmp);
+        eprintln!("PERF catalog-search {:.3} ms", search_ms[search_ms.len() / 2]);
+        for i in 552..555 {
+            let started = Instant::now();
+            owner.append(announce(i)).await.unwrap();
+            let entries = owner.search(None, options.clone()).await.unwrap();
+            assert_eq!(entries.len(), i as usize + 1);
+            assert!(entries.iter().any(|entry| entry.id == format!("imdb:tt{i:07}")));
+            eprintln!("PERF catalog-local-update {:.3} ms", started.elapsed().as_secs_f64() * 1000.0);
+        }
+        owner.close().await.unwrap();
+    });
+}

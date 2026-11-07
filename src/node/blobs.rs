@@ -445,7 +445,6 @@ struct Inner<C: ChannelView, S: ContentSwarm, H: BlobHost> {
     block_counts: Mutex<HashMap<[u8; 32], Arc<BlockCounter>>>,
     http_owned: Mutex<HashMap<[u8; 32], HttpOwned>>,
     http_generation: AtomicU64,
-    weak_owned: Mutex<HashMap<[u8; 32], Arc<Session>>>,
     evicted_to: Mutex<HashMap<[u8; 32], u64>>,
     bulk_peers: Mutex<HashSet<String>>,
     player_active: AtomicBool,
@@ -524,7 +523,6 @@ where
             block_counts: Mutex::new(HashMap::new()),
             http_owned: Mutex::new(HashMap::new()),
             http_generation: AtomicU64::new(0),
-            weak_owned: Mutex::new(HashMap::new()),
             evicted_to: Mutex::new(HashMap::new()),
             bulk_peers: Mutex::new(HashSet::new()),
             player_active: AtomicBool::new(false),
@@ -632,19 +630,15 @@ where
 
     fn drop_owned(&self, key: &[u8; 32]) {
         let disc = hypercore::crypto::discovery_key(key);
-        let weak = {
+        {
             let mut ledger = lock(&self.inner.ledger);
             ledger.owned.remove(key);
             ledger.owned_by_discovery.remove(&disc);
             ledger.cached.remove(key);
-            lock(&self.inner.weak_owned).remove(key)
-        };
+        }
         let http = lock(&self.inner.http_owned).remove(key);
         if let Some(rec) = http {
             rec.session.close();
-        }
-        if let Some(session) = weak {
-            session.close();
         }
     }
 
@@ -1036,50 +1030,15 @@ where
         Ok(())
     }
 
-    /// `onCoreWake`: remembers a core the store just opened and keeps a weak session for it.
+    /// `onCoreWake`: remembers a core without keeping a session alive.
     pub fn on_core_wake(&self, core: &hypercore::Core) {
         if self.inner.host.closing() {
             return;
         }
         let disc = *core.discovery_key();
         self.inner.host.mark_stored(disc);
-        let key = {
-            let mut ledger = lock(&self.inner.ledger);
-            ledger.absent.remove(&disc);
-            ledger
-                .owned_by_discovery
-                .get(&disc)
-                .or_else(|| ledger.cached_by_discovery.get(&disc))
-                .copied()
-        };
-        let Some(key) = key else { return };
-        if lock(&self.inner.weak_owned).contains_key(&key)
-            || lock(&self.inner.cores).map.contains_key(&key)
-        {
-            return;
-        }
-        let inner = self.inner.clone();
-        tokio::spawn(async move {
-            let blobs = Blobs::from_inner(inner.clone());
-            if blobs.inner.host.closing() {
-                return;
-            }
-            {
-                let ledger = lock(&blobs.inner.ledger);
-                if !ledger.owned.contains_key(&key) && !ledger.cached.contains_key(&key) {
-                    return;
-                }
-            }
-            if lock(&blobs.inner.weak_owned).contains_key(&key)
-                || lock(&blobs.inner.cores).map.contains_key(&key)
-            {
-                return;
-            }
-            let Ok(session) = blobs.open_key(key, true).await else {
-                return;
-            };
-            lock(&blobs.inner.weak_owned).insert(key, Arc::new(session));
-        });
+        // Corestore already keeps cores with peers alive; a session here would prevent GC.
+        lock(&self.inner.ledger).absent.remove(&disc);
     }
 
     /// Starts the store watcher that feeds [`Blobs::on_core_wake`].

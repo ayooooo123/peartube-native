@@ -831,6 +831,35 @@ async fn cache_ceiling_matches_the_app() {
     assert!(h.blobs.open_core(&streaming).is_some());
 }
 
+#[tokio::test]
+async fn store_wakeup_does_not_pin_an_owned_blob_session() {
+    let h = harness([0x31; 32], [0x32; 32], 1_000_000).await;
+    let owned = h
+        .blobs
+        .put(
+            put_meta("clip:wakeup", "Wakeup", "video:wakeup"),
+            BufferSource::new(data(BLOCK)),
+        )
+        .await
+        .expect("put");
+    let session = h
+        .store
+        .get(StoreGetOptions::key(unhex32(&owned.blobs)))
+        .await
+        .expect("open owned core");
+    let core = session.core().clone();
+    h.blobs.on_core_wake(&core);
+    for _ in 0..4 {
+        tokio::task::yield_now().await;
+    }
+    session.close();
+    assert_eq!(
+        core.session_count(),
+        0,
+        "the wake observer must not prevent core GC"
+    );
+}
+
 // ---------------------------------------------------------------------------------------------
 // Clearing
 

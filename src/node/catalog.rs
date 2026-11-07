@@ -64,7 +64,6 @@ pub trait CatalogBlobs: Send + Sync {
 struct PrimaryCache {
     entries: Vec<Item>,
     discovered: Vec<super::api::DiscoveredSource>,
-    by_sub: HashMap<String, Value>,
 }
 
 /// A record the catalog has not yet turned into an `Entry`.
@@ -157,14 +156,9 @@ impl Catalog {
         let (entries, discovered) = self
             .scan(self.channel.view(), &self.channel.primary_key())
             .await;
-        let mut by_sub = HashMap::new();
-        for item in &entries {
-            by_sub.insert(item.sub.clone(), item.entry.clone());
-        }
         let mut primary = lock(&self.primary);
         primary.entries = entries;
         primary.discovered = discovered;
-        primary.by_sub = by_sub;
     }
 
     /// `search(id, { source, query, limit, offset })`.
@@ -195,9 +189,9 @@ impl Catalog {
         let source_refresh = join_all(
             source_keys
                 .iter()
-                .map(|key| self.sources.refresh(key, false)),
+                .map(|key| self.sources.refresh_entries(key, false)),
         );
-        tokio::join!(primary_refresh, source_refresh);
+        let (_, source_entries) = tokio::join!(primary_refresh, source_refresh);
 
         let mut raw: Vec<Raw> = Vec::new();
         let mut seen_keys: HashSet<String> = HashSet::new();
@@ -215,24 +209,20 @@ impl Catalog {
             for item in items {
                 if seen_keys.insert(item.sub.clone()) {
                     raw.push(Raw {
-                        key: item.sub.clone(),
-                        entry: item.entry.clone(),
+                        key: item.sub,
+                        entry: item.entry,
                         source: self.channel.primary_key(),
                         source_kind: "channel".to_owned(),
                     });
                 }
             }
         }
-        for key in source_keys {
+        for (key, entries) in source_keys.into_iter().zip(source_entries) {
             let Some(record) = self.sources.get(&key) else {
                 continue;
             };
-            // Awake views are authoritative; only sleeping channels use the merged snapshot.
-            let items = if let Some(bee) = record.bee() {
-                self.sources.scan(&record, &bee).await.0
-            } else {
-                record.entries()
-            };
+            // Awake scans are authoritative; only sleeping channels use the merged snapshot.
+            let items = entries.unwrap_or_else(|| record.entries());
             for item in items {
                 let full = format!("channel:{key}/{}", item.sub);
                 if seen_keys.insert(full.clone()) {
