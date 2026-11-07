@@ -15,6 +15,7 @@
 //!
 //! `docs/port-notes-cast.md` records the deliberate differences and what is deferred.
 
+pub mod adapters;
 pub mod controller;
 pub mod disk;
 pub mod http;

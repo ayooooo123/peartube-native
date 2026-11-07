@@ -145,8 +145,8 @@ pub trait CastPeer: Send + Sync {
     fn find_entry(&self, key: &str) -> BoxFuture<'_, Option<Value>>;
     /// `node.search(id)`, the UI entry list.
     fn search(&self, id: &str) -> BoxFuture<'_, Vec<Value>>;
-    /// `node.warm(raw)`: start replicating the video's blocks.
-    fn warm(&self, blobs_hex: &str) -> BoxFuture<'_, ()>;
+    /// `node.warm(raw)`: start replicating the video's blocks from its raw announcement.
+    fn warm(&self, raw: &Value) -> BoxFuture<'_, ()>;
     /// `node.close()`.
     fn close(&self) -> BoxFuture<'_, ()>;
 }

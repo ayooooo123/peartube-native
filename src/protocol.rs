@@ -666,7 +666,9 @@ fn parse_watch(body: &str, q: &Query) -> Result<ParsedUri, UriError> {
 /// unchanged, including unknown fields.
 pub fn decode_op(value: impl AsRef<[u8]>) -> Option<Value> {
     let text = String::from_utf8_lossy(value.as_ref());
-    let mut op: Value = serde_json::from_str(&text).ok()?;
+    // A JS writer may store a lone surrogate escape; `toWellFormed` repairs it on the way out,
+    // and a Rust string cannot hold one, so repair before parsing or the whole op is rejected.
+    let mut op: Value = serde_json::from_str(&crate::ipc::well_formed(&text)).ok()?;
     canonicalize_numbers(&mut op);
     if op.get("claim").is_some() && !str_matches(op.get("claim"), is_hex128) {
         return None;

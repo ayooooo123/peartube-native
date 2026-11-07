@@ -52,7 +52,7 @@ fn hex4(bytes: &[u8]) -> Option<u32> {
 
 /// A JavaScript string can hold a lone surrogate and `toWellFormed` replaces it on the way out; a
 /// Rust string cannot, so replace the escapes before parsing. Valid pairs are left alone.
-fn well_formed(input: &str) -> Cow<'_, str> {
+pub(crate) fn well_formed(input: &str) -> Cow<'_, str> {
     if !input.contains("\\u") {
         return Cow::Borrowed(input);
     }

@@ -62,7 +62,9 @@ fn default_spawn_opens_the_loopback_api_and_lan() {
     std::fs::create_dir_all(&cast_dir).unwrap();
 
     let (tx, lines) = mpsc::channel();
-    let backend = Backend::spawn(json!({}), move |line| {
+    // `apiPort: 0` keeps the loopback listener off the app's fixed port, so the shutdown
+    // assertion cannot race another process rebinding it.
+    let backend = Backend::spawn(json!({ "apiPort": 0 }), move |line| {
         let _ = tx.send(line);
     })
     .expect("backend starts");
@@ -123,6 +125,17 @@ fn default_spawn_opens_the_loopback_api_and_lan() {
     assert_eq!(status["apiUrl"], json!(api_url));
     assert_eq!(status["tokenRequired"], json!(false));
     assert!(status["writer"].is_string(), "{status}");
+
+    // The cast controller comes up from the same storage `init` provided.
+    backend
+        .send(&json!({ "id": 3, "method": "castStatus", "params": {} }).to_string())
+        .unwrap();
+    let cast = wait_for(&lines, 3);
+    let cast = cast.get("result").unwrap_or_else(|| panic!("{cast}"));
+    assert!(
+        cast["receivers"].is_array(),
+        "the cast controller reports its receivers: {cast}"
+    );
 
     // Shutdown closes the node, the cast controller and every listener it opened.
     let address: std::net::SocketAddr = api_url

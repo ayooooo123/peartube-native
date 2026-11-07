@@ -53,20 +53,28 @@ pub struct Backend {
 }
 
 impl Backend {
-    /// A backend with no adapters configured: framing, envelopes and the settings helpers work,
-    /// anything that needs a node or a cast storage reports why it cannot.
+    /// A backend wired like `worker.js`: the native node factory, the loopback API, LAN discovery
+    /// and the cast controller. Hosts that need their own transports use [`Self::spawn_with`].
+    ///
+    /// `config.apiPort` picks the loopback API's preferred port (`0` for an ephemeral one); the
+    /// default is the app's [`crate::protocol::API_PORT`].
     pub fn spawn(
         config: Value,
         on_line: impl Fn(String) + Send + 'static,
     ) -> Result<Self, BackendError> {
+        let api_port = config
+            .get("apiPort")
+            .and_then(Value::as_u64)
+            .and_then(|port| u16::try_from(port).ok())
+            .unwrap_or(crate::protocol::API_PORT);
         Self::spawn_with(
             config,
             Adapters {
                 factory: Arc::new(crate::node::factory::Factory),
                 clock: Arc::new(SystemClock),
                 lan: Arc::new(crate::lan::Factory),
-                api: Some(Arc::new(crate::adapters::LoopbackApi::default())),
-                cast: None::<Arc<Unconfigured>>,
+                api: Some(Arc::new(crate::adapters::LoopbackApi::new(api_port))),
+                cast: Some(Arc::new(crate::cast::adapters::Factory)),
             },
             on_line,
         )

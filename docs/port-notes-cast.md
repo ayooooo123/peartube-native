@@ -38,7 +38,29 @@ over a 90 s deadline, exactly like `connectNoiseRpc`.
 
 Integration seams (`src/cast/traits.rs`): `CastPeer` (the P2P node), `PeerFactory`, `DhtConnect` /
 `DhtServer` (peeroxide secret streams), `BlobServerFactory` / `LanBlobServer`. Nothing in the cast
-port opens P2P sockets itself; the TCP stand-in in `tests/cast.rs` implements the same traits.
+port opens P2P sockets itself; `src/cast/adapters.rs` fills every seam for the real node and
+`Backend::spawn` wires it as the `CastFactory`, while `tests/cast.rs` keeps the TCP stand-ins.
+
+`src/cast/adapters.rs` is the app's wiring, one seam per JS call:
+
+- `NodePeer` is `CastPeer` over `CoreNode`: the catalog's `find_entry`/`search`/`open_uri`, the
+  blob core from `Node::blob_core`, the swarm's `join_peer`/`dial_lan_peer`, `evict_behind`,
+  `clear_cache` and `warm`. `warm` takes the raw announcement, the shape `Node::warm` parses. Its
+  `close` is a no-op: the backend owns that node and closes it with the worker.
+- `NodeDht` dials with the node's own HyperDHT handle and key pair; `NodeDhtServer` is
+  `dht.createServer` + `listen(keyPair)` — a peeroxide swarm bound to the receiver identity's Noise
+  key that accepts the controller's dials. Both wrap a `SecretStream` in a pump onto a tokio
+  duplex so the newline JSON RPC sees a byte pipe (`shortcut: one protocol frame per 64 KiB read
+  chunk, no coalescing`).
+- `CastBlobServers` binds one `byte_stream::BlobServer` on `0.0.0.0:0` with the default random
+  token and 96 MiB window. Its resolver admits only `allow`ed blob keys, calls `Node::blob_core`
+  for the swarm/ledger/ceiling side effects, then opens the request's own Corestore session, the
+  way the app's `store.session().get()` does. `get_link` re-hosts the server's link on the LAN
+  address the controller picked.
+- `Factory::start_local_receiver` loads the receiver identity first so the DHT server has its
+  seed, and binds the receiver on `RECEIVER_PORT` (`any_port` fallback) with mDNS on, exactly like
+  `startLocalReceiver`. `PeerFactory` stays `None`: a load whose network differs from the current
+  node reuses it instead of opening a second one.
 
 ## Deliberate differences
 
@@ -87,5 +109,11 @@ port opens P2P sockets itself; the TCP stand-in in `tests/cast.rs` implements th
   app checkout via `PEARTUBE_APP`): the real `cast.js` controller drives this receiver over HTTP and
   over a TCP stand-in for the secret stream, this controller drives the real `cast.js` receiver both
   ways, and the committed fixture is regenerated and compared, so a stale reference fails the suite.
+- `cargo test --test cast_default` runs the real stack: two `Backend::spawn` instances on one
+  local HyperDHT testnet, a fixture published into the controller's storage, pairing over LAN with
+  the receiver's code, `castPlay` (asserting `mode: "p2p"`), the receiver's player URL serving the
+  source's exact bytes full and ranged, and the `castControl`/`castStop` transitions.
+  `js_cast_receiver_is_driven_by_the_default_backend` (ignored) drives the app's own `cast.js`
+  receiver through the same backend.
 - 29 module unit tests sit next to the code (`cargo test --lib cast`); clippy is clean for
-  `src/cast/**` and `tests/cast.rs`.
+  `src/cast/**`, `tests/cast.rs` and `tests/cast_default.rs`.

@@ -34,15 +34,25 @@ fn extra_status(url: Arc<Mutex<Option<String>>>) -> Arc<dyn Fn() -> Value + Send
 
 /// `createApi` + `listenLoopback`: the loopback HTTP service over the node the worker opened.
 ///
-/// The app prefers [`API_PORT`] and falls back to an ephemeral port when it is taken.
+/// The app prefers [`API_PORT`] and falls back to an ephemeral port when it is taken; `0` asks for
+/// an ephemeral port up front.
 pub struct LoopbackApi {
+    /// The first port `start` tries; `0` skips straight to an ephemeral one.
+    preferred: u16,
     /// The server this adapter started; `start` replaces it.
     server: Mutex<Option<ApiServer>>,
 }
 
 impl Default for LoopbackApi {
     fn default() -> Self {
+        Self::new(API_PORT)
+    }
+}
+
+impl LoopbackApi {
+    pub fn new(preferred: u16) -> Self {
         Self {
+            preferred,
             server: Mutex::new(None),
         }
     }
@@ -66,15 +76,17 @@ impl ApiServerTrait<CoreNode> for LoopbackApi {
             on_sources_changed: Some(on_sources.clone()),
             ..Options::default()
         };
-        let preferred = SocketAddr::from(([127, 0, 0, 1], API_PORT));
-        let server = match Api::with_node(options(), node.clone())
-            .bind(preferred)
-            .await
-        {
-            Ok(server) => server,
-            Err(_) => {
-                let ephemeral = SocketAddr::from(([127, 0, 0, 1], 0));
-                Api::with_node(options(), node).bind(ephemeral).await?
+        let ephemeral = SocketAddr::from(([127, 0, 0, 1], 0));
+        let server = if self.preferred == 0 {
+            Api::with_node(options(), node).bind(ephemeral).await?
+        } else {
+            let preferred = SocketAddr::from(([127, 0, 0, 1], self.preferred));
+            match Api::with_node(options(), node.clone())
+                .bind(preferred)
+                .await
+            {
+                Ok(server) => server,
+                Err(_) => Api::with_node(options(), node).bind(ephemeral).await?,
             }
         };
         let url = server.url();

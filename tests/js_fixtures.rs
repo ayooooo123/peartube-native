@@ -320,3 +320,18 @@ fn misc_matches() {
         );
     }
 }
+
+/// worker.js repairs a lone surrogate with `toWellFormed` on the way out; a dropped op would make
+/// the announce vanish from the catalog instead.
+#[test]
+fn a_lone_surrogate_title_is_repaired_not_dropped() {
+    let raw = r#"{"type":"announce","id":"imdb:tt0000666","title":"Hostile \ud83d","size":10,"sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","blobs":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","blob":{"blockOffset":0,"blockLength":1,"byteOffset":0,"byteLength":10}}"#;
+    let op = decode_op(raw).expect("the op survives a lone surrogate");
+    assert_eq!(op["title"].as_str(), Some("Hostile \u{fffd}"));
+    let paired = decode_op(raw.replace(r"\ud83d", r"\ud83d\ude00"));
+    assert_eq!(
+        paired.expect("a valid pair decodes")["title"].as_str(),
+        Some("Hostile \u{1f600}"),
+        "a surrogate pair is left alone"
+    );
+}

@@ -36,7 +36,8 @@ use super::rpc::{self, ConnectOptions, RpcClient};
 use super::state::{self, idle, text_value, truthy};
 use super::traits::{BlobServerFactory, CastPeer, DhtConnect, LanBlobServer};
 
-type EnsureNode =
+/// `ensureNode`: the controller's way to (re)open the sender's own node.
+pub type EnsureNode =
     Arc<dyn Fn() -> BoxFuture<'static, Result<Option<Arc<dyn CastPeer>>, CastError>> + Send + Sync>;
 
 /// The controller's construction options, `createCastController`'s argument object.
@@ -1431,7 +1432,7 @@ impl ControllerInner {
         let local = item.get("local").is_some_and(truthy);
         let cached_bytes = item.get("cachedBytes").and_then(Value::as_u64).unwrap_or(0);
         if !target_p2p || local || cached_bytes > 0 {
-            peer.warm(&blobs_hex).await;
+            peer.warm(&raw).await;
         }
         self.allowed_blobs
             .lock()
