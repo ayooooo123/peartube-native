@@ -591,7 +591,7 @@ impl BonjourAdapter {
             }
         };
         // Names carry a random nonce, so probing would only rename the instance and lose the
-        // generation/shard suffix peers parse; the app publishes without probing either.
+        // generation/shard suffix peers parse.
         info.set_requires_probe(false);
         let fullname = info.get_fullname().to_string();
         if let Err(err) = daemon.register(info) {

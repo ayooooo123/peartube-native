@@ -1767,3 +1767,70 @@ impl Node for CoreNode {
 fn api_meta(meta: super::api::PutMeta) -> BlobPutMeta {
     meta
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn awake_source_does_not_resurrect_deleted_snapshot_entries() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = "11".repeat(32);
+        let blobs = "22".repeat(32);
+        let announce = json!({
+            "type": "announce", "id": "deleted", "title": "Deleted fixture",
+            "size": 1, "sha256": "33".repeat(32), "blobs": blobs,
+            "blob": { "blockOffset": 0, "blockLength": 1, "byteOffset": 0, "byteLength": 1 }
+        });
+        std::fs::write(
+            dir.path().join("catalog-cache.json"),
+            serde_json::to_vec(&json!({
+                "version": 1,
+                "channels": {
+                    (source.clone()): {
+                        "entries": [
+                            [format!("deleted/{source}/{blobs}:1"), announce],
+                            [format!("deleted/{source}/{blobs}:0"), announce]
+                        ],
+                        "discovered": []
+                    }
+                }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let node = create_node(json!({
+            "storage": dir.path(),
+            "sources": [source],
+            "bootstrap": ["127.0.0.1:9"],
+            "worklet": true
+        }))
+        .await
+        .unwrap();
+        let record = node.sources().get(&source).unwrap();
+        assert!(record.active());
+        assert_eq!(record.entries().len(), 2, "keep the hibernation snapshot");
+        assert!(
+            node.search(None, SearchOptions::default())
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            node.search(Some("deleted"), SearchOptions::default())
+                .await
+                .unwrap()
+                .is_empty()
+        );
+
+        node.sources().hibernate(&record).await;
+        let entries = node.search(None, SearchOptions::default()).await.unwrap();
+        assert_eq!(
+            entries.len(),
+            1,
+            "sleeping sources still serve their snapshot"
+        );
+        assert!(entries[0].key.ends_with(":0"), "JS deduplication ranking");
+        node.close().await.unwrap();
+    }
+}

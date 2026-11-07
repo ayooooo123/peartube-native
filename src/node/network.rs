@@ -94,6 +94,24 @@ fn is_loopback(bootstrap: &[String]) -> bool {
     })
 }
 
+async fn resolve_bind_bootstrap(mut bootstrap: Vec<String>) -> Vec<String> {
+    for node in &mut bootstrap {
+        let literal = node.rsplit_once(':').is_some_and(|(host, port)| {
+            let host = host.split_once('@').map_or(host, |(ip, _)| ip);
+            host.parse::<std::net::IpAddr>().is_ok() && port.parse::<u16>().is_ok()
+        });
+        if !literal {
+            // shortcut: custom hostnames need foreground DNS for loopback binding; defer with async bind selection.
+            return peeroxide_dht::rpc::resolve_bootstrap_nodes(&bootstrap).await;
+        }
+        if let Some(at) = node.find('@') {
+            let colon = node.rfind(':').expect("validated bootstrap port");
+            node.replace_range(at..colon, "");
+        }
+    }
+    bootstrap
+}
+
 /// `bootstrap: []` means the public network, as npm hyperdht does: an empty list is only ever the
 /// caller saying "I have no custom nodes", never "run isolated" (the LAN half passes its own DHT).
 pub fn resolve_bootstrap(bootstrap: Vec<String>) -> Vec<String> {
@@ -507,8 +525,7 @@ impl Network {
         closing: Arc<AtomicBool>,
     ) -> Result<Arc<Self>, std::io::Error> {
         // Resolve before choosing the bind: wildcard Noise addresses omit loopback interfaces.
-        let bootstrap =
-            peeroxide_dht::rpc::resolve_bootstrap_nodes(&resolve_bootstrap(bootstrap)).await;
+        let bootstrap = resolve_bind_bootstrap(resolve_bootstrap(bootstrap)).await;
         let host = base.unwrap_or_else(|| {
             if is_loopback(&bootstrap) {
                 "127.0.0.1".to_owned()
@@ -520,6 +537,7 @@ impl Network {
         let private_bootstrap = bootstrap.clone();
         let mut config = SwarmConfig::default();
         config.max_parallel = 16;
+        config.eager = true;
         config.relay_through = relay_through;
         config.dht = HyperDhtConfig::default();
         let mut rpc = DhtConfig::default();
@@ -1244,8 +1262,36 @@ mod tests {
     use super::*;
 
     #[tokio::test]
+    async fn open_does_not_wait_for_an_unreachable_bootstrap() {
+        let storage = tempfile::tempdir().unwrap();
+        let blackhole = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let network = tokio::time::timeout(
+            Duration::from_secs(1),
+            Network::open(
+                Corestore::open(storage.path()).unwrap(),
+                vec![blackhole.local_addr().unwrap().to_string()],
+                None,
+                0,
+                None,
+                None,
+                false,
+                Arc::new(AtomicBool::new(false)),
+            ),
+        )
+        .await
+        .expect("local startup must not wait for the bootstrap's network timeout")
+        .unwrap();
+        assert!(
+            tokio::time::timeout(Duration::from_millis(50), network.dht.bootstrapped())
+                .await
+                .is_err(),
+        );
+        network.close().await;
+    }
+
+    #[tokio::test]
     async fn hostname_bootstraps_choose_the_same_bind_as_their_ipv4_address() {
-        let named = peeroxide_dht::rpc::resolve_bootstrap_nodes(&[
+        let named = resolve_bind_bootstrap(vec![
             "localhost:49737".to_owned(),
             "127.0.0.2@bootstrap.invalid:49738".to_owned(),
         ])

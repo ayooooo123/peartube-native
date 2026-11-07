@@ -644,12 +644,17 @@ impl Inner {
                 return;
             };
             lock(&inner.timers).remove(&fired);
-            if inner.destroyed.load(Ordering::Acquire) {
+            if inner.destroyed.load(Ordering::Acquire)
+                || lock(&inner.active).contains_key(&fired)
+                || lock(&inner.pending).contains(&fired)
+            {
                 return;
             }
             let peer = lock(&inner.peers).get(&fired).cloned();
-            if let Some(peer) = peer {
-                Inner::consider(&inner, peer);
+            if let Some(peer) = peer
+                && (lock(&inner.direct).contains(&fired) || inner.shares_topic(&peer.tokens))
+            {
+                inner.dial(peer);
             }
         });
         lock(&self.timers).insert(id, task);
@@ -807,6 +812,66 @@ impl LanBinding for LanDiscovery {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn larger_key_dials_after_the_fallback_delay() {
+        use crate::lan::host::HostAdapter;
+        use crate::lan::mdns::Adapter;
+
+        let mut keys = [KeyPair::generate(), KeyPair::generate()];
+        keys.sort_by_key(|key| key.public_key);
+        let [small_key, large_key] = keys;
+        let adapter = || {
+            SelfAddressAdapter::with_adapter(
+                Adapter::Host(Arc::new(HostAdapter::new(|_| {}))),
+                Ipv4Addr::LOCALHOST,
+            )
+        };
+        let small = LanDiscovery::open_with_adapter(adapter(), small_key)
+            .await
+            .unwrap();
+        let large = LanDiscovery::open_with_adapter(adapter(), large_key)
+            .await
+            .unwrap();
+        let (connected, mut connections) = tokio::sync::mpsc::unbounded_channel();
+        let _small_listener = small.on_connection(Arc::new(|_| {}));
+        let _large_listener = large.on_connection(Arc::new(move |connection| {
+            let _ = connected.send(connection);
+        }));
+        let topic = [17; 32];
+        small.join(topic);
+        large.join(topic);
+        let record = create_records(
+            &small.inner.peer_key,
+            small.port().unwrap(),
+            &[topic_token(&topic)],
+        )
+        .remove(0);
+        // Only the larger key sees the other peer: the smaller key cannot initiate.
+        Inner::on_service(
+            &large.inner,
+            &DiscoveredService {
+                name: record.name,
+                port: record.port,
+                addresses: vec![Ipv4Addr::LOCALHOST],
+                txt: record.txt,
+            },
+        );
+        assert_eq!(DIAL_AFTER, Duration::from_millis(3000));
+        assert!(
+            tokio::time::timeout(DIAL_AFTER - Duration::from_millis(100), connections.recv())
+                .await
+                .is_err(),
+            "the larger key must let the smaller key dial first",
+        );
+        let connection = tokio::time::timeout(Duration::from_secs(1), connections.recv()).await;
+        large.destroy().await;
+        small.destroy().await;
+        assert!(
+            connection.is_ok_and(|connection| connection.is_some()),
+            "the fallback must dial, not re-arm another three-second timer",
+        );
+    }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn advertisement_updates_cannot_overtake_each_other() {

@@ -107,7 +107,7 @@ impl SourceRecord {
         lock(&self.bee).is_some()
     }
 
-    fn bee(&self) -> Option<Arc<Autobee>> {
+    pub(super) fn bee(&self) -> Option<Arc<Autobee>> {
         lock(&self.bee).clone()
     }
 

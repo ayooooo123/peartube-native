@@ -1,14 +1,15 @@
 //! `src/node/catalog.js`: the listing the app searches, and the URI opener.
 //!
-//! A listing unions the node's own channel with every followed channel's applied view (or its
-//! persisted snapshot while it sleeps), deduplicates by id/sha256 with the JS ranking, and adds
-//! the play and share links. An id lookup never walks the whole view.
+//! A listing unions the node's own channel with every awake channel's authoritative applied view,
+//! using the persisted snapshot only while that channel sleeps. It deduplicates by id/sha256 in
+//! catalog order with the JS ranking, then adds the play and share links.
 
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex, MutexGuard};
 
+use futures_util::future::join_all;
 use hyperbee::{Bee, RangeOptions};
 use serde_json::Value;
 
@@ -176,27 +177,27 @@ impl Catalog {
         let primary_wanted = filter
             .as_deref()
             .is_none_or(|key| key == self.channel.primary_key());
-        if id.is_some() {
+        let source_keys: Vec<_> = self
+            .sources
+            .keys()
+            .into_iter()
+            .filter(|key| filter.as_deref().is_none_or(|filter| filter == key))
+            .collect();
+        let primary_refresh = async {
             if primary_used && primary_wanted {
-                self.channel.applied().await;
-            }
-            for key in self.sources.keys() {
-                if filter.as_deref().is_some_and(|filter| filter != key) {
-                    continue;
+                if id.is_some() {
+                    self.channel.applied().await;
+                } else {
+                    self.refresh_primary(false).await;
                 }
-                self.sources.refresh(&key, false).await;
             }
-        } else {
-            if primary_used && primary_wanted {
-                self.refresh_primary(false).await;
-            }
-            for key in self.sources.keys() {
-                if filter.as_deref().is_some_and(|filter| filter != key) {
-                    continue;
-                }
-                self.sources.refresh(&key, false).await;
-            }
-        }
+        };
+        let source_refresh = join_all(
+            source_keys
+                .iter()
+                .map(|key| self.sources.refresh(key, false)),
+        );
+        tokio::join!(primary_refresh, source_refresh);
 
         let mut raw: Vec<Raw> = Vec::new();
         let mut seen_keys: HashSet<String> = HashSet::new();
@@ -222,17 +223,16 @@ impl Catalog {
                 }
             }
         }
-        for key in self.sources.keys() {
-            if filter.as_deref().is_some_and(|filter| filter != key) {
-                continue;
-            }
+        for key in source_keys {
             let Some(record) = self.sources.get(&key) else {
                 continue;
             };
-            let items = record.entries();
-            if items.is_empty() && !record.hydrated() {
-                continue;
-            }
+            // Awake views are authoritative; only sleeping channels use the merged snapshot.
+            let items = if let Some(bee) = record.bee() {
+                self.sources.scan(&record, &bee).await.0
+            } else {
+                record.entries()
+            };
             for item in items {
                 let full = format!("channel:{key}/{}", item.sub);
                 if seen_keys.insert(full.clone()) {
@@ -287,14 +287,12 @@ impl Catalog {
             to_probe.push(blob);
         }
         for chunk in to_probe.chunks(16) {
-            let futures: Vec<_> = chunk.iter().map(|blob| self.blobs.probe(blob)).collect();
-            for future in futures {
-                future.await;
-            }
+            join_all(chunk.iter().map(|blob| self.blobs.probe(blob))).await;
         }
 
         // Insertion order, as the JS `Map` keeps it: listings must come back in catalog order.
-        let mut files: Vec<(String, Entry)> = Vec::new();
+        let mut files: Vec<Entry> = Vec::new();
+        let mut positions: HashMap<String, usize> = HashMap::new();
         for item in raw {
             let Some(announce) = announce_from(&item.entry) else {
                 continue;
@@ -343,17 +341,21 @@ impl Catalog {
                 magnet_url: format_watch_uri(&watch_entry(&announce), "", ""),
             };
             let dedupe = format!("{}/{}", entry.id, entry.sha256);
-            match files.iter_mut().find(|(key, _)| *key == dedupe) {
-                Some((_, existing)) => {
+            match positions.get(&dedupe).copied() {
+                Some(index) => {
+                    let existing = &mut files[index];
                     if better(&entry, existing) {
                         *existing = entry;
                     }
                 }
-                None => files.push((dedupe, entry)),
+                None => {
+                    positions.insert(dedupe, files.len());
+                    files.push(entry);
+                }
             }
         }
 
-        let mut list: Vec<Entry> = files.into_iter().map(|(_, entry)| entry).collect();
+        let mut list = files;
         let query = options
             .query
             .clone()

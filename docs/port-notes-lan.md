@@ -49,7 +49,7 @@ Deviations from the JavaScript, all deliberate:
 | `Number()` coercion for `port`/`tc` | decimal parse (`""` → 0) | our own records are plain decimals; exotic numeric strings were never valid |
 | TXT keys looked up by exact case | case-insensitive | RFC 6763 §6.4, and `mdns-sd` resolves/filters them case-insensitively |
 | `browser.on('up')` may fire repeatedly per service | same (resolved events repeat on re-announcement); `down` carries the last resolved service | `ServiceRemoved` only carries the name; the app's `down` also carries the cached service |
-| name probing is not done at all | `set_requires_probe(false)` | probing would rename the instance and lose the generation/shard suffix; the nonce already prevents collisions |
+| `bonjour-service` probes before its first announcement (750–1000 ms) | `set_requires_probe(false)` | probing could rename the instance and lose the generation/shard suffix; the nonce already prevents collisions |
 
 ## Isolated LAN DHT half (ported)
 
@@ -116,6 +116,22 @@ streams wrapped in a `protomux::Mux` and handed to `LanBinding::on_connection`.
 independently of the asynchronous public swarm join. An unreachable public bootstrap must not
 delay same-LAN discovery; `network_private::public_routing_still_joins_its_topics` checks this
 without yielding to the public join task, and `lan_interop` checks the publisher/follower topic.
+
+`Network::open` uses peeroxide's opt-in `SwarmConfig::eager`: the public DHT binds immediately,
+while bootstrap I/O continues in the background. Topic discovery waits for bootstrap before its
+first announce/lookup, so an early join cannot silently miss its initial announcement. Numeric
+and suggested-IP bootstraps need no foreground DNS; custom names still resolve before selecting
+the bind so named loopback bootstraps retain their loopback transport.
+
+The larger-key fallback now dials after 3000 ms instead of calling `consider` and perpetually
+re-arming itself. `larger_key_dials_after_the_fallback_delay` withholds discovery from the smaller
+key and requires the larger key to connect after that delay without multicast.
+
+Cadence comparison (`bonjour-service` installed in the app vs `mdns-sd 0.21.7`): JS browses
+immediately and every 10 s; Rust adds 10–50 ms initial jitter and retries at 1/2/4 s before its
+10 s rebrowse. JS announces after probing, then repeats at 3/9/27 s intervals; Rust announces
+immediately and again after 1.1–1.15 s. Both use SRV/A TTL 120 s and TXT TTL 4500 s; PTR is
+28800 s in JS, 4500 s in Rust. Neither waits for TTL expiry to browse or dial.
 
 The isolated DHT binds the configured host, as JS does; a loopback host must not silently become
 a wildcard listener. The JS LAN interop fixture uses the worker's `interfaceAdapter(host)` so
