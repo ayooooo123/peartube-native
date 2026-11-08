@@ -601,8 +601,11 @@ where
     }
 
     pub async fn inflight_blocks(&self) -> u64 {
-        let sessions: Vec<_> = lock(&self.inner.cores).map.values()
-            .map(|entry| entry.session.clone()).collect();
+        let sessions: Vec<_> = lock(&self.inner.cores)
+            .map
+            .values()
+            .map(|entry| entry.session.clone())
+            .collect();
         let mut count = 0;
         for session in sessions {
             count += session.core().inflight_requests().await as u64;

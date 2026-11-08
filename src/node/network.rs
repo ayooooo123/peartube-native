@@ -179,7 +179,10 @@ impl WireBytes {
     }
 
     pub fn with_transport(transport: libudx::UdxStreamAbort) -> Self {
-        Self { transport: Some(transport), ..Self::default() }
+        Self {
+            transport: Some(transport),
+            ..Self::default()
+        }
     }
 
     fn attach_udx_rtt(&self, mux: &Mux) {
@@ -1170,7 +1173,10 @@ impl Network {
             self.prev_tx.store(tx, Ordering::Relaxed);
             self.prev_at.store(now, Ordering::Relaxed);
         }
-        let lan_peers = connections.iter().filter(|connection| connection.is_lan()).count() as u64;
+        let lan_peers = connections
+            .iter()
+            .filter(|connection| connection.is_lan())
+            .count() as u64;
         let public_peers = peers.saturating_sub(lan_peers + private_peers);
         let public_route = public.route(public_peers, public.closed_rx, public.closed_tx);
         // The private overlay's own route; nothing when it never started.
@@ -1200,11 +1206,9 @@ impl Network {
             down_bps: self.down_bps(),
             up_bps: self.up_bps(),
             contributing_peers: peers,
-            rtt: if rtt_count > 0 {
-                (rtt_sum + rtt_count / 2) / rtt_count
-            } else {
-                0
-            },
+            rtt: (rtt_sum + rtt_count / 2)
+                .checked_div(rtt_count)
+                .unwrap_or(0),
             retransmits,
         }
     }
