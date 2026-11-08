@@ -119,12 +119,70 @@ PEARTUBE_APP=/path/to/peartube CACHE_FREEZE_BUDGET=2147483648 \
 Use `CACHE_FREEZE_BLOCK_BYTES=65536` with a 1 GiB ceiling to exercise more than
 32768 cached tree nodes without needing a ten-gigabyte fixture.
 
+## Throughput A/B
+
+`examples/download_ab.rs` and `tests/js/download-ab.mjs` consume the same explicit
+UDX peers and blob range with a fresh private `/tmp` store. They assert HTTP 206,
+byte count and the configured SHA-256, and report decimal MB/s and downloader
+CPU-seconds/GiB, including the HTTP sink and validation hash but excluding setup,
+shutdown and seeder CPU. `worklet` defaults to `true`, as in the actual desktop
+app. Discovery is disabled so ambient LAN peers cannot change the comparison.
+The optional `trace: true` JSON field samples status every 500 ms; leave it off
+for timing.
+
+Use a private copy of the JS app's `src` and `package.json`, with its installed
+dependencies available read-only. In one terminal, keep a loopback JS seeder open:
+
+```sh
+PEARTUBE_APP=/tmp/peartube-reference nice -n 10 node tests/js/download-ab.mjs \
+  seed 1073741824 /tmp/download-ab.json
+```
+
+In another, run the consumers back to back (never during compilation):
+
+```sh
+RUSTC_WRAPPER= CARGO_BUILD_JOBS=4 CARGO_TARGET_DIR=target/ThroughputAB \
+  nice -n 10 cargo build --release --example download_ab
+PEARTUBE_APP=/tmp/peartube-reference nice -n 10 node tests/js/download-ab.mjs \
+  consume /tmp/download-ab.json
+nice -n 10 target/ThroughputAB/release/examples/download_ab /tmp/download-ab.json
+```
+
+For a real relay, provide its LAN `{host,port,publicKey}` in `peers`, the consumer's
+interface address in `host`, an announce in `entry`, and byte `start`/`bytes`.
+Confirm that the seeder actually holds that range before timing: an HTTP proxy
+can fetch absent blocks, but a sparse P2P peer cannot serve blocks it lacks.
+Capture `netstat -s -p udp` before/after each run; its full-socket-buffer delta
+is machine-wide, not a per-process loss counter.
+
+### 2026-11-08 desktop-mode measurements
+
+One back-to-back 1 GiB read per backend/path, fresh consumer stores, four Rust
+workers, identical SHA-256 and one explicitly pinned JS seeder throughout.
+LAN reads use Interstellar at byte offset 8 GiB. Decimal MB/s:
+
+| Seeder | JS | Rust before | Rust with UDX windows | CPU-s/GiB: JS / before / after |
+|---|---:|---:|---:|---|
+| Loopback | 37.35 | 37.24 | 38.36 | 30.28 / 45.89 / 44.61 |
+| NUC, same subnet | 15.17 | 15.27 | 14.02 | 25.06 / 26.16 / 26.64 |
+| Unraid, routed LAN | 7.50 | 7.98 | 13.18 | 29.90 / 30.41 / 27.22 |
+
+Rust incorrectly used JS's non-UDX three-times-minimum request window on UDX.
+The mux now supplies live RTT, enabling JS's 50 ms/peer-count scaling. A separate
+cold 64 MiB NUC trace showed peak in-flight requests **16 / 48 / 16** and
+**13.97 / 10.30 / 16.44 MB/s** for JS/before/after. The full-range Unraid result
+improved 65%, but the full-range NUC after-run was 7.6% below JS: this is **not**
+a universal throughput-win certification, and LAN variation remains material.
+Loopback CPU remains higher than JS; sampled running stacks are dominated by
+UDP ACK sends/receives. Socket-buffer enlargement and read coalescing were
+tested and rejected for lack of repeatable wins. No ACK, pacing or wire changes.
+
 ## Known gaps and differences
 
 - `p2p-replicate` and `hiverelay-seed` mirror plugins are not built in; hosts can register plugins with `MirrorHost::register`.
 - The default cast adapter has no `PeerFactory`: a load targeting a different network reuses the current node. Continuous read-ahead retargeting and `holdIfThin` are not wired; retry window timing differs. See [cast notes](docs/port-notes-cast.md).
 - LAN mDNS and the isolated DHT are implemented, but the real-interface interoperability matrix remains environment-blocked on this Mac. A standalone raw UDP probe also receives no LAN multicast; an ALF “permitted” query alone does not establish delivery. See [LAN notes](docs/port-notes-lan.md).
-- Corestore storage tuning uses engine defaults; free disk space is unknown, and traffic RTT/retransmit counters remain zero. See [node notes](docs/node-api.md).
+- Corestore storage tuning uses engine defaults; free disk space is unknown. Status reports live blob-peer in-flight requests and UDX RTT/retransmitted packets; see [node notes](docs/node-api.md).
 - Rust cannot represent already-lone JS surrogates; exponent-form receiver ports can format differently. Artwork HTTP timeout covers the whole exchange, unlike the JS socket inactivity timeout. See [identify/art notes](docs/port-notes-identify-art.md).
 
 ## License

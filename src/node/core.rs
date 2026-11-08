@@ -557,7 +557,7 @@ impl CoreNode {
             rx_bytes: sample.rx_bytes,
             tx_bytes: sample.tx_bytes,
             routes: sample.routes.clone(),
-            inflight_blocks: 0,
+            inflight_blocks: blobs.inflight_blocks().await,
             rtt: serde_json::Number::from(sample.rtt),
             retransmits: sample.retransmits,
             sources: self.list_sources_value(),

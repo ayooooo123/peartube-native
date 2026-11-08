@@ -30,6 +30,10 @@ pub trait MessageWrite: Send + Unpin {
 /// halves Protomux replicates over.
 pub trait MessageDuplex: Send {
     fn split(self: Box<Self>) -> (Box<dyn MessageRead>, Box<dyn MessageWrite>);
+    /// The inner UDX transport, when this is not a synthetic byte pipe.
+    fn udx_handle(&self) -> Option<libudx::UdxStreamAbort> {
+        None
+    }
 }
 
 /// A raw byte pipe framed as messages with a big-endian `u32` length.

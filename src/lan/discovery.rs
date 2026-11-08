@@ -431,7 +431,7 @@ impl Inner {
         // make. The dialler already has our public key, and no core or wakeup capability comes with
         // a connection: replication still needs the discovery key or the bee's key.
         let socket = connection.peer.socket.clone();
-        let bytes = WireBytes::new();
+        let bytes = WireBytes::with_transport(connection.peer.stream.abort_handle());
         let mux = metered_mux(connection.peer.stream, &bytes);
         // The swarm retires the connection when its stream closes, so a redial finds the slot
         // free; only the socket must outlive the mux.
@@ -498,7 +498,7 @@ impl Inner {
                 return;
             }
             let socket = connection.socket.clone();
-            let bytes = WireBytes::new();
+            let bytes = WireBytes::with_transport(connection.stream.abort_handle());
             let mux = metered_mux(connection.stream, &bytes);
             Inner::wire(
                 &inner,

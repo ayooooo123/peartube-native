@@ -569,6 +569,10 @@ impl Connection for PeeroxideConnection {
 struct SecretMessages(Option<SecretStream<UdxAsyncStream>>);
 
 impl MessageDuplex for SecretMessages {
+    fn udx_handle(&self) -> Option<UdxStreamAbort> {
+        self.0.as_ref().map(SecretStream::abort_handle)
+    }
+
     fn split(mut self: Box<Self>) -> (Box<dyn MessageRead>, Box<dyn MessageWrite>) {
         let stream = self.0.take().expect("split once");
         let (read, write) = stream.into_split();

@@ -600,6 +600,16 @@ where
         lock(&self.inner.cores).map.keys().copied().collect()
     }
 
+    pub async fn inflight_blocks(&self) -> u64 {
+        let sessions: Vec<_> = lock(&self.inner.cores).map.values()
+            .map(|entry| entry.session.clone()).collect();
+        let mut count = 0;
+        for session in sessions {
+            count += session.core().inflight_requests().await as u64;
+        }
+        count
+    }
+
     pub fn last_http_view_at(&self) -> u64 {
         self.inner.last_http_view_at.load(Ordering::Relaxed)
     }

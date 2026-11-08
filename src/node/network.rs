@@ -170,11 +170,23 @@ pub trait WakeupSink: Send + Sync {
 pub struct WireBytes {
     rx: Arc<AtomicU64>,
     tx: Arc<AtomicU64>,
+    transport: Option<libudx::UdxStreamAbort>,
 }
 
 impl WireBytes {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    pub fn with_transport(transport: libudx::UdxStreamAbort) -> Self {
+        Self { transport: Some(transport), ..Self::default() }
+    }
+
+    fn attach_udx_rtt(&self, mux: &Mux) {
+        if let Some(transport) = &self.transport {
+            let transport = transport.clone();
+            mux.set_udx_rtt(move || transport.stats().0);
+        }
     }
 
     pub fn rx(&self) -> u64 {
@@ -226,11 +238,13 @@ where
         remote_public_key: Some(*stream.remote_public_key()),
     };
     let (read, write) = stream.into_split();
-    Mux::new(
+    let mux = Mux::new(
         MeteredRead(read, Arc::clone(&bytes.rx)),
         MeteredWrite(write, Arc::clone(&bytes.tx)),
         info,
-    )
+    );
+    bytes.attach_udx_rtt(&mux);
+    mux
 }
 
 /// The private overlay handle when this build ships one; nothing is ever stored otherwise.
@@ -301,11 +315,13 @@ fn private_mux(
         remote_public_key: Some(remote_public_key),
     };
     let (read, write) = stream.split();
-    Mux::new(
+    let mux = Mux::new(
         MeteredRead(FramesRead(read), Arc::clone(&bytes.rx)),
         MeteredWrite(FramesWrite(write), Arc::clone(&bytes.tx)),
         info,
-    )
+    );
+    bytes.attach_udx_rtt(&mux);
+    mux
 }
 
 /// Opens the private overlay with the network's bind and bootstrap.
@@ -347,6 +363,7 @@ async fn start_private(
         let bytes = WireBytes {
             rx: Arc::clone(&network.private_rx),
             tx: Arc::clone(&network.private_tx),
+            transport: stream.udx_handle(),
         };
         let mux = private_mux(stream, is_initiator, handshake_hash, peer, &bytes);
         let handle = network.wire(
@@ -356,7 +373,7 @@ async fn start_private(
             true,
             Box::new(move || close()),
             Vec::new(),
-            None,
+            Some(bytes),
         );
         network.private_peers.fetch_add(1, Ordering::AcqRel);
         let watched = handle.mux().clone();
@@ -403,6 +420,7 @@ struct ConnectionState {
     close: Box<dyn Fn() + Send + Sync>,
     lan: bool,
     private: bool,
+    transport: Option<libudx::UdxStreamAbort>,
     /// The transport pieces the mux does not own (socket handle, direct-dial runtime).
     _keepalive: Vec<Box<dyn Any + Send + Sync>>,
 }
@@ -649,6 +667,7 @@ impl Network {
         let bytes = WireBytes {
             rx: Arc::clone(&self.wire_rx),
             tx: Arc::clone(&self.wire_tx),
+            transport: Some(connection.peer.stream.abort_handle()),
         };
         let mux = metered_mux(connection.peer.stream, &bytes);
         self.wire(
@@ -658,7 +677,7 @@ impl Network {
             false,
             Box::new(|| {}),
             vec![Box::new(socket)],
-            None,
+            Some(bytes),
         );
     }
 
@@ -671,7 +690,7 @@ impl Network {
         private: bool,
         close: Box<dyn Fn() + Send + Sync>,
         keepalive: Vec<Box<dyn Any + Send + Sync>>,
-        bytes: Option<WireBytes>,
+        mut bytes: Option<WireBytes>,
     ) -> ConnectionHandle {
         self.store.replicate(&mux);
         for sink in lock(&self.wakeups).iter() {
@@ -680,7 +699,8 @@ impl Network {
             // would stall at the head it woke with, so the node asks for every bee as it pairs.
             sink.request_lookup();
         }
-        if let Some(bytes) = &bytes {
+        let transport = bytes.as_mut().and_then(|bytes| bytes.transport.take());
+        if lan && let Some(bytes) = &bytes {
             // The route's total must not drop when the connection goes: the counters stay.
             lock(&self.lan_wires).push(bytes.clone());
         }
@@ -692,6 +712,7 @@ impl Network {
             lan,
             private,
             _keepalive: keepalive,
+            transport,
         }));
         {
             let mut connections = lock(&self.connections);
@@ -1044,6 +1065,7 @@ impl Network {
             let bytes = WireBytes {
                 rx: Arc::clone(&network.wire_rx),
                 tx: Arc::clone(&network.wire_tx),
+                transport: Some(connection.stream.abort_handle()),
             };
             let mux = metered_mux(connection.stream, &bytes);
             network.wire(
@@ -1053,7 +1075,7 @@ impl Network {
                 false,
                 Box::new(|| {}),
                 vec![Box::new(socket)],
-                None,
+                Some(bytes),
             );
         });
     }
@@ -1115,7 +1137,8 @@ impl Network {
             public_rx + lan_rx + private_rx,
             public_tx + lan_tx + private_tx,
         );
-        let peers = self.connection_count();
+        let connections = self.connections();
+        let peers = connections.len() as u64;
         let mut public = self.public;
         let mut lan = self.lan_bucket;
         public.closed_rx = public_rx;
@@ -1147,12 +1170,25 @@ impl Network {
             self.prev_tx.store(tx, Ordering::Relaxed);
             self.prev_at.store(now, Ordering::Relaxed);
         }
-        let lan_peers = self.lan_connection_count();
+        let lan_peers = connections.iter().filter(|connection| connection.is_lan()).count() as u64;
         let public_peers = peers.saturating_sub(lan_peers + private_peers);
         let public_route = public.route(public_peers, public.closed_rx, public.closed_tx);
         // The private overlay's own route; nothing when it never started.
         let private_route = Bucket::default().route(private_peers, private_rx, private_tx);
         let lan_route = lan.route(lan_peers, lan.closed_rx, lan.closed_tx);
+        let mut rtt_sum = 0u64;
+        let mut rtt_count = 0u64;
+        let mut retransmits = 0u64;
+        for connection in &connections {
+            if let Some(transport) = &connection.0.transport {
+                let (rtt, sent_again) = transport.stats();
+                if rtt > 0 {
+                    rtt_sum += u64::from(rtt);
+                    rtt_count += 1;
+                }
+                retransmits += sent_again;
+            }
+        }
         Sample {
             routes: Routes {
                 private: private_route,
@@ -1164,8 +1200,12 @@ impl Network {
             down_bps: self.down_bps(),
             up_bps: self.up_bps(),
             contributing_peers: peers,
-            rtt: 0,
-            retransmits: 0,
+            rtt: if rtt_count > 0 {
+                (rtt_sum + rtt_count / 2) / rtt_count
+            } else {
+                0
+            },
+            retransmits,
         }
     }
 
