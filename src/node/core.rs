@@ -400,10 +400,12 @@ impl BlobHost for Host {
     }
 
     fn flush(&self) -> super::blobs::SendFuture<'_, ()> {
-        if let Some(shared) = self.0.upgrade() {
-            shared.storage.flush();
-        }
-        Box::pin(async {})
+        let shared = self.0.upgrade();
+        Box::pin(async move {
+            if let Some(shared) = shared {
+                let _ = tokio::task::spawn_blocking(move || shared.storage.flush()).await;
+            }
+        })
     }
 
     fn compact(&self, policy: Compact) -> super::blobs::SendFuture<'_, ()> {

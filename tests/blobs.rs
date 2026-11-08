@@ -190,6 +190,7 @@ struct HostState {
     stored: Mutex<HashSet<[u8; 32]>>,
     db_bytes: AtomicU64,
     compactions: Mutex<Vec<Compact>>,
+    storage: Mutex<Option<Corestore>>,
 }
 
 #[derive(Clone, Default)]
@@ -255,11 +256,27 @@ impl BlobHost for TestHost {
         None
     }
     fn flush(&self) -> SendFuture<'_, ()> {
-        Box::pin(async {})
+        let storage = lock(&self.0.storage).clone();
+        Box::pin(async move {
+            if let Some(store) = storage {
+                tokio::task::spawn_blocking(move || store.store().flush())
+                    .await
+                    .unwrap()
+                    .unwrap();
+            }
+        })
     }
     fn compact(&self, policy: Compact) -> SendFuture<'_, ()> {
         lock(&self.0.compactions).push(policy);
-        Box::pin(async {})
+        let storage = lock(&self.0.storage).clone();
+        Box::pin(async move {
+            if let Some(store) = storage {
+                tokio::task::spawn_blocking(move || store.store().compact(false))
+                    .await
+                    .unwrap()
+                    .unwrap();
+            }
+        })
     }
 }
 
@@ -829,6 +846,226 @@ async fn cache_ceiling_matches_the_app() {
             .expect("streaming key"),
     );
     assert!(h.blobs.open_core(&streaming).is_some());
+}
+
+#[tokio::test]
+#[ignore = "needs the JS app's installed modules; CACHE_FREEZE_BUDGET scales the 64 MiB budget"]
+async fn http_stream_survives_cache_ceiling() {
+    use hyperblobs::BlobId;
+    use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
+    use tokio::net::TcpStream;
+    use tokio::process::Command;
+    use tokio::time::{Instant, timeout};
+
+    let budget = std::env::var("CACHE_FREEZE_BUDGET")
+        .ok()
+        .map(|n| n.parse::<u64>().expect("byte budget"))
+        .unwrap_or(64 * 1024 * 1024);
+    let block_size = std::env::var("CACHE_FREEZE_BLOCK_BYTES")
+        .ok()
+        .map(|n| n.parse::<usize>().expect("block size"))
+        .unwrap_or(BLOCK);
+    let h = harness([0x71; 32], [0x72; 32], 1_000_000).await;
+    *lock(&h.host.0.storage) = Some(h.store.clone());
+    let dir = tempfile::tempdir().unwrap();
+    let mut child = Command::new("node")
+        .arg("tests/js/cache-ceiling.mjs")
+        .arg(dir.path())
+        .arg(budget.to_string())
+        .arg(block_size.to_string())
+        .env(
+            "PEARTUBE_APP",
+            std::env::var("PEARTUBE_APP").unwrap_or_else(|_| {
+                format!("{}/projects/peartube", std::env::var("HOME").unwrap())
+            }),
+        )
+        .env("HOME", dir.path())
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .unwrap();
+    let mut lines = BufReader::new(child.stdout.take().unwrap()).lines();
+    let info: Value = serde_json::from_str(
+        &timeout(Duration::from_secs(120), lines.next_line())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap(),
+    )
+    .unwrap();
+    let key = unhex32(info["cores"][1]["key"].as_str().unwrap());
+    let old_key = unhex32(info["cores"][0]["key"].as_str().unwrap());
+    let viewer = h.blobs.blob_core(&key).await.unwrap();
+    let old = h.blobs.blob_core(&old_key).await.unwrap();
+    let socket = TcpStream::connect(("127.0.0.1", info["port"].as_u64().unwrap() as u16))
+        .await
+        .unwrap();
+    let stream = peeroxide_dht::secret_stream::SecretStream::new(
+        true,
+        socket,
+        peeroxide_dht::noise::generate_keypair(),
+    )
+    .await
+    .unwrap();
+    let mux = protomux::Mux::from_secret_stream(stream);
+    h.store.replicate(&mux);
+    mux.ready();
+    timeout(Duration::from_secs(10), viewer.update(None))
+        .await
+        .unwrap()
+        .unwrap();
+    timeout(Duration::from_secs(10), old.update(None))
+        .await
+        .unwrap()
+        .unwrap();
+    timeout(
+        Duration::from_secs(120),
+        old.download(0, Some(old.length()), true),
+    )
+    .await
+    .expect("old cache download")
+    .unwrap();
+    h.blobs.sync_block_counter(&old).await;
+    let length = viewer.length();
+    let addr = h
+        .blobs
+        .start_server("127.0.0.1:0".parse().unwrap(), 96 * 1024 * 1024)
+        .await
+        .unwrap();
+    let blob = BlobId {
+        block_offset: 0,
+        block_length: length,
+        byte_offset: 0,
+        byte_length: length * block_size as u64,
+    };
+    let entry: Announce = serde_json::from_value(json!({
+        "type": "announce", "id": "clip:cache-freeze", "title": "Cache freeze",
+        "size": blob.byte_length, "sha256": hex(&[0; 32]), "blobs": hex(&key),
+        "blob": { "blockOffset": 0, "blockLength": length, "byteOffset": 0,
+            "byteLength": blob.byte_length }
+    }))
+    .unwrap();
+    let url = h.blobs.stream_url(&entry);
+    let path = format!("/?{}", url.split_once("/?").unwrap().1);
+    h.blobs.set_cache_max_bytes(budget as f64);
+    let started = Instant::now();
+    let mut socket = TcpStream::connect(addr).await.unwrap();
+    socket
+        .write_all(
+            format!(
+                "GET {path} HTTP/1.1\r\nHost: x\r\nRange: bytes=0-\r\nConnection: close\r\n\r\n"
+            )
+            .as_bytes(),
+        )
+        .await
+        .unwrap();
+    let mut reader = BufReader::new(socket);
+    let mut head = String::new();
+    timeout(Duration::from_secs(10), async {
+        loop {
+            assert!(
+                reader.read_line(&mut head).await.unwrap() > 0,
+                "HTTP headers"
+            );
+            if head.ends_with("\r\n\r\n") {
+                break;
+            }
+        }
+    })
+    .await
+    .expect("HTTP headers stalled");
+    assert!(head.starts_with("HTTP/1.1 206"), "{head}");
+    let (stop, mut stopped) = tokio::sync::watch::channel(false);
+    let blobs = h.blobs.clone();
+    let ceiler = tokio::spawn(async move {
+        let mut trimmed = 0;
+        loop {
+            tokio::select! {
+                _ = stopped.changed() => return trimmed,
+                _ = tokio::time::sleep(Duration::from_secs(2)) => {}
+            }
+            let before = blobs.cached_total_bytes().await;
+            let started = Instant::now();
+            let ceiling = blobs.enforce_cache_ceiling(Some(key)).await;
+            trimmed += ceiling.evicted;
+            eprintln!(
+                "cache-freeze: before={before} cached={} evicted={} pass_ms={}",
+                ceiling.cached_bytes,
+                ceiling.evicted,
+                started.elapsed().as_millis()
+            );
+        }
+    });
+    let mut last_chunk = Instant::now();
+    let mut max_gap = Duration::ZERO;
+    let mut max_read = Duration::ZERO;
+    let mut block = vec![0; block_size];
+    for index in 0..length {
+        let read_started = Instant::now();
+        timeout(Duration::from_secs(10), reader.read_exact(&mut block))
+            .await
+            .unwrap_or_else(|_| {
+                panic!(
+                    "HTTP freeze at block {index}: cached={}, has={}, peers={}",
+                    h.blobs.local_blocks(&key) * block_size as u64,
+                    viewer.has(index),
+                    viewer.core().peer_count()
+                )
+            })
+            .unwrap();
+        max_read = max_read.max(read_started.elapsed());
+        max_gap = max_gap.max(last_chunk.elapsed());
+        last_chunk = Instant::now();
+        let mut x = index as u32 + 1;
+        for word in block.chunks_exact(4) {
+            x ^= x << 13;
+            x ^= x >> 17;
+            x ^= x << 5;
+            assert_eq!(
+                u32::from_le_bytes(word.try_into().unwrap()),
+                x,
+                "wrong block {index}"
+            );
+        }
+        // Keep the headless consumer below 8 MiB/s so the test doesn't saturate the host.
+        tokio::time::sleep(Duration::from_secs_f64(
+            block_size as f64 / (8.0 * 1024.0 * 1024.0),
+        ))
+        .await;
+    }
+    stop.send(true).unwrap();
+    let trimmed = timeout(Duration::from_secs(60), ceiler)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(trimmed > 0, "the run must cross the ceiling");
+    let cleared = h.store.get(StoreGetOptions::key(old_key)).await.unwrap();
+    assert!(
+        !cleared.has(0),
+        "the ceiling must evict the older cached film"
+    );
+    cleared.close();
+    assert!(
+        !viewer.has(length / 4),
+        "the ceiling must also trim spent playing blocks"
+    );
+    eprintln!(
+        "cache-freeze: exact={} trimmed={trimmed} elapsed={:?} max_gap_ms={} max_read_ms={}",
+        blob.byte_length,
+        started.elapsed(),
+        max_gap.as_millis(),
+        max_read.as_millis()
+    );
+    h.blobs.stop_server().await;
+    viewer.close();
+    old.close();
+    h.store.close().await;
+    drop(child.stdin.take());
+    timeout(Duration::from_secs(10), child.wait())
+        .await
+        .unwrap()
+        .unwrap();
 }
 
 #[tokio::test]

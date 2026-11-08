@@ -123,7 +123,7 @@ Deliberate deviations from the JavaScript:
 * **LAN.** A host binding is the new `network::LanBinding` trait (join/leave/destroy/host/port/stats/dialDirect plus an `on_connection` callback that yields a `LanConnection` carrying an already-framed Protomux). `Node::Lan` is `Arc<dyn LanBinding>`.
 * **Authority.** `channel::AppendAuthority` is the small read-only face of the vault that channel writes need (channel key, owner key, `signClaim`); `Shared` keeps a clone of the vault and the saved access keys so blob-host reads stay synchronous.
 * **Wakeup lookups.** The published Autobee asks peers for writer heads from its fast-forward search; autobee-rs's search omits that request, so the node asks (`wakeup.request_lookup()`) for every attached bee as a connection pairs and on a forced catalog refresh. Without it a fresh follower stalls at the head it woke with.
-* **Blob host maintenance.** `flush`/`compact` are no-ops (the engine has no compaction entry point exposed) and `freeBytes` is `None` (unbounded), which the blob store already treats as "unknown".
+* **Blob host maintenance.** `flush`/`compact` run on blocking workers, not the backend's single-thread executor. Streaming/ceiling reclamation retains live blobs; only a full viewer wipe forces relocation. `freeBytes` is `None`, which the blob store treats as unknown; the configured cache ceiling still applies.
 * **`Node::BlobServer`** is the `SocketAddr` the Range server bound (`Blobs::start_server`'s local address, kept in `Shared`), which the `/v1/blob` proxy needs.
 * **Catalog ordering** keeps the JS `Map`'s insertion order (primary channel first, then followed sources, then direct watches).
 

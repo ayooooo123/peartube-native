@@ -79,6 +79,8 @@ walk forces another scan; a polling host does not repeatedly decode unchanged
 metadata. This does not disable the eager system/view history mirror on landing.
 Blob wake observers do not retain sessions: Corestore's peer/session-aware GC
 can reclaim an owned or cached core after its last reader and peer leave.
+Cache reclamation offloads both the blocking RocksDB flush and compaction from
+the backend's single-thread Tokio executor, so HTTP and replication keep polling.
 
 ## Running tests
 
@@ -103,12 +105,26 @@ copy needed for the app's announcing-job restart bug. See
 Fixtures are committed; regenerate the protocol/mnemonic reference with
 `(cd fixtures/gen && npm run gen)` when changing its reference inputs.
 
+`tests/blobs.rs::http_stream_survives_cache_ceiling` uses a real loopback JS
+Corestore seeder, incompressible blocks, HTTP Range playback and disk reclamation;
+only channel/swarm bookkeeping is scripted. It paces the reader below 8 MiB/s,
+starts with an older cached film, and reports the maximum chunk/read gap:
+
+```sh
+PEARTUBE_APP=/path/to/peartube CACHE_FREEZE_BUDGET=2147483648 \
+  CACHE_FREEZE_MOVIE_BYTES=3221225472 RUSTC_WRAPPER= CARGO_BUILD_JOBS=4 \
+  CARGO_TARGET_DIR=target/CacheFreeze nice -n 15 cargo test --release --test blobs \
+  http_stream_survives_cache_ceiling -- --ignored --nocapture
+```
+Use `CACHE_FREEZE_BLOCK_BYTES=65536` with a 1 GiB ceiling to exercise more than
+32768 cached tree nodes without needing a ten-gigabyte fixture.
+
 ## Known gaps and differences
 
 - `p2p-replicate` and `hiverelay-seed` mirror plugins are not built in; hosts can register plugins with `MirrorHost::register`.
 - The default cast adapter has no `PeerFactory`: a load targeting a different network reuses the current node. Continuous read-ahead retargeting and `holdIfThin` are not wired; retry window timing differs. See [cast notes](docs/port-notes-cast.md).
 - LAN mDNS and the isolated DHT are implemented, but the real-interface interoperability matrix remains environment-blocked on this Mac. A standalone raw UDP probe also receives no LAN multicast; an ALF “permitted” query alone does not establish delivery. See [LAN notes](docs/port-notes-lan.md).
-- Corestore storage tuning uses engine defaults; blob flush/compaction are unavailable, free space is unknown, and traffic RTT/retransmit counters remain zero. See [node notes](docs/node-api.md).
+- Corestore storage tuning uses engine defaults; free disk space is unknown, and traffic RTT/retransmit counters remain zero. See [node notes](docs/node-api.md).
 - Rust cannot represent already-lone JS surrogates; exponent-form receiver ports can format differently. Artwork HTTP timeout covers the whole exchange, unlike the JS socket inactivity timeout. See [identify/art notes](docs/port-notes-identify-art.md).
 
 ## License
