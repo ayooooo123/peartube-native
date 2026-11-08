@@ -1414,10 +1414,7 @@ impl AppHost {
         let thread = thread::Builder::new()
             .name("peartube-app".into())
             .spawn(move || {
-                let runtime = match tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()
-                {
+                let runtime = match crate::backend::runtime() {
                     Ok(runtime) => {
                         let _ = ready.send(Ok(()));
                         runtime

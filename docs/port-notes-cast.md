@@ -117,8 +117,10 @@ port opens P2P sockets itself; `src/cast/adapters.rs` fills every seam for the r
   receiver through the same backend.
   Its bootstrap is a HyperDHT node, not bare DHT-RPC: the latter cannot store peer announcements
   or forward `PEER_HANDSHAKE`, and replies with error code 1 instead of reaching the receiver.
-- 29 module unit tests sit next to the code (`cargo test --lib cast`); clippy is clean for
-  `src/cast/**`, `tests/cast.rs` and `tests/cast_default.rs`.
+- Module unit tests sit next to the code (`cargo test --lib cast`).
+- `cast::controller::tests::active_session_survives_contended_status_and_stop` holds the
+  active-session lock on another thread while status and stop run. Session updates never await,
+  so this slot uses a synchronous mutex: contention must not become a null session or a lost stop.
 
 ## Private routing
 

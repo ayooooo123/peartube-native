@@ -137,7 +137,8 @@ struct ControllerInner {
     browse_host: Mutex<Option<String>>,
     service_ids: Mutex<HashMap<String, String>>,
     local_receiver: tokio::sync::Mutex<Option<Receiver>>,
-    active: tokio::sync::Mutex<Option<Session>>,
+    // Session updates never await; snapshots and stop must not mistake contention for absence.
+    active: Mutex<Option<Session>>,
     attempt: AtomicU64,
     closing: AtomicBool,
 }
@@ -662,9 +663,10 @@ impl ControllerInner {
     fn list_receivers(&self) -> Vec<super::records::ListedReceiver> {
         let active = self
             .active
-            .try_lock()
-            .ok()
-            .and_then(|guard| guard.as_ref().map(|s| s.session.receiver_id.clone()));
+            .lock()
+            .expect("cast active")
+            .as_ref()
+            .map(|s| s.session.receiver_id.clone());
         let web = self.web_listings(active.as_deref());
         let discovered = self.discovered();
         let saved = self.saved.lock().expect("cast saved").clone();
@@ -685,7 +687,7 @@ impl ControllerInner {
 
     fn close_active_transport(&self) -> u64 {
         let attempt = self.attempt.fetch_add(1, Ordering::SeqCst) + 1;
-        let session = self.active.try_lock().ok().and_then(|mut slot| slot.take());
+        let session = self.active.lock().expect("cast active").take();
         if let Some(session) = session {
             if let Some(task) = session.sse {
                 task.abort();
@@ -715,7 +717,7 @@ impl ControllerInner {
                 "A newer cast or stop replaced this one",
             ));
         }
-        *self.active.lock().await = Some(Session {
+        *self.active.lock().expect("cast active") = Some(Session {
             session: session.clone(),
             sse,
             rpc,
@@ -746,9 +748,10 @@ impl ControllerInner {
         };
         let session = self
             .active
-            .try_lock()
-            .ok()
-            .and_then(|slot| slot.as_ref().map(|s| s.session.to_json()));
+            .lock()
+            .expect("cast active")
+            .as_ref()
+            .map(|s| s.session.to_json());
         let receiver_mode = self
             .local_receiver
             .try_lock()
@@ -906,7 +909,7 @@ impl CastController {
             browse_host: Mutex::new(None),
             service_ids: Mutex::new(HashMap::new()),
             local_receiver: tokio::sync::Mutex::new(None),
-            active: tokio::sync::Mutex::new(None),
+            active: Mutex::new(None),
             attempt: AtomicU64::new(0),
             closing: AtomicBool::new(false),
         });
@@ -1600,7 +1603,7 @@ impl ControllerInner {
                 web[index].state = loading.clone();
                 loading
             };
-            *self.active.lock().await = Some(Session {
+            *self.active.lock().expect("cast active") = Some(Session {
                 session: CastSession {
                     receiver_id,
                     receiver_name: web_name,
@@ -1847,7 +1850,7 @@ impl ControllerInner {
                                 }
                                 let Some(state) = event.get("state").cloned() else { continue };
                                 if inner.attempt.load(Ordering::SeqCst) != mine { continue }
-                                if let Some(session) = inner.active.lock().await.as_mut() {
+                                if let Some(session) = inner.active.lock().expect("cast active").as_mut() {
                                     session.session.state = state;
                                 }
                                 inner.emit_change();
@@ -1860,7 +1863,7 @@ impl ControllerInner {
                         let Ok(info) = inner.client.json(Method::GET, &poll_url, Vec::new(), None, Duration::from_millis(1500)).await else { continue };
                         let Some(state) = info.get("state").cloned() else { continue };
                         if inner.attempt.load(Ordering::SeqCst) != mine { continue }
-                        if let Some(session) = inner.active.lock().await.as_mut() {
+                        if let Some(session) = inner.active.lock().expect("cast active").as_mut() {
                             session.session.state = state;
                         }
                         inner.emit_change();
@@ -1966,7 +1969,12 @@ impl ControllerInner {
     }
 
     async fn cast_control(self: &Arc<Self>, cmd: &Value) -> Result<Value, CastError> {
-        let current = self.active.lock().await.as_ref().map(|s| s.session.clone());
+        let current = self
+            .active
+            .lock()
+            .expect("cast active")
+            .as_ref()
+            .map(|s| s.session.clone());
         let Some(session) = current else {
             return Err(CastError::bad_request("No active cast session"));
         };
@@ -2023,7 +2031,7 @@ impl ControllerInner {
                     )
                     .await?;
                 if let Some(state) = answer.get("state").cloned()
-                    && let Some(active) = self.active.lock().await.as_mut()
+                    && let Some(active) = self.active.lock().expect("cast active").as_mut()
                 {
                     active.session.state = state;
                 }
@@ -2037,7 +2045,7 @@ impl ControllerInner {
                 let rpc = self
                     .active
                     .lock()
-                    .await
+                    .expect("cast active")
                     .as_ref()
                     .and_then(|s| s.rpc.clone())
                     .ok_or_else(|| CastError::bad_request("Cast session transport disconnected"))?;
@@ -2053,7 +2061,7 @@ impl ControllerInner {
                 payload.insert("token".into(), json!(session.token));
                 let answer = rpc.call("cmd", payload, Duration::from_secs(10)).await?;
                 if let Some(state) = answer.get("state").cloned()
-                    && let Some(active) = self.active.lock().await.as_mut()
+                    && let Some(active) = self.active.lock().expect("cast active").as_mut()
                 {
                     active.session.state = state;
                 }
@@ -2067,7 +2075,7 @@ impl ControllerInner {
     }
 
     async fn cast_stop(self: &Arc<Self>, stop_playback: bool) -> Result<Value, CastError> {
-        let has_session = self.active.lock().await.is_some();
+        let has_session = self.active.lock().expect("cast active").is_some();
         if !has_session {
             self.close_active_transport();
             return Ok(self.status());
@@ -2116,4 +2124,66 @@ fn hex_key(text: &str) -> Result<[u8; 32], CastError> {
             .map_err(|_| CastError::bad_request("Public key must be 64 hex characters"))?;
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn active_session_survives_contended_status_and_stop() {
+        let storage = tempfile::tempdir().unwrap();
+        let controller = CastController::start(ControllerOptions {
+            storage: storage.path().to_owned(),
+            mdns: false,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        *controller.inner.active.try_lock().unwrap() = Some(Session {
+            session: CastSession {
+                receiver_id: "tv".into(),
+                receiver_name: "TV".into(),
+                transport: "lan",
+                base_url: None,
+                token: String::new(),
+                public_key: String::new(),
+                state: json!({ "playing": false }),
+            },
+            sse: None,
+            rpc: None,
+        });
+        for stop in [false, true] {
+            let (locked, held) = std::sync::mpsc::sync_channel(0);
+            let (release, released) = std::sync::mpsc::sync_channel(0);
+            let writer = Arc::clone(&controller.inner);
+            let writer = std::thread::spawn(move || {
+                let _guard = writer.active.try_lock().unwrap();
+                locked.send(()).unwrap();
+                released.recv().unwrap();
+            });
+            held.recv().unwrap();
+            let reader = Arc::clone(&controller.inner);
+            let (sent, received) = std::sync::mpsc::sync_channel(1);
+            let reader = std::thread::spawn(move || {
+                if stop {
+                    reader.close_active_transport();
+                }
+                sent.send(reader.status()).unwrap();
+            });
+            let early = received.recv_timeout(Duration::from_millis(100));
+            release.send(()).unwrap();
+            writer.join().unwrap();
+            reader.join().unwrap();
+            assert!(early.is_err(), "contention must wait, not omit the session");
+            let status = received.recv().unwrap();
+            if stop {
+                assert_eq!(status["session"], Value::Null);
+                assert!(controller.inner.active.try_lock().unwrap().is_none());
+            } else {
+                assert_eq!(status["session"]["state"]["playing"], json!(false));
+            }
+        }
+        controller.close().await;
+    }
 }

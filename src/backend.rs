@@ -30,6 +30,18 @@ impl fmt::Display for BackendError {
 }
 impl std::error::Error for BackendError {}
 
+/// The engine's runtime. The app loop stays on the calling thread (`block_on`); spawned work —
+/// replication, verification, HTTP serving, storage — runs on a small worker pool, so one busy or
+/// blocking task no longer stalls playback. Capped at four workers for big.LITTLE phones.
+pub(crate) fn runtime() -> std::io::Result<tokio::runtime::Runtime> {
+    let workers = thread::available_parallelism().map_or(2, |n| n.get().clamp(2, 4));
+    tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(workers)
+        .thread_name("peartube-worker")
+        .enable_all()
+        .build()
+}
+
 enum Command {
     Input(String),
     Suspend(u64),
@@ -103,10 +115,7 @@ impl Backend {
         let thread = thread::Builder::new()
             .name("peartube-backend".into())
             .spawn(move || {
-                let runtime = match tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()
-                {
+                let runtime = match runtime() {
                     Ok(runtime) => {
                         let _ = ready_tx.send(Ok(()));
                         runtime
