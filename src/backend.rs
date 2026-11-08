@@ -34,12 +34,37 @@ impl std::error::Error for BackendError {}
 /// replication, verification, HTTP serving, storage — runs on a small worker pool, so one busy or
 /// blocking task no longer stalls playback. Capped at four workers for big.LITTLE phones.
 pub(crate) fn runtime() -> std::io::Result<tokio::runtime::Runtime> {
+    raise_fd_limit();
     let workers = thread::available_parallelism().map_or(2, |n| n.get().clamp(2, 4));
     tokio::runtime::Builder::new_multi_thread()
         .worker_threads(workers)
         .thread_name("peartube-worker")
         .enable_all()
         .build()
+}
+
+/// macOS and iOS start GUI apps with a 256 soft descriptor limit. Node/libuv raised it at
+/// startup, and the engine's peers, loopback HTTP pairs and RocksDB files can briefly pass
+/// 256 when playback starts (`EMFILE` on the player's first request). Raise the soft limit
+/// to the hard one, capped at macOS's `OPEN_MAX`.
+fn raise_fd_limit() {
+    #[cfg(unix)]
+    {
+        use rustix::process::{Resource, Rlimit, getrlimit, setrlimit};
+        const OPEN_MAX: u64 = 10_240;
+        let limit = getrlimit(Resource::Nofile);
+        let target = limit.maximum.map_or(OPEN_MAX, |max| max.min(OPEN_MAX));
+        if limit.current.is_none_or(|current| current >= target) {
+            return;
+        }
+        let _ = setrlimit(
+            Resource::Nofile,
+            Rlimit {
+                current: Some(target),
+                maximum: limit.maximum,
+            },
+        );
+    }
 }
 
 enum Command {
@@ -621,4 +646,27 @@ impl<N: crate::node::Node> crate::node::api::CastFactory<N> for Unconfigured {
         candidate.unwrap_or(fallback).to_owned()
     }
     fn reclaim(&self, _storage: &str) {}
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use rustix::process::{Resource, Rlimit, getrlimit, setrlimit};
+
+    #[test]
+    fn engine_runtime_lifts_a_256_descriptor_limit() {
+        let original = getrlimit(Resource::Nofile);
+        // The limit a macOS GUI app starts with.
+        setrlimit(
+            Resource::Nofile,
+            Rlimit {
+                current: Some(256),
+                maximum: original.maximum,
+            },
+        )
+        .unwrap();
+        drop(super::runtime().unwrap());
+        let raised = getrlimit(Resource::Nofile).current.unwrap_or(u64::MAX);
+        setrlimit(Resource::Nofile, original).unwrap();
+        assert!(raised > 256, "soft limit stayed at {raised}");
+    }
 }

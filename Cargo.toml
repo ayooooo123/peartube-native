@@ -45,6 +45,9 @@ hyper-util = { version = "0.1", features = ["client-legacy", "http1", "tokio"] }
 unicode-normalization = "0.1"
 url = "2"
 
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1", features = ["process"] }
+
 [dev-dependencies]
 tempfile = "3"
 
