@@ -1018,15 +1018,11 @@ async fn http_stream_survives_cache_ceiling() {
         max_gap = max_gap.max(last_chunk.elapsed());
         last_chunk = Instant::now();
         let mut x = index as u32 + 1;
-        for word in block.chunks_exact(4) {
+        for word in block.as_chunks::<4>().0 {
             x ^= x << 13;
             x ^= x >> 17;
             x ^= x << 5;
-            assert_eq!(
-                u32::from_le_bytes(word.try_into().unwrap()),
-                x,
-                "wrong block {index}"
-            );
+            assert_eq!(u32::from_le_bytes(*word), x, "wrong block {index}");
         }
         // Keep the headless consumer below 8 MiB/s so the test doesn't saturate the host.
         tokio::time::sleep(Duration::from_secs_f64(
