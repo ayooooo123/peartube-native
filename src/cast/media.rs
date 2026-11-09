@@ -200,12 +200,12 @@ impl Media {
         value
     }
 
-    fn register_reader(&self) -> u64 {
+    fn register_reader(&self, start: u64) -> u64 {
         static NEXT: AtomicU64 = AtomicU64::new(1);
         let id = NEXT.fetch_add(1, Ordering::Relaxed);
         self.readers.lock().expect("cast readers").push(Reader {
             id,
-            pos: 0,
+            pos: start,
             sent: 0,
             at: Instant::now(),
         });
@@ -265,15 +265,25 @@ impl Media {
         avg.max(recent.min(2.0 * avg))
     }
 
+    pub fn furthest_reader_byte(&self) -> u64 {
+        self.readers
+            .lock()
+            .expect("cast readers")
+            .iter()
+            .map(|reader| reader.pos)
+            .max()
+            .unwrap_or(0)
+    }
+
     /// The playhead in bytes: the lead reader's position, else the reported position.
     pub fn lead_byte(&self, state: &Map<String, Value>, duration_ms: Option<u64>) -> u64 {
-        let readers = self.readers.lock().expect("cast readers").clone();
+        let readers = self.readers.lock().expect("cast readers");
         let lead = readers
             .iter()
             .filter(|r| r.sent >= LEAD_MIN_BYTES)
             .max_by_key(|r| r.at)
             .or_else(|| readers.last());
-        match lead {
+        let lead_pos = match lead {
             Some(reader) => reader.pos,
             None => {
                 let total = self.total_size();
@@ -286,7 +296,12 @@ impl Media {
                     _ => 0,
                 }
             }
-        }
+        };
+        readers
+            .iter()
+            .map(|reader| reader.pos)
+            .min()
+            .map_or(lead_pos, |pos| pos.min(lead_pos))
     }
 
     /// Whether a peer holds the whole video (or the cache covers it).
@@ -308,6 +323,22 @@ impl Media {
             .as_ref()
             .and_then(|peer| peer.memory_cache_bytes())
             .map_or(wanted, |limit| wanted.min(limit * 3 / 4))
+    }
+}
+
+fn reserve_window(
+    budget: Option<Arc<tokio::sync::Semaphore>>,
+    wanted: u64,
+) -> (u64, Option<tokio::sync::OwnedSemaphorePermit>) {
+    let Some(budget) = budget else {
+        return (wanted, None);
+    };
+    let bytes = wanted
+        .min(budget.available_permits() as u64)
+        .min(u32::MAX as u64);
+    match budget.try_acquire_many_owned(bytes as u32) {
+        Ok(permit) => (bytes, Some(permit)),
+        Err(_) => (0, None),
     }
 }
 
@@ -379,6 +410,7 @@ pub fn evict_plan(free: u64, rate: f64, playhead_byte: u64) -> Option<EvictOptio
     Some(EvictOptions {
         playhead_byte,
         keep_behind_bytes,
+        keep_ahead_bytes: None,
         max_bytes,
     })
 }
@@ -476,9 +508,16 @@ pub fn windowed_response(
         return res;
     }
     let (tx, rx) = mpsc::channel(8);
-    let reader_id = media.register_reader();
-    let window = media.window_bytes(free);
+    let reader_id = media.register_reader(start);
+    let (window, permit) = reserve_window(
+        media
+            .peer
+            .as_ref()
+            .and_then(|peer| peer.memory_window_budget()),
+        media.window_bytes(free),
+    );
     tokio::spawn(async move {
+        let _window_permit = permit;
         let opts = StreamOptions {
             start,
             length: Some(end - start + 1),
@@ -490,12 +529,16 @@ pub fn windowed_response(
         let mut stream = match ByteStream::open(&core, blob, opts, bag.clone()).await {
             Ok(stream) => stream,
             Err(_) => {
+                media.drop_reader(reader_id);
                 bag.destroy("stream closed");
                 return;
             }
         };
         let mut pos = start;
-        while let Ok(Some(chunk)) = stream.next().await {
+        while let Ok(Some(chunk)) = tokio::select! {
+            next = stream.next() => next,
+            _ = tx.closed() => Ok(None),
+        } {
             let len = chunk.len() as u64;
             if tx.send(Ok(Frame::data(chunk))).await.is_err() {
                 break;
@@ -733,14 +776,23 @@ async fn pipe_p2p(
     let (Some(core), Some(blob)) = (media.core.as_ref(), media.blob) else {
         return Err((0, CastError::new("No local P2P source", 502)));
     };
+    let reader_id = media.register_reader(start);
+    let (window, _window_permit) = reserve_window(
+        media
+            .peer
+            .as_ref()
+            .and_then(|peer| peer.memory_window_budget()),
+        (DEFAULT_STREAM_BYTES_PER_SEC * 12).min(media.window_bytes(u64::MAX)),
+    );
     let opts = StreamOptions {
         start,
         length: Some(end - start + 1),
-        window_bytes: DEFAULT_STREAM_BYTES_PER_SEC * 12,
+        window_bytes: window,
         active: false,
     };
     let bag = RequestBag::new();
-    let result = async {
+    let result = tokio::select! {
+      result = async {
         let mut stream = match ByteStream::open(core, blob, opts, bag.clone()).await {
             Ok(stream) => stream,
             Err(err) => return Err((0, CastError::new(err.to_string(), 502))),
@@ -768,14 +820,18 @@ async fn pipe_p2p(
                     Ok(Some(chunk)) => chunk,
                 }
             };
-            written += next.len() as u64;
+            let len = next.len() as u64;
+            written += len;
             if tx.send(Ok(Frame::data(next))).await.is_err() {
                 return Ok(written);
             }
+            media.advance_reader(reader_id, start + written, len);
         }
         Ok(written)
-    }
-    .await;
+      } => result,
+      _ = tx.closed() => Ok(0),
+    };
+    media.drop_reader(reader_id);
     bag.destroy("splice closed");
     result
 }
@@ -799,6 +855,46 @@ pub fn media_snapshot(media: &Media) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn concurrent_responses_share_one_prefetch_budget() {
+        let budget = Arc::new(tokio::sync::Semaphore::new(100));
+        let (a, first) = reserve_window(Some(budget.clone()), 75);
+        let (b, second) = reserve_window(Some(budget.clone()), 75);
+        let (c, _) = reserve_window(Some(budget.clone()), 75);
+        assert_eq!((a, b, c), (75, 25, 0));
+        drop(first);
+        assert_eq!(reserve_window(Some(budget.clone()), 75).0, 75);
+        drop(second);
+        assert_eq!(budget.available_permits(), 100);
+    }
+
+    #[test]
+    fn forward_seek_starts_at_its_range_and_trims_behind_the_slowest_reader() {
+        let media = Media::new(
+            "test".into(),
+            json!({"size": 1_000_000_000u64}),
+            "video/mp4".into(),
+            "p2p".into(),
+            "p2p".into(),
+            false,
+            None,
+            None,
+            None,
+            None,
+            String::new(),
+            None,
+            false,
+        );
+        let first = media.register_reader(500_000_000);
+        assert_eq!(media.lead_byte(&Map::new(), None), 500_000_000);
+        let second = media.register_reader(600_000_000);
+        media.advance_reader(second, 610_000_000, LEAD_MIN_BYTES);
+        assert_eq!(media.lead_byte(&Map::new(), None), 500_000_000);
+        assert_eq!(media.furthest_reader_byte(), 610_000_000);
+        media.drop_reader(first);
+        assert_eq!(media.lead_byte(&Map::new(), None), 610_000_000);
+    }
 
     #[test]
     fn read_ahead_shrinks_with_the_disk() {

@@ -442,6 +442,7 @@ fn dir_bytes(path: &Path) -> u64 {
 pub struct Shared {
     pub storage: Storage,
     pub opts: Value,
+    memory_window_budget: Option<Arc<tokio::sync::Semaphore>>,
     pub closing: Arc<AtomicBool>,
     /// The node's one wakeup swarm, shared by the channel and every followed
     /// channel: a connection pairs wakeup once, so there can only be one.
@@ -484,6 +485,10 @@ pub struct CoreNode {
 }
 
 impl CoreNode {
+    pub fn memory_window_budget(&self) -> Option<Arc<tokio::sync::Semaphore>> {
+        self.inner.memory_window_budget.clone()
+    }
+
     pub fn memory_cache_bytes(&self) -> Option<u64> {
         self.inner
             .opts
@@ -797,6 +802,13 @@ pub async fn create_node(options: Value) -> Result<Arc<CoreNode>, NodeError> {
     let shared: Arc<Shared> = Arc::new_cyclic(|_weak| Shared {
         storage,
         opts: options.clone(),
+        memory_window_budget: options.get("memoryCacheBytes").and_then(Value::as_u64).map(
+            |bytes| {
+                Arc::new(tokio::sync::Semaphore::new(
+                    (bytes.saturating_mul(3) / 4).min(u32::MAX as u64) as usize,
+                ))
+            },
+        ),
         closing: closing.clone(),
         wakeup: wakeup.clone(),
         channel: OnceLock::new(),
@@ -1505,6 +1517,9 @@ impl Node for CoreNode {
         let key = parse_hex32(blobs).ok_or_else(|| NodeError("Invalid blob key".into()))?;
         let mut opts = EvictOptions::default();
         opts.keep_ahead_bytes = self.memory_cache_bytes().map(|limit| limit * 7 / 8);
+        if let Some(value) = options.get("keepAheadBytes").and_then(Value::as_u64) {
+            opts.keep_ahead_bytes = Some(value);
+        }
         if let Some(value) = options.get("playheadByte").and_then(Value::as_u64) {
             opts.playhead_byte = value;
         }

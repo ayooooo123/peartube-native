@@ -38,6 +38,13 @@ impl Storage {
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
                 Err(error) => return Err(error.into()),
             }
+            for cache in ["cache-lru.json", "catalog-cache.json"] {
+                match std::fs::remove_file(path.join(cache)) {
+                    Ok(()) => {}
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(error) => return Err(error.into()),
+                }
+            }
         }
         let store =
             Corestore::open_with_options(&dir, hypercore::storage::StoreOptions { wal, memory })?;
@@ -111,5 +118,33 @@ impl Storage {
     /// `blobGarbageCollectionPolicy: 1` (a full wipe with no live blobs left), else policy 2.
     pub fn compact(&self, relocate_blobs: bool) {
         let _ = self.store.store().compact(relocate_blobs);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn memory_restart_discards_cache_indexes_but_keeps_identity() {
+        for memory in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            for file in [
+                "cache-lru.json",
+                "catalog-cache.json",
+                "identity.json",
+                "receiver.json",
+            ] {
+                std::fs::write(dir.path().join(file), b"preserve").unwrap();
+            }
+            let storage = Storage::open(dir.path(), true, true, memory).unwrap();
+            for file in ["cache-lru.json", "catalog-cache.json"] {
+                assert_eq!(dir.path().join(file).exists(), !memory);
+            }
+            for file in ["identity.json", "receiver.json"] {
+                assert_eq!(std::fs::read(dir.path().join(file)).unwrap(), b"preserve");
+            }
+            storage.close().await;
+        }
     }
 }

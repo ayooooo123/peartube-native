@@ -118,6 +118,9 @@ impl CastPeer for NodePeer {
     fn memory_cache_bytes(&self) -> Option<u64> {
         self.node.memory_cache_bytes()
     }
+    fn memory_window_budget(&self) -> Option<Arc<tokio::sync::Semaphore>> {
+        self.node.memory_window_budget()
+    }
 
     fn peer_key(&self) -> String {
         self.node.peer_key()
@@ -233,6 +236,7 @@ impl CastPeer for NodePeer {
                 "playheadByte": opts.playhead_byte,
                 "keepBehindBytes": opts.keep_behind_bytes,
                 "maxBytes": opts.max_bytes,
+                "keepAheadBytes": opts.keep_ahead_bytes,
             });
             let _ = node.evict_behind(&core_key_hex, blob, options).await;
         })

@@ -83,17 +83,23 @@ Cache reclamation offloads both the blocking RocksDB flush and compaction from
 the backend's single-thread Tokio executor, so HTTP and replication keep polling.
 
 The standalone cast receiver uses RocksDB MemEnv (including media blobs), not
-flash. Only its obsolete `peer_dir/corestore` cache is removed on startup;
+flash. Its obsolete `peer_dir/corestore` cache and stale cache/catalog indexes
+are removed on startup;
 `receiver.json` and `identity.json` remain on disk. Phone/desktop owned nodes keep
 their disk stores. The receiver's store budget is `min(1.5 GB, MemTotal/4,
 MemAvailable/2)` from `/proc/meminfo`, with a conservative 256 MiB fallback when
-unavailable. Live media gets 40% of this budget, read-ahead at most 75% of that
-live ceiling, and trailing data at most 64 MiB (or one eighth of the ceiling).
+unavailable and a 64 MiB floor so zero available RAM cannot disable eviction.
+Live media gets 40% of this budget; read-ahead reservations across all concurrent
+Range/hybrid responses share at most 75% of that live ceiling. A response without
+remaining read-ahead capacity fetches on demand. Trailing data gets at most
+64 MiB (or one eighth of the ceiling), with the existing small block guards.
 The remaining room covers memtables, metadata, in-flight writes and old/new blob
 files during GC; watched blocks are trimmed every three seconds even while
-buffering. Backwards seeks also drop stale future ranges beyond 7/8 of the live
-ceiling, preserving the existing small head/tail guards. Seeks fetch discarded
-blocks again. The TV app currently has no
+buffering. Only the active load trims windows; title changes clear prior blobs.
+Trailing eviction protects the slowest reader, and stale future data beyond the
+furthest reader plus 7/8 of the live ceiling is dropped after backwards seeks.
+Closing a response cancels its requests and releases its read-ahead reservation.
+Seeks fetch discarded blocks again. The TV app currently has no
 `onTrimMemory` hook; there is no claim of an OS-enforced allocator hard limit.
 
 ## Running tests

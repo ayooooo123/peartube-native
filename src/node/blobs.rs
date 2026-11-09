@@ -71,6 +71,12 @@ const LRU_WRITE_DELAY: Duration = Duration::from_secs(2);
 const CEILING_BOOT_DELAY: Duration = Duration::from_secs(5);
 const CEILING_DELAY: Duration = Duration::from_secs(2);
 
+fn ceiling_growth_step(max: u64) -> u64 {
+    (256u64 * 1024 * 1024)
+        .max(max / 50)
+        .min((max / 10).max(8 * 1024 * 1024))
+}
+
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
 }
@@ -942,7 +948,7 @@ where
                 1 << 19
             };
             let max = ceilings.max_bytes;
-            (max, (256u64 * 1024 * 1024).max(max / 50))
+            (max, ceiling_growth_step(max))
         };
         if max == 0 {
             return;
@@ -2875,5 +2881,17 @@ fn watch_entry(entry: &Announce) -> crate::protocol::WatchEntry {
             byte_offset: entry.blob.byte_offset,
             byte_length: entry.blob.byte_length,
         }),
+    }
+}
+
+#[cfg(test)]
+mod memory_ceiling_tests {
+    use super::ceiling_growth_step;
+
+    #[test]
+    fn small_cache_schedules_a_pass_before_exceeding_its_budget() {
+        assert_eq!(ceiling_growth_step(100 * 1024 * 1024), 10 * 1024 * 1024);
+        assert_eq!(ceiling_growth_step(26 * 1024 * 1024), 8 * 1024 * 1024);
+        assert_eq!(ceiling_growth_step(5_000_000_000), 256 * 1024 * 1024);
     }
 }

@@ -60,7 +60,10 @@ fn receiver_memory_bytes(meminfo: &str) -> u64 {
     };
     let total = kib("MemTotal:").unwrap_or(1024 * 1024 * 1024);
     let available = kib("MemAvailable:").unwrap_or(total / 2);
-    1_500_000_000u64.min(total / 4).min(available / 2)
+    1_500_000_000u64
+        .min(total / 4)
+        .min(available / 2)
+        .max(64 * 1024 * 1024)
 }
 
 fn lock<T>(cell: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -1586,5 +1589,9 @@ mod memory_budget_tests {
             204_800_000
         );
         assert_eq!(receiver_memory_bytes(""), 256 * 1024 * 1024);
+        assert_eq!(
+            receiver_memory_bytes("MemTotal: 8000000 kB\nMemAvailable: 0 kB\n"),
+            64 * 1024 * 1024
+        );
     }
 }

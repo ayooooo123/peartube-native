@@ -107,6 +107,7 @@ pub struct NetworkConfig {
 pub struct EvictOptions {
     pub playhead_byte: u64,
     pub keep_behind_bytes: u64,
+    pub keep_ahead_bytes: Option<u64>,
     pub max_bytes: u64,
 }
 
@@ -119,6 +120,9 @@ pub struct ClearCacheOptions {
 /// The P2P node a receiver or controller drives, as the cast stack uses it.
 pub trait CastPeer: Send + Sync {
     fn memory_cache_bytes(&self) -> Option<u64> {
+        None
+    }
+    fn memory_window_budget(&self) -> Option<Arc<tokio::sync::Semaphore>> {
         None
     }
     /// 64-hex Noise public key (`peerKey`).

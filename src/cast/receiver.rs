@@ -479,6 +479,7 @@ impl Inner {
                     && last_blobs != target_blobs;
                 let entry_size = entry.get("size").and_then(Value::as_u64).unwrap_or(0);
                 if free_now < LOW_DISK_BOOT_BYTES
+                    || (different && active_peer.memory_cache_bytes().is_some())
                     || (different
                         && free_now
                             < (3 * 1024 * 1024 * 1024).max(entry_size + LOW_DISK_STREAM_BYTES))
@@ -1126,10 +1127,23 @@ impl Inner {
             let rate = media.rate(duration);
             let playhead = media.lead_byte(&state, duration);
             let memory_limit = peer.memory_cache_bytes();
+            if memory_limit.is_some()
+                && !active
+                    .as_ref()
+                    .is_some_and(|current| Arc::ptr_eq(current, &media))
+            {
+                continue;
+            }
             let plan = memory_limit
                 .map(|limit| super::traits::EvictOptions {
                     playhead_byte: playhead,
                     keep_behind_bytes: (limit / 8).min(64 * 1024 * 1024),
+                    keep_ahead_bytes: Some(
+                        media
+                            .furthest_reader_byte()
+                            .saturating_sub(playhead)
+                            .saturating_add(limit * 7 / 8),
+                    ),
                     max_bytes: limit,
                 })
                 .or_else(|| evict_plan(free, rate, playhead));
@@ -1438,4 +1452,136 @@ fn hex(bytes: &[u8]) -> String {
 /// The storage root a receiver keeps its identity in.
 pub fn storage_dir(root: &Path) -> PathBuf {
     root.to_path_buf()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::node::Node;
+    use corestore::{Corestore, GetOptions};
+
+    #[tokio::test]
+    async fn reloaded_memory_film_keeps_the_active_window() {
+        let dir = tempfile::tempdir().unwrap();
+        let node = crate::node::core::create_node(json!({
+            "storage": dir.path().join("peer"), "bootstrap": [],
+            "storageMemory": true, "memoryCacheBytes": 4 * 1024 * 1024,
+        }))
+        .await
+        .unwrap();
+        let writer = Corestore::open_with_options(
+            &dir.path().join("writer"),
+            hypercore::storage::StoreOptions {
+                memory: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let source = writer.get(GetOptions::name("film")).await.unwrap();
+        source.append(&vec![vec![7u8; 65536]; 256]).await.unwrap();
+        let session = node
+            .store()
+            .get(GetOptions::key(*source.key()))
+            .await
+            .unwrap();
+        let ((ar, aw), (br, bw)) = protomux::memory::duplex(256);
+        let mux = |read, write, is_initiator| {
+            protomux::Mux::new(
+                read,
+                write,
+                protomux::StreamInfo {
+                    is_initiator,
+                    handshake_hash: Some([7; 64]),
+                    remote_public_key: None,
+                },
+            )
+        };
+        let a = mux(ar, aw, true);
+        let b = mux(br, bw, false);
+        source.core().replicate(&a);
+        session.core().replicate(&b);
+        tokio::time::timeout(Duration::from_secs(10), async {
+            session.update(None).await.unwrap();
+            for index in 0..256 {
+                session
+                    .get(index, hypercore::GetOptions::default())
+                    .await
+                    .unwrap()
+                    .unwrap();
+            }
+        })
+        .await
+        .unwrap();
+        let key = hex(source.key());
+        let session = node.blob_core(&key).await.unwrap();
+        let peer = Arc::new(super::super::adapters::NodePeer::new(node.clone()));
+        let blob = BlobId {
+            block_offset: 0,
+            block_length: 256,
+            byte_offset: 0,
+            byte_length: 16 * 1024 * 1024,
+        };
+        let media = |token: &str| {
+            Arc::new(Media::new(
+                token.into(),
+                json!({"size": blob.byte_length}),
+                "video/mp4".into(),
+                "p2p".into(),
+                "p2p".into(),
+                false,
+                Some(peer.clone()),
+                None,
+                None,
+                Some(session.core().clone()),
+                key.clone(),
+                Some(blob),
+                false,
+            ))
+        };
+        let old = media("old");
+        let active = media("active");
+        let old_response = windowed_response(old.clone(), Some("bytes=0-"), false, u64::MAX);
+        let active_response =
+            windowed_response(active.clone(), Some("bytes=12582912-"), false, u64::MAX);
+        let receiver = Receiver::start(ReceiverOptions {
+            storage: dir.path().join("cast"),
+            peer: Some(peer),
+            port: 0,
+            bind_host: "127.0.0.1".into(),
+            mdns: false,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        *receiver.inner.active.lock().unwrap() = Some(active.clone());
+        receiver
+            .inner
+            .streams
+            .lock()
+            .unwrap()
+            .extend([old.clone(), active.clone()]);
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while active.lead_byte(&Map::new(), None) < 12 * 1024 * 1024 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert!(old.lead_byte(&Map::new(), None) < 1024 * 1024);
+        *receiver.inner.last_evict_at.lock().unwrap() = Instant::now() - Duration::from_secs(4);
+        receiver.inner.steer_tick().await;
+        assert!(
+            session.has(192),
+            "the old load must not evict the active playhead"
+        );
+        assert!(
+            !session.has(128),
+            "the active load still trims its spent prefix"
+        );
+        drop((old_response, active_response));
+        receiver.close().await;
+        source.close();
+        writer.close().await;
+        node.close().await.unwrap();
+    }
 }
