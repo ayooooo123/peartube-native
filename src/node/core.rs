@@ -774,7 +774,11 @@ pub async fn create_node(options: Value) -> Result<Arc<CoreNode>, NodeError> {
         .ok_or_else(|| NodeError("storage is required".into()))?
         .to_owned();
     let worklet = options.get("worklet").is_some_and(js_truthy);
-    let storage = Storage::open(&storage_path, worklet)?;
+    let wal = options
+        .get("storageWal")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+    let storage = Storage::open(&storage_path, worklet, wal)?;
     let closing = Arc::new(AtomicBool::new(false));
     let handle = ChannelHandle::default();
     let wakeup = Arc::new(WakeupSwarm::new(|_, _| {}));

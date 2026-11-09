@@ -115,6 +115,9 @@ The app owns the `castStorage` sent by `init`, the last settings a `start` was g
 Deliberate deviations from the JavaScript:
 
 * **Storage tuning.** `createStorage`'s `hypercore-storage` options (write buffer, caches, pinning) are not configurable through the Rust Corestore, so the engine's own defaults apply; the worklet flag still selects the mobile request window.
+  `storageWal` defaults to true; only the receiver-owned cache node passes false.
+  Ordinary app nodes and writer-owned stores retain WAL durability. A WAL-free
+  receiver cache may lose its unflushed tail on a crash and re-fetch it from peers.
 * **Swarm.** Topics, joins, content announcements, replication fan-out (`Corestore::replicate` on every accepted connection) and the channel/corestore wakeup sessions match the JS. `privateRouting` runs `create_private_swarm` like `src/node/network.js`: channel discovery becomes `joinSource` on the overlay, `joinPeer` dials through the guards, content topics stay unannounced, and LAN bindings are refused. If the overlay cannot start the node fails closed (`Network::can_announce`), joining no public or LAN topic and attributing nothing to the private route.
   Inner-stream duplicate selection and active-peer registration are atomic, matching one JS
   connection callback; replacement close callbacks run after that state is published.

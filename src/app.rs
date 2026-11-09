@@ -706,7 +706,7 @@ where
         factory.reclaim(&peer_dir);
         let node = self
             .factory
-            .create(json!({"storage": peer_dir, "worklet": true}))
+            .create(json!({"storage": peer_dir, "worklet": true, "storageWal": false}))
             .await
             .map_err(|error| error.to_string())?;
         self.attach_node(node.clone(), Owner::Receiver).await;

@@ -349,10 +349,11 @@ pub fn blob_has_peer_opt(core: Option<&Core>, blob: Option<BlobId>) -> bool {
 pub fn read_ahead_bytes(rate: f64, free: u64, cached_ahead: u64) -> u64 {
     let wanted = (rate * MIN_READ_AHEAD_SECONDS as f64).max(
         (rate * READ_AHEAD_SECONDS as f64)
-            .min(free as f64 - STREAM_RESERVE_BYTES as f64 + cached_ahead as f64),
+            .min((free as f64 - STREAM_RESERVE_BYTES as f64) * 0.75 + cached_ahead as f64),
     );
-    let ahead =
-        wanted.min((free as f64 - STREAM_FLOOR_BYTES as f64 + cached_ahead as f64).max(0.0));
+    // Blob GC waits for 25% garbage, so new cached bytes need up to 4/3 their size on disk.
+    let ahead = wanted
+        .min(((free as f64 - STREAM_FLOOR_BYTES as f64) * 0.75 + cached_ahead as f64).max(0.0));
     ahead.max(0.0) as u64
 }
 
@@ -360,7 +361,7 @@ pub fn read_ahead_bytes(rate: f64, free: u64, cached_ahead: u64) -> u64 {
 pub fn evict_plan(free: u64, rate: f64, playhead_byte: u64) -> Option<EvictOptions> {
     let tight = free < STREAM_RESERVE_BYTES;
     let needed =
-        (free as f64) < (TRIM_FREE_BYTES as f64).max(3.0 * rate * READ_AHEAD_SECONDS as f64);
+        (free as f64) < (TRIM_FREE_BYTES as f64).max(4.0 * rate * READ_AHEAD_SECONDS as f64);
     if !needed {
         return None;
     }
@@ -800,9 +801,16 @@ mod tests {
         let rate = 4.0 * 1024.0 * 1024.0;
         let roomy = read_ahead_bytes(rate, 64 * 1024 * 1024 * 1024, 0);
         assert_eq!(roomy, (rate * READ_AHEAD_SECONDS as f64) as u64);
-        // 1.2 GiB free leaves 200 MiB above the reserve for the window: under the full 120 s.
+        // Reserve the future garbage overhead as well as the free-space cushion.
         let tight = read_ahead_bytes(rate, STREAM_RESERVE_BYTES + 300 * 1024 * 1024, 0);
         assert!(tight < roomy);
+        assert_eq!(tight, 225 * 1024 * 1024);
+        let at_floor = read_ahead_bytes(rate, STREAM_FLOOR_BYTES + 100 * 1024 * 1024, 0);
+        assert_eq!(at_floor, 75 * 1024 * 1024);
+        assert_eq!(
+            read_ahead_bytes(rate, STREAM_FLOOR_BYTES, 64 * 1024 * 1024),
+            64 * 1024 * 1024
+        );
         assert_eq!(read_ahead_bytes(rate, 0, 0), 0);
     }
 
@@ -813,6 +821,9 @@ mod tests {
         assert_eq!(plan.playhead_byte, 4096);
         assert_eq!(plan.keep_behind_bytes, TIGHT_KEEP_BYTES);
         assert!(plan.max_bytes >= 128 * 1024 * 1024);
+        let high_rate = 16.0 * 1024.0 * 1024.0;
+        let three_windows = (3.0 * high_rate * READ_AHEAD_SECONDS as f64) as u64;
+        assert!(evict_plan(three_windows, high_rate, 0).is_some());
     }
 
     #[test]
