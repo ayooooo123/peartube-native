@@ -82,6 +82,20 @@ can reclaim an owned or cached core after its last reader and peer leave.
 Cache reclamation offloads both the blocking RocksDB flush and compaction from
 the backend's single-thread Tokio executor, so HTTP and replication keep polling.
 
+The standalone cast receiver uses RocksDB MemEnv (including media blobs), not
+flash. Only its obsolete `peer_dir/corestore` cache is removed on startup;
+`receiver.json` and `identity.json` remain on disk. Phone/desktop owned nodes keep
+their disk stores. The receiver's store budget is `min(1.5 GB, MemTotal/4,
+MemAvailable/2)` from `/proc/meminfo`, with a conservative 256 MiB fallback when
+unavailable. Live media gets 40% of this budget, read-ahead at most 75% of that
+live ceiling, and trailing data at most 64 MiB (or one eighth of the ceiling).
+The remaining room covers memtables, metadata, in-flight writes and old/new blob
+files during GC; watched blocks are trimmed every three seconds even while
+buffering. Backwards seeks also drop stale future ranges beyond 7/8 of the live
+ceiling, preserving the existing small head/tail guards. Seeks fetch discarded
+blocks again. The TV app currently has no
+`onTrimMemory` hook; there is no claim of an OS-enforced allocator hard limit.
+
 ## Running tests
 
 Rust 1.90 or newer, Node.js and npm are required. Clone the sibling path

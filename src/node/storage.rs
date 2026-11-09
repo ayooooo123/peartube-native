@@ -24,11 +24,23 @@ pub struct Storage {
 
 impl Storage {
     /// `createStorage(ctx)`: `corestore/` under the node folder, with the cores it already holds.
-    pub fn open(path: impl AsRef<Path>, worklet: bool, wal: bool) -> Result<Self, BlobsError> {
+    pub fn open(
+        path: impl AsRef<Path>,
+        worklet: bool,
+        wal: bool,
+        memory: bool,
+    ) -> Result<Self, BlobsError> {
         let path = path.as_ref().to_path_buf();
         let dir = path.join("corestore");
-        std::fs::create_dir_all(&dir)?;
-        let store = Corestore::open_with_options(&dir, hypercore::storage::StoreOptions { wal })?;
+        if memory {
+            match std::fs::remove_dir_all(&dir) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error.into()),
+            }
+        }
+        let store =
+            Corestore::open_with_options(&dir, hypercore::storage::StoreOptions { wal, memory })?;
         let stored_disc = store.list()?.into_iter().collect();
         let mobile_worklet = worklet && !cfg!(target_os = "macos");
         Ok(Self {

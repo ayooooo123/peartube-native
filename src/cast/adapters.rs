@@ -115,6 +115,10 @@ impl NodePeer {
 }
 
 impl CastPeer for NodePeer {
+    fn memory_cache_bytes(&self) -> Option<u64> {
+        self.node.memory_cache_bytes()
+    }
+
     fn peer_key(&self) -> String {
         self.node.peer_key()
     }

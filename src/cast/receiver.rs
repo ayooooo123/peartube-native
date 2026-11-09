@@ -1125,14 +1125,22 @@ impl Inner {
                 .filter(|ms| *ms > 0);
             let rate = media.rate(duration);
             let playhead = media.lead_byte(&state, duration);
-            if let Some(plan) = evict_plan(free, rate, playhead) {
+            let memory_limit = peer.memory_cache_bytes();
+            let plan = memory_limit
+                .map(|limit| super::traits::EvictOptions {
+                    playhead_byte: playhead,
+                    keep_behind_bytes: (limit / 8).min(64 * 1024 * 1024),
+                    max_bytes: limit,
+                })
+                .or_else(|| evict_plan(free, rate, playhead));
+            if let Some(plan) = plan {
                 let buffering = active.as_ref().is_some_and(|a| Arc::ptr_eq(a, &media))
                     && state.get("buffering").is_some_and(truthy);
                 let settling = buffering
                     || media.last_reader_at().elapsed()
                         < Duration::from_millis(super::media::SETTLING_MS);
-                let tight = free < super::STREAM_RESERVE_BYTES;
-                if (!settling || free < super::STREAM_FLOOR_BYTES)
+                let tight = memory_limit.is_some() || free < super::STREAM_RESERVE_BYTES;
+                if (memory_limit.is_some() || !settling || free < super::STREAM_FLOOR_BYTES)
                     && self.last_evict_at.lock().expect("cast evict").elapsed()
                         >= Duration::from_millis(if tight { 3_000 } else { super::EVICT_EVERY_MS })
                 {

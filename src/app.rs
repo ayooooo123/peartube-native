@@ -45,8 +45,23 @@ const UPDATE_SLOW_MS: u64 = 1_500;
 const UPDATE_FAST_MS: u64 = 200;
 /// A change this soon after the last event was part of the same burst.
 const UPDATE_QUIET_MS: u64 = 3_000;
-/// A TV box keeps only a rolling window of whatever it plays.
-const RECEIVER_CACHE_MAX_BYTES: f64 = 2e9;
+/// Leave room for memtables, metadata and simultaneous old/new blobs during GC.
+fn receiver_memory_bytes(meminfo: &str) -> u64 {
+    let kib = |key: &str| {
+        meminfo
+            .lines()
+            .find_map(|line| {
+                let mut fields = line.split_whitespace();
+                (fields.next()? == key)
+                    .then(|| fields.next()?.parse::<u64>().ok())
+                    .flatten()
+            })
+            .map(|value| value.saturating_mul(1024))
+    };
+    let total = kib("MemTotal:").unwrap_or(1024 * 1024 * 1024);
+    let available = kib("MemAvailable:").unwrap_or(total / 2);
+    1_500_000_000u64.min(total / 4).min(available / 2)
+}
 
 fn lock<T>(cell: &Mutex<T>) -> MutexGuard<'_, T> {
     cell.lock().unwrap_or_else(|error| error.into_inner())
@@ -704,13 +719,19 @@ where
             .peer_storage(self.cast_peer_storage.as_deref(), &storage)
             .await;
         factory.reclaim(&peer_dir);
+        let budget =
+            receiver_memory_bytes(&std::fs::read_to_string("/proc/meminfo").unwrap_or_default());
+        let live_bytes = budget * 2 / 5;
         let node = self
             .factory
-            .create(json!({"storage": peer_dir, "worklet": true, "storageWal": false}))
+            .create(json!({
+                "storage": peer_dir, "worklet": true, "storageWal": false,
+                "storageMemory": true, "memoryCacheBytes": live_bytes
+            }))
             .await
             .map_err(|error| error.to_string())?;
         self.attach_node(node.clone(), Owner::Receiver).await;
-        node.set_cache_max_bytes(RECEIVER_CACHE_MAX_BYTES).await;
+        node.set_cache_max_bytes(live_bytes as f64).await;
         self.lan_wanted = true;
         self.move_lan().await;
         Ok(node)
@@ -1543,5 +1564,27 @@ fn broadcast(subscribers: &Mutex<Vec<Subscriber>>, event: &AppEvent) {
 fn drain(subscribers: &Mutex<Vec<Subscriber>>, events: &mut mpsc::UnboundedReceiver<AppEvent>) {
     while let Ok(event) = events.try_recv() {
         broadcast(subscribers, &event);
+    }
+}
+
+#[cfg(test)]
+mod memory_budget_tests {
+    use super::receiver_memory_bytes;
+
+    #[test]
+    fn cache_budget_respects_total_and_available_memory() {
+        assert_eq!(
+            receiver_memory_bytes("MemTotal: 8000000 kB\nMemAvailable: 6000000 kB\n"),
+            1_500_000_000
+        );
+        assert_eq!(
+            receiver_memory_bytes("MemTotal: 2000000 kB\nMemAvailable: 1500000 kB\n"),
+            512_000_000
+        );
+        assert_eq!(
+            receiver_memory_bytes("MemTotal: 8000000 kB\nMemAvailable: 400000 kB\n"),
+            204_800_000
+        );
+        assert_eq!(receiver_memory_bytes(""), 256 * 1024 * 1024);
     }
 }

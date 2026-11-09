@@ -323,6 +323,8 @@ pub struct EncryptedMeta {
 pub struct EvictOptions {
     pub playhead_byte: u64,
     pub keep_behind_bytes: u64,
+    /// Bound future ranges left by backwards seeks in a memory cache.
+    pub keep_ahead_bytes: Option<u64>,
     pub max_bytes: Option<u64>,
 }
 
@@ -331,6 +333,7 @@ impl Default for EvictOptions {
         Self {
             playhead_byte: 0,
             keep_behind_bytes: 64 * 1024 * 1024,
+            keep_ahead_bytes: None,
             max_bytes: None,
         }
     }
@@ -1398,11 +1401,21 @@ where
         let head_guard = blob.block_offset + 8.max((4 * 1024 * 1024u64).div_ceil(bs));
         let tail_guard = (blob.block_offset + blob.block_length)
             .saturating_sub(4.max((2 * 1024 * 1024u64).div_ceil(bs)));
-        let clear_to = tail_guard
-            .min(session.length())
-            .min(playhead.saturating_sub(keep_blocks));
-        if clear_to <= head_guard {
-            return 0;
+        let clear_to = head_guard.max(
+            tail_guard
+                .min(session.length())
+                .min(playhead.saturating_sub(keep_blocks)),
+        );
+        let mut cleared = 0u64;
+        if let Some(ahead) = opts.keep_ahead_bytes {
+            let start = head_guard.max(playhead.saturating_add(ahead.div_ceil(bs)));
+            let end = tail_guard.min(session.length());
+            if start < end {
+                let blocks = count_local(&session, start, end);
+                if blocks > 0 && session.clear(start, end).await.is_ok() {
+                    cleared += blocks;
+                }
+            }
         }
         let max_blocks = 1.max((32 * 1024 * 1024u64) / bs);
         let hint = clear_to.min(
@@ -1418,7 +1431,6 @@ where
         } else {
             hint
         };
-        let mut cleared = 0u64;
         while start < clear_to
             && !self.inner.host.closing()
             && opts.max_bytes.is_none_or(|max| cleared * bs < max)
@@ -1659,6 +1671,7 @@ where
                 EvictOptions {
                     playhead_byte: progress.get(&playing).copied().unwrap_or(0),
                     keep_behind_bytes: keep_behind,
+                    keep_ahead_bytes: None,
                     max_bytes: Some(total.saturating_sub(target)),
                 },
             )

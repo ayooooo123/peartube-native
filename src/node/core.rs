@@ -484,6 +484,13 @@ pub struct CoreNode {
 }
 
 impl CoreNode {
+    pub fn memory_cache_bytes(&self) -> Option<u64> {
+        self.inner
+            .opts
+            .get("memoryCacheBytes")
+            .and_then(Value::as_u64)
+    }
+
     fn channel(&self) -> Arc<Channel> {
         self.inner.channel.get().cloned().expect("channel open")
     }
@@ -778,7 +785,11 @@ pub async fn create_node(options: Value) -> Result<Arc<CoreNode>, NodeError> {
         .get("storageWal")
         .and_then(Value::as_bool)
         .unwrap_or(true);
-    let storage = Storage::open(&storage_path, worklet, wal)?;
+    let memory = options
+        .get("storageMemory")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let storage = Storage::open(&storage_path, worklet, wal, memory)?;
     let closing = Arc::new(AtomicBool::new(false));
     let handle = ChannelHandle::default();
     let wakeup = Arc::new(WakeupSwarm::new(|_, _| {}));
@@ -1493,6 +1504,7 @@ impl Node for CoreNode {
     ) -> Result<u64, Self::Error> {
         let key = parse_hex32(blobs).ok_or_else(|| NodeError("Invalid blob key".into()))?;
         let mut opts = EvictOptions::default();
+        opts.keep_ahead_bytes = self.memory_cache_bytes().map(|limit| limit * 7 / 8);
         if let Some(value) = options.get("playheadByte").and_then(Value::as_u64) {
             opts.playhead_byte = value;
         }

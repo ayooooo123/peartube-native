@@ -303,7 +303,11 @@ impl Media {
     pub fn window_bytes(&self, free: u64) -> u64 {
         let rate = self.rate(None);
         let cached = 0;
-        read_ahead_bytes(rate, free, cached)
+        let wanted = read_ahead_bytes(rate, free, cached);
+        self.peer
+            .as_ref()
+            .and_then(|peer| peer.memory_cache_bytes())
+            .map_or(wanted, |limit| wanted.min(limit * 3 / 4))
     }
 }
 

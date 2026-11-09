@@ -118,6 +118,9 @@ pub struct ClearCacheOptions {
 
 /// The P2P node a receiver or controller drives, as the cast stack uses it.
 pub trait CastPeer: Send + Sync {
+    fn memory_cache_bytes(&self) -> Option<u64> {
+        None
+    }
     /// 64-hex Noise public key (`peerKey`).
     fn peer_key(&self) -> String;
     fn private_routing(&self) -> bool;
