@@ -273,7 +273,7 @@ async fn receiver_fixture_flow_matches() {
         }
     }
 
-    let info = client
+    let mut info = client
         .json(
             Method::GET,
             &format!("{base}/cast/v1/info"),
@@ -283,6 +283,11 @@ async fn receiver_fixture_flow_matches() {
         )
         .await
         .expect("info");
+    // Native diagnostics extend the JS contract; assert them before comparing its fields.
+    assert_eq!(
+        info.as_object_mut().unwrap().remove("connectedPeers"),
+        Some(json!([]))
+    );
     same_json(
         &mask_ports(&mask(&info), receiver.port()),
         &fixture["info"],
@@ -300,6 +305,7 @@ async fn receiver_fixture_flow_matches() {
         .await
         .expect("web info");
     if let Value::Object(fields) = &mut web_info {
+        assert_eq!(fields.remove("connectedPeers"), Some(json!([])));
         fields.insert("qrSvg".into(), json!(""));
         fields.insert("webToken".into(), json!(""));
     }
