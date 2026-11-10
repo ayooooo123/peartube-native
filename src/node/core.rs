@@ -1518,8 +1518,10 @@ impl Node for CoreNode {
         options: Value,
     ) -> Result<u64, Self::Error> {
         let key = parse_hex32(blobs).ok_or_else(|| NodeError("Invalid blob key".into()))?;
-        let mut opts = EvictOptions::default();
-        opts.keep_ahead_bytes = self.memory_cache_bytes().map(|limit| limit * 7 / 8);
+        let mut opts = EvictOptions {
+            keep_ahead_bytes: self.memory_cache_bytes().map(|limit| limit * 7 / 8),
+            ..EvictOptions::default()
+        };
         if let Some(value) = options.get("keepAheadBytes").and_then(Value::as_u64) {
             opts.keep_ahead_bytes = Some(value);
         }
