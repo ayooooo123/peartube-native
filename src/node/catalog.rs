@@ -55,6 +55,7 @@ pub trait CatalogBlobs: Send + Sync {
     ) -> Pin<Box<dyn Future<Output = u64> + Send + 'a>>;
     fn resolve_video_key(&self, entry: &Announce) -> bool;
     fn join_content(&self, blob: &[u8; 32], evict: bool);
+    fn join_source_swarm(&self, source: &[u8; 32]);
     fn stream_url(&self, entry: &Announce) -> String;
     fn warm<'a>(&'a self, entry: &'a Announce) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>>;
 }
@@ -470,6 +471,10 @@ impl Catalog {
                             true,
                         )
                         .await;
+                } else if !join_source
+                    && let Some(key) = source_key.as_deref().and_then(parse_hex32)
+                {
+                    self.blobs.join_source_swarm(&key);
                 }
                 let announce = Announce {
                     kind: "announce".to_owned(),

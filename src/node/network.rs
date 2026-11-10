@@ -838,7 +838,7 @@ impl Network {
         })
     }
 
-    /// `joinOverlayTopic`: one discovery per followed channel.
+    /// `joinOverlayTopic`: one discovery per followed or watched source channel.
     pub fn join_overlay_topic(&self, id: &str, key: [u8; 32]) {
         if !self.can_announce() {
             // `swarm.joinSource`: the private overlay's rendezvous, not a public topic join.
@@ -1307,6 +1307,38 @@ impl super::api::Swarm for NetworkSwarm {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn watch_without_following_joins_only_the_public_source_rendezvous() {
+        use crate::node::Node;
+        let source = hex(&[17; 32]);
+        let blob = hex(&[34; 32]);
+        let uri = format!(
+            "peartube://watch/{blob}:0:1:0:1?id=imdb%3Att0816692&title=Watch&source={source}&kind=channel"
+        );
+        for private_routing in [false, true] {
+            let storage = tempfile::tempdir().unwrap();
+            let node = crate::node::core::create_node(serde_json::json!({
+                "storage": storage.path(), "bootstrap": ["127.0.0.1:9"],
+                "privateRouting": private_routing, "worklet": true,
+                "streamHost": "127.0.0.1", "streamPort": 0,
+            }))
+            .await
+            .unwrap();
+            let followed = node.list_sources().await;
+            node.open_uri(&uri, false).await.unwrap();
+            let network = node.net();
+            assert_eq!(
+                lock(&network.overlay_topics)
+                    .get(&format!("source-swarm:{source}"))
+                    .copied(),
+                (!private_routing).then_some([17; 32]),
+                "public watches rendezvous with the channel without following; private watches must not announce",
+            );
+            assert_eq!(node.list_sources().await, followed);
+            node.close().await.unwrap();
+        }
+    }
 
     #[test]
     fn route_rates_are_independent_and_survive_fast_status_polls() {

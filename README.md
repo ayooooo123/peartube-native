@@ -39,8 +39,11 @@ selecting the DHT bind address. A loopback name therefore binds like its numeric
 otherwise the Noise handshake advertises non-loopback interfaces and misses a local testnet.
 The public DHT starts firewalled and probes reachability like JS; only isolated
 LAN DHTs assume an open socket. Neither worklet mode nor LAN discovery disables
-public topic joins. The local peeroxide fork also bounds a cross-egress,
-authenticated advertised-LAN fallback (see its `peeroxide-dht/README.md`).
+public topic joins.
+Public watch links with `joinSource: false` still join `source-swarm:<channel>`,
+as JS does, without following or hydrating the source catalog. This lets a
+receiver find the publisher even when its rotating content-topic cap omits the
+film. Private-routed watches do not use this public rendezvous.
 Loopback `/v1/status` and receiver `/cast/v1/info` include `connectedPeers`:
 16-hex public-key prefixes, the discovery route (`public`, `lan`, `private`),
 and the live transport address (null if unavailable). A public-DHT connection

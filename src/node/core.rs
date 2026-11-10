@@ -1389,6 +1389,17 @@ impl CatalogBlobs for BlobOps {
         }
     }
 
+    fn join_source_swarm(&self, source: &[u8; 32]) {
+        if let Some(net) = self
+            .0
+            .upgrade()
+            .and_then(|shared| shared.net.get().cloned())
+            && !net.private_routing()
+        {
+            net.join_overlay_topic(&format!("source-swarm:{}", hex(source)), *source);
+        }
+    }
+
     fn stream_url(&self, entry: &Announce) -> String {
         self.blobs()
             .map_or_else(String::new, |blobs| blobs.stream_url(entry))
