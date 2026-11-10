@@ -14,6 +14,17 @@ same service; `backend::Backend` owns its runtime thread and line callback.
 and Swift hosts, including suspend, resume and shutdown. See its header and
 README for ownership and threading requirements.
 
+`relay` and the `peartube-relay` binary are the headless relay (`bin/relay.js`): the
+same `PEARTUBE_*` environment, `settings.json`, `sources.json`, `directory.json` and
+`jobs.json` in `PEARTUBE_STORAGE`, the API with the relay UI on `PEARTUBE_API_HOST:PEARTUBE_API_PORT`,
+HTTPS on `PEARTUBE_HTTPS_PORT` when `tls.crt`/`tls.key` exist, and the acquirer with the
+`http-acquire`, `channel-backfill`, `blob-rechunk`, `watch-dir` and `feed-mirror` plugins.
+Not yet ported: the `p2p-replicate` and `hiverelay-seed` plugins, the private guard
+(`PEARTUBE_PRIVATE_RELAY`, `privateGuard`), cast routes, and JS plugins from
+`<storage>/plugins`. `status.lan` also carries the LAN `publicKey`. The UI and web player
+come from `PEARTUBE_WEB_DIR` (default: `web/` beside the binary). `relay.Dockerfile`
+builds the image from this stack and the app's `src/ui.js` and `web/assets`.
+
 ## Module map
 
 Paths on the right are in the PearTube app unless otherwise stated.

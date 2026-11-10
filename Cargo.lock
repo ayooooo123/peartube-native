@@ -1058,6 +1058,7 @@ dependencies = [
  "socket2",
  "tempfile",
  "tokio",
+ "tokio-rustls",
  "unicode-normalization",
  "url",
  "xsalsa20poly1305",

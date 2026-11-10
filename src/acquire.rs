@@ -531,6 +531,11 @@ impl Job {
     }
 }
 
+/// `publicJob(job)` over a raw `jobs.json` entry: what the API shows before an acquirer opens.
+pub fn public_job(value: &Value) -> Option<Value> {
+    Job::from_json(value).map(|job| job.public_json())
+}
+
 fn js_string(value: &Value) -> String {
     match value {
         Value::String(text) => text.clone(),

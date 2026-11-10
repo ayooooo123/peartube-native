@@ -1264,7 +1264,7 @@ fn send_cast_event(events: &UnboundedSender<AppEvent>, cast: &Option<Arc<dyn Cas
 }
 
 /// `idleStatus()`: the empty node the app shows before (or without) a start.
-fn idle_status() -> Status {
+pub(crate) fn idle_status() -> Status {
     let zero = || Number::from(0);
     let route = || Route {
         peers: 0,

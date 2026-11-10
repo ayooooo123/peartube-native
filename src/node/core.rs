@@ -234,6 +234,40 @@ impl crate::acquire::PutStreamFactory<CoreNode> for NodeStreams {
     }
 }
 
+/// The mirror's `blob-rechunk` options for this node: its callbacks see the app's JSON shapes.
+impl crate::mirror::RechunkOptionsFactory<CoreNode> for NodeStreams {
+    fn make(&self, options: crate::mirror::RechunkOptions) -> super::blobs::RechunkOptions {
+        let crate::mirror::RechunkOptions {
+            id,
+            foreground,
+            limit,
+            on_migrate,
+            on_progress,
+        } = options;
+        super::blobs::RechunkOptions {
+            id,
+            foreground,
+            limit,
+            on_progress: Some(Box::new(move |p: &super::blobs::MigrationProgress| {
+                on_progress(serde_json::json!({
+                    "total": p.total,
+                    "migrated": p.migrated,
+                    "deduped": p.deduped,
+                    "remaining": p.remaining,
+                    "migratedBytes": p.migrated_bytes,
+                    "currentId": p.current_id,
+                    "currentTitle": p.current_title,
+                }))
+            })),
+            on_migrate: Some(Box::new(
+                move |old_tag: &str, target: &Announce, _sample: &Announce| {
+                    on_migrate(old_tag, serde_json::to_value(target).unwrap_or(Value::Null))
+                },
+            )),
+        }
+    }
+}
+
 /// The channel handle `identity.rs` and the blob host call back into once it exists.
 #[derive(Clone, Default)]
 pub struct ChannelHandle(Arc<Mutex<Option<Arc<Channel>>>>);

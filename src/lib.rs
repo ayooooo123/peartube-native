@@ -23,6 +23,7 @@ pub mod lifecycle;
 pub mod mirror;
 pub mod node;
 pub mod private_overlay;
+pub mod relay;
 pub mod resolution;
 pub mod settings;
 pub mod traffic;

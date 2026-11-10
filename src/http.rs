@@ -212,8 +212,9 @@ pub struct Options {
     pub extra_status: Option<Arc<dyn Fn() -> Value + Send + Sync>>,
     /// `state.fallbackJobs`: jobs answered with when no acquirer is attached.
     pub fallback_jobs: Option<Arc<dyn Fn() -> Value + Send + Sync>>,
-    /// `state.settings`: the relay settings the `/v1/settings` routes read and write.
-    pub settings: Option<Settings>,
+    /// `state.settings`: the relay settings the `/v1/settings` routes read and write, shared
+    /// with the relay that opens the node from them.
+    pub settings: Option<Arc<tokio::sync::Mutex<Settings>>>,
     /// `state.applySettings(changed)`: applies live settings in place; a message becomes `warning`.
     pub apply_settings: Option<ApplySettings>,
     /// `state.restart`: reopens the node for the settings a restart applies.
@@ -285,7 +286,7 @@ struct Resolution {
 pub struct Api<N: Node> {
     node: Mutex<Option<Arc<N>>>,
     options: Options,
-    settings: Option<tokio::sync::Mutex<Settings>>,
+    settings: Option<Arc<tokio::sync::Mutex<Settings>>>,
     resolutions: Mutex<HashMap<String, Resolution>>,
     downloads: Mutex<HashMap<String, (String, String)>>,
     web_cache: Mutex<HashMap<String, Bytes>>,
@@ -295,7 +296,7 @@ pub struct Api<N: Node> {
 impl<N: Node> Api<N> {
     /// `createApi(state)` with no node yet; [`Api::set_node`] attaches one when it opens.
     pub fn new(mut options: Options) -> Self {
-        let settings = options.settings.take().map(tokio::sync::Mutex::new);
+        let settings = options.settings.take();
         Self {
             node: Mutex::new(None),
             options,
@@ -318,15 +319,31 @@ impl<N: Node> Api<N> {
         *self.node.lock().unwrap() = Some(node);
     }
 
+    /// Back to the pre-start answers while the relay reopens its node (`state.node = null`).
+    pub fn clear_node(&self) {
+        *self.node.lock().unwrap() = None;
+    }
+
     pub fn node(&self) -> Option<Arc<N>> {
         self.node.lock().unwrap().clone()
     }
 
     /// Binds `addr` and serves until [`ApiServer::close`].
     pub async fn bind(self, addr: SocketAddr) -> io::Result<ApiServer> {
+        Arc::new(self).serve(addr, None).await
+    }
+
+    /// Binds `addr` and serves this shared API until [`ApiServer::close`]; with `tls`, over HTTPS
+    /// (the relay's second listener, `PEARTUBE_HTTPS_PORT`). The caller keeps the `Arc` to
+    /// change the node.
+    pub async fn serve(
+        self: Arc<Self>,
+        addr: SocketAddr,
+        tls: Option<tokio_rustls::TlsAcceptor>,
+    ) -> io::Result<ApiServer> {
         let listener = TcpListener::bind(addr).await?;
         let addr = listener.local_addr()?;
-        let api = Arc::new(self);
+        let api = self;
         let sse = Arc::clone(&api.sse);
         let (shutdown, mut stop) = oneshot::channel::<()>();
         let accept = tokio::spawn(async move {
@@ -337,6 +354,7 @@ impl<N: Node> Api<N> {
                     accepted = listener.accept() => {
                         let Ok((stream, remote)) = accepted else { continue };
                         let api = Arc::clone(&api);
+                        let tls = tls.clone();
                         connections.spawn(async move {
                             let service = service_fn(move |req| {
                                 let api = Arc::clone(&api);
@@ -344,9 +362,16 @@ impl<N: Node> Api<N> {
                                     Ok::<_, Infallible>(api.handle(req, remote).await)
                                 }
                             });
-                            let _ = hyper::server::conn::http1::Builder::new()
-                                .serve_connection(TokioIo::new(stream), service)
-                                .await;
+                            let http = hyper::server::conn::http1::Builder::new();
+                            match tls {
+                                Some(tls) => {
+                                    let Ok(stream) = tls.accept(stream).await else { return };
+                                    let _ = http.serve_connection(TokioIo::new(stream), service).await;
+                                }
+                                None => {
+                                    let _ = http.serve_connection(TokioIo::new(stream), service).await;
+                                }
+                            }
                         });
                     }
                     Some(_) = connections.join_next(), if !connections.is_empty() => {}

@@ -915,10 +915,9 @@ async fn cast_scenario_matches_the_app() {
 async fn settings_are_private_and_gated_by_token() {
     let dir = tempfile::tempdir().unwrap();
     let options = Options {
-        settings: Some(peartube_native::settings::Settings::new(
-            dir.path(),
-            Default::default(),
-        )),
+        settings: Some(Arc::new(tokio::sync::Mutex::new(
+            peartube_native::settings::Settings::new(dir.path(), Default::default()),
+        ))),
         restart: Some(Arc::new(|| {
             Box::pin(async {}) as futures_util::future::BoxFuture<'static, ()>
         })),
