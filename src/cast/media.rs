@@ -344,11 +344,12 @@ fn reserve_window(
 
 struct ReaderLease<'a> {
     media: &'a Media,
-    id: u64,
+    id: Option<u64>,
     bag: RequestBag,
     budget: Option<Arc<tokio::sync::Semaphore>>,
     cap: u64,
     window: u64,
+    restart: bool,
     permit: Option<tokio::sync::OwnedSemaphorePermit>,
 }
 
@@ -360,7 +361,7 @@ impl<'a> ReaderLease<'a> {
             .and_then(|peer| peer.memory_cache_bytes());
         Self {
             media,
-            id: media.register_reader(start),
+            id: Some(media.register_reader(start)),
             bag: RequestBag::new(),
             budget: media
                 .peer
@@ -368,6 +369,7 @@ impl<'a> ReaderLease<'a> {
                 .and_then(|peer| peer.memory_window_budget()),
             cap: limit.map_or(wanted, |limit| wanted.min(limit * 3 / 8)),
             window: 0,
+            restart: false,
             permit: None,
         }
     }
@@ -380,25 +382,44 @@ impl<'a> ReaderLease<'a> {
     }
 
     async fn send(
-        &self,
+        &mut self,
         tx: &mpsc::Sender<Result<Frame<Bytes>, std::io::Error>>,
         chunk: Bytes,
+        pos: u64,
     ) -> bool {
-        let send = tx.send(Ok(Frame::data(chunk)));
-        if self.budget.is_some() {
-            tokio::time::timeout(Duration::from_secs(15), send)
-                .await
-                .is_ok_and(|result| result.is_ok())
+        let reserved = if self.budget.is_some() {
+            match tokio::time::timeout(Duration::from_secs(15), tx.reserve()).await {
+                Ok(result) => result,
+                Err(_) => {
+                    self.permit.take();
+                    self.window = 0;
+                    self.bag.destroy("reader parked");
+                    self.bag = RequestBag::new();
+                    if let Some(id) = self.id.take() {
+                        self.media.drop_reader(id);
+                    }
+                    self.restart = true;
+                    tx.reserve().await
+                }
+            }
         } else {
-            send.await.is_ok()
+            tx.reserve().await
+        };
+        let Ok(slot) = reserved else { return false };
+        if self.id.is_none() {
+            self.id = Some(self.media.register_reader(pos));
         }
+        slot.send(Ok(Frame::data(chunk)));
+        true
     }
 }
 
 impl Drop for ReaderLease<'_> {
     fn drop(&mut self) {
         self.bag.destroy("reader closed");
-        self.media.drop_reader(self.id);
+        if let Some(id) = self.id {
+            self.media.drop_reader(id);
+        }
     }
 }
 
@@ -821,7 +842,7 @@ async fn pipe_p2p(
     loop {
         let previous = lease.window;
         let window = lease.reserve();
-        if stream.is_none() || (previous == 0 && window > 0) {
+        if stream.is_none() || lease.restart || (previous == 0 && window > 0) {
             let opts = StreamOptions {
                 start: start + written,
                 length: Some(end - start + 1 - written),
@@ -834,6 +855,7 @@ async fn pipe_p2p(
                 return Ok(written);
             };
             stream = Some(opened.map_err(|err| (written, CastError::new(err.to_string(), 502)))?);
+            lease.restart = false;
         }
         let next = async {
             let stream = stream.as_mut().expect("opened stream");
@@ -853,11 +875,11 @@ async fn pipe_p2p(
             return Ok(written);
         };
         let len = chunk.len() as u64;
-        if !lease.send(tx, chunk).await {
+        if !lease.send(tx, chunk, start + written).await {
             return Ok(written);
         }
         written += len;
-        media.advance_reader(lease.id, start + written, len);
+        media.advance_reader(lease.id.expect("resumed reader"), start + written, len);
     }
 }
 
@@ -943,16 +965,32 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn stalled_client_releases_its_reader_and_prefetch_window() {
+    async fn paused_consumer_keeps_the_complete_body_after_parking() {
         let media = lease_media();
         let budget = Arc::new(tokio::sync::Semaphore::new(100));
-        let (tx, _rx) = mpsc::channel(1);
-        let mut lease = ReaderLease::new(&media, 500, 50);
+        let (tx, mut rx) = mpsc::channel(1);
+        let mut lease = ReaderLease::new(&media, 0, 50);
         lease.budget = Some(budget.clone());
         assert_eq!(lease.reserve(), 50);
-        assert!(lease.send(&tx, Bytes::from_static(b"a")).await);
-        assert!(!lease.send(&tx, Bytes::from_static(b"b")).await);
-        drop(lease);
+        let producer = async move {
+            for (pos, byte) in [b"a", b"b", b"c"].into_iter().enumerate() {
+                assert!(lease.send(&tx, Bytes::from_static(byte), pos as u64).await);
+            }
+        };
+        let consumer = async move {
+            tokio::time::sleep(Duration::from_secs(16)).await;
+            let mut bytes = Vec::new();
+            while let Some(frame) = rx.recv().await {
+                bytes.extend_from_slice(&frame.unwrap().into_data().unwrap());
+            }
+            assert_eq!(bytes, b"abc");
+        };
+        let parked = async {
+            tokio::time::sleep(Duration::from_millis(15_500)).await;
+            assert!(media.readers.lock().unwrap().is_empty());
+            assert_eq!(budget.available_permits(), 100);
+        };
+        tokio::join!(producer, consumer, parked);
         assert!(media.readers.lock().unwrap().is_empty());
         assert_eq!(budget.available_permits(), 100);
     }

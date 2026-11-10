@@ -94,9 +94,10 @@ Range/hybrid responses share at most 75% of that live ceiling. A response withou
 remaining read-ahead capacity fetches on demand. Trailing data gets at most
 64 MiB (or one eighth of the ceiling), with the existing small block guards.
 Each response may reserve at most half the pool, leaving room for an overlapping
-seek. Demand-only readers retry reservations as they advance. A response blocked
-on its client for 15 seconds is closed; a Drop guard releases its reader,
-requests and reservation on disconnect or panic, including during a slow seek.
+seek. Demand-only readers retry reservations as they advance. After 15 seconds
+of client backpressure the lease parks, releasing its reader, requests and
+reservation without closing the HTTP body. Reading again re-registers the
+reader and reopens the stream at its current position.
 The remaining room covers memtables, metadata, in-flight writes and old/new blob
 files during GC; watched blocks are trimmed every three seconds even while
 buffering. Only the active load trims windows; title changes clear prior blobs.
