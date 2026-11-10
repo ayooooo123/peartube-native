@@ -285,7 +285,7 @@ async fn receiver_fixture_flow_matches() {
         .expect("info");
     // Native diagnostics extend the JS contract; assert them before comparing its fields.
     assert_eq!(
-        info.as_object_mut().unwrap().remove("connectedPeers"),
+        info.as_object_mut().unwrap().shift_remove("connectedPeers"),
         Some(json!([]))
     );
     same_json(
@@ -305,7 +305,7 @@ async fn receiver_fixture_flow_matches() {
         .await
         .expect("web info");
     if let Value::Object(fields) = &mut web_info {
-        assert_eq!(fields.remove("connectedPeers"), Some(json!([])));
+        assert_eq!(fields.shift_remove("connectedPeers"), Some(json!([])));
         fields.insert("qrSvg".into(), json!(""));
         fields.insert("webToken".into(), json!(""));
     }
