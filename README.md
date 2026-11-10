@@ -192,6 +192,43 @@ can fetch absent blocks, but a sparse P2P peer cannot serve blocks it lacks.
 Capture `netstat -s -p udp` before/after each run; its full-socket-buffer delta
 is machine-wide, not a per-process loss counter.
 
+For the seeder side, `examples/seed_ab.rs <file> [workers]` and
+`tests/js/seed-ab.js <file>` (run with `bare` from a JS app copy's `bin/`)
+publish a file through their node's own `put`, as a relay's acquirer does, print
+one JSON line with the loopback LAN peer and announce, and serve until stdin
+closes. `workers` 0 selects Tokio's current-thread scheduler; the default is 4.
+Build that line into a `download_ab` config (`host` `127.0.0.1`, `peers`
+`[peer]`, `entry`, `start` 0, `bytes` the size, `sha256`) and run one or more
+consumers against it; measure seeder CPU from outside (`ps`, `/proc/<pid>/stat`).
+
+Linux x86-64 builds use `.cargo/config.toml` to enable SSE4.2 and CLMUL, so
+RocksDB checks blob CRC32C in hardware; its portable build spent about 9 % of
+a seeder's CPU in software CRC32C.
+
+### 2026-11-10 seeder measurements
+
+Linux: NUC (i7-10710U), loopback, stores on tmpfs, seeder pinned to three cores
+and N `download_ab` consumers (this build) on the other three; 1 GiB random file;
+two interleaved rounds. JS is the relay image's `relay.js` stack under Bare.
+Aggregate MB/s is all bytes over first-ready to last-result; CPU is the seeder's.
+
+| Peers | JS MB/s | Rust MB/s | JS CPU-s/GiB | Rust CPU-s/GiB | JS / Rust peak RSS MB |
+|---:|---:|---:|---:|---:|---|
+| 1 | 80–82 | 115 | 12.6–13.2 | 4.7–4.9 | 313–350 / 148–153 |
+| 2 | 99–102 | 172–181 | 12.2–12.6 | 6.2–6.3 | 342–343 / 179 |
+| 4 | 109–110 | 183–184 | 12.0–12.2 | 7.2–7.4 | 376–383 / 174–194 |
+| 6 | 109–114 | 176–179 | 11.8–12.5 | 7.9–8.1 | 374–407 / 203–207 |
+
+Before this round, on the same setup with the old consumers, Rust seeded 63–66 MB/s
+at 18–19 CPU-s/GiB to one peer and 103–108 MB/s at 29–31 to six. From four peers
+up the consumers use about all six of their hardware threads while the Rust
+seeder uses under one core, so 180 MB/s is this setup's ceiling, not the seeder's.
+
+macOS loopback: one 1 GiB pull from the Rust seeder 56.6 MB/s at 20.2 CPU-s/GiB
+(was 33.1 at 31.0); four peers 67.3 MB/s at 21.3 (38.8 at 74.5 with only the
+bookkeeping fix: worker threads contended for the socket in `sendto`). The JS
+seeder to the same consumers: 53.3 at 18.8 and 55.9 at 19.6.
+
 ### 2026-11-08 desktop-mode measurements
 
 One back-to-back 1 GiB read per backend/path, fresh consumer stores, four Rust

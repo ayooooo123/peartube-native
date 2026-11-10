@@ -1,0 +1,5 @@
+# RocksDB's portable build checks every blob read's CRC32C in software (about 9 % of
+# a Linux seeder's CPU); SSE4.2 + CLMUL select its hardware path. Every x86-64 CPU
+# since Westmere (2010) has both.
+[target.x86_64-unknown-linux-gnu]
+rustflags = ["-C", "target-cpu=x86-64-v2", "-C", "target-feature=+pclmulqdq"]
