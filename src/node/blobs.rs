@@ -1394,7 +1394,7 @@ where
         if blob.block_length <= 16 || self.is_owned_blob(key) || session.writable() {
             return 0;
         }
-        let bs = 65536.max(
+        let bs = 4096.max(
             (if blob.byte_length > 0 {
                 blob.byte_length
             } else {

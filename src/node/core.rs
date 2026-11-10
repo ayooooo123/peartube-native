@@ -805,7 +805,10 @@ pub async fn create_node(options: Value) -> Result<Arc<CoreNode>, NodeError> {
         memory_window_budget: options.get("memoryCacheBytes").and_then(Value::as_u64).map(
             |bytes| {
                 Arc::new(tokio::sync::Semaphore::new(
-                    (bytes.saturating_mul(3) / 4).min(u32::MAX as u64) as usize,
+                    (bytes.saturating_mul(3) / 4)
+                        .min(u32::MAX as u64)
+                        .min(tokio::sync::Semaphore::MAX_PERMITS as u64)
+                        as usize,
                 ))
             },
         ),

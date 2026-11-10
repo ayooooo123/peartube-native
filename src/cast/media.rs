@@ -342,6 +342,76 @@ fn reserve_window(
     }
 }
 
+struct ReaderLease<'a> {
+    media: &'a Media,
+    id: u64,
+    bag: RequestBag,
+    budget: Option<Arc<tokio::sync::Semaphore>>,
+    cap: u64,
+    window: u64,
+    permit: Option<tokio::sync::OwnedSemaphorePermit>,
+}
+
+impl<'a> ReaderLease<'a> {
+    fn new(media: &'a Media, start: u64, wanted: u64) -> Self {
+        let limit = media
+            .peer
+            .as_ref()
+            .and_then(|peer| peer.memory_cache_bytes());
+        Self {
+            media,
+            id: media.register_reader(start),
+            bag: RequestBag::new(),
+            budget: media
+                .peer
+                .as_ref()
+                .and_then(|peer| peer.memory_window_budget()),
+            cap: limit.map_or(wanted, |limit| wanted.min(limit * 3 / 8)),
+            window: 0,
+            permit: None,
+        }
+    }
+
+    fn reserve(&mut self) -> u64 {
+        if self.window == 0 {
+            (self.window, self.permit) = reserve_window(self.budget.clone(), self.cap);
+        }
+        self.window
+    }
+
+    async fn send(
+        &self,
+        tx: &mpsc::Sender<Result<Frame<Bytes>, std::io::Error>>,
+        chunk: Bytes,
+    ) -> bool {
+        let send = tx.send(Ok(Frame::data(chunk)));
+        if self.budget.is_some() {
+            tokio::time::timeout(Duration::from_secs(15), send)
+                .await
+                .is_ok_and(|result| result.is_ok())
+        } else {
+            send.await.is_ok()
+        }
+    }
+}
+
+impl Drop for ReaderLease<'_> {
+    fn drop(&mut self) {
+        self.bag.destroy("reader closed");
+        self.media.drop_reader(self.id);
+    }
+}
+
+async fn while_connected<T>(
+    tx: &mpsc::Sender<Result<Frame<Bytes>, std::io::Error>>,
+    future: impl Future<Output = T>,
+) -> Option<T> {
+    tokio::select! {
+        result = future => Some(result),
+        _ = tx.closed() => None,
+    }
+}
+
 /// A protocol blob pointer as the blob reader wants it.
 pub fn blob_from_pointer(pointer: crate::protocol::BlobPointer) -> BlobId {
     BlobId {
@@ -492,9 +562,9 @@ pub fn windowed_response(
     } else {
         RangeSpec::Full { start, end }
     };
-    let Some(core) = media.core.clone() else {
+    if media.core.is_none() {
         return super::http::empty(StatusCode::NOT_FOUND);
-    };
+    }
     let mime = if media.mime.is_empty() {
         "video/mp4"
     } else {
@@ -508,46 +578,8 @@ pub fn windowed_response(
         return res;
     }
     let (tx, rx) = mpsc::channel(8);
-    let reader_id = media.register_reader(start);
-    let (window, permit) = reserve_window(
-        media
-            .peer
-            .as_ref()
-            .and_then(|peer| peer.memory_window_budget()),
-        media.window_bytes(free),
-    );
     tokio::spawn(async move {
-        let _window_permit = permit;
-        let opts = StreamOptions {
-            start,
-            length: Some(end - start + 1),
-            window_bytes: window,
-            active: true,
-        };
-        // One bag per response: dropping the client cancels its block and range requests at once.
-        let bag = RequestBag::new();
-        let mut stream = match ByteStream::open(&core, blob, opts, bag.clone()).await {
-            Ok(stream) => stream,
-            Err(_) => {
-                media.drop_reader(reader_id);
-                bag.destroy("stream closed");
-                return;
-            }
-        };
-        let mut pos = start;
-        while let Ok(Some(chunk)) = tokio::select! {
-            next = stream.next() => next,
-            _ = tx.closed() => Ok(None),
-        } {
-            let len = chunk.len() as u64;
-            if tx.send(Ok(Frame::data(chunk))).await.is_err() {
-                break;
-            }
-            pos += len;
-            media.advance_reader(reader_id, pos, len);
-        }
-        bag.destroy("stream closed");
-        media.drop_reader(reader_id);
+        let _ = pipe_p2p(&media, &tx, start, end, free, true).await;
     });
     *res.body_mut() = channel_body(rx);
     res
@@ -672,7 +704,7 @@ async fn splice_loop(
             && (!can_http || span_cached || media.has_active_peer());
         if use_p2p {
             on_mode_upgrade(&media.p2p_mode);
-            match pipe_p2p(&media, &tx, cursor, end).await {
+            match pipe_p2p(&media, &tx, cursor, end, u64::MAX, false).await {
                 Ok(_written) => {
                     break;
                 }
@@ -772,68 +804,61 @@ async fn pipe_p2p(
     tx: &mpsc::Sender<Result<Frame<Bytes>, std::io::Error>>,
     start: u64,
     end: u64,
+    free: u64,
+    active: bool,
 ) -> Result<u64, (u64, CastError)> {
     let (Some(core), Some(blob)) = (media.core.as_ref(), media.blob) else {
         return Err((0, CastError::new("No local P2P source", 502)));
     };
-    let reader_id = media.register_reader(start);
-    let (window, _window_permit) = reserve_window(
-        media
-            .peer
-            .as_ref()
-            .and_then(|peer| peer.memory_window_budget()),
-        (DEFAULT_STREAM_BYTES_PER_SEC * 12).min(media.window_bytes(u64::MAX)),
-    );
-    let opts = StreamOptions {
-        start,
-        length: Some(end - start + 1),
-        window_bytes: window,
-        active: false,
+    let wanted = if active {
+        media.window_bytes(free)
+    } else {
+        (DEFAULT_STREAM_BYTES_PER_SEC * 12).min(media.window_bytes(free))
     };
-    let bag = RequestBag::new();
-    let result = tokio::select! {
-      result = async {
-        let mut stream = match ByteStream::open(core, blob, opts, bag.clone()).await {
-            Ok(stream) => stream,
-            Err(err) => return Err((0, CastError::new(err.to_string(), 502))),
-        };
-        let mut written = 0u64;
-        loop {
-            // Only a P2P slice that still has an HTTP fallback is time-boxed.
-            let next = if media.sender_http_alive() {
-                match tokio::time::timeout(Duration::from_millis(3_500), stream.next()).await {
-                    Err(_) => {
-                        return Err((written, CastError::new("Upstream slice stalled", 504)));
-                    }
-                    Ok(Ok(None)) => break,
-                    Ok(Err(err)) => {
-                        return Err((written, CastError::new(err.to_string(), 502)));
-                    }
-                    Ok(Ok(Some(chunk))) => chunk,
-                }
-            } else {
-                match stream.next().await {
-                    Ok(None) => break,
-                    Err(err) => {
-                        return Err((written, CastError::new(err.to_string(), 502)));
-                    }
-                    Ok(Some(chunk)) => chunk,
-                }
+    let mut lease = ReaderLease::new(media, start, wanted);
+    let mut stream: Option<ByteStream> = None;
+    let mut written = 0u64;
+    loop {
+        let previous = lease.window;
+        let window = lease.reserve();
+        if stream.is_none() || (previous == 0 && window > 0) {
+            let opts = StreamOptions {
+                start: start + written,
+                length: Some(end - start + 1 - written),
+                window_bytes: window,
+                active,
             };
-            let len = next.len() as u64;
-            written += len;
-            if tx.send(Ok(Frame::data(next))).await.is_err() {
+            let Some(opened) =
+                while_connected(tx, ByteStream::open(core, blob, opts, lease.bag.clone())).await
+            else {
                 return Ok(written);
-            }
-            media.advance_reader(reader_id, start + written, len);
+            };
+            stream = Some(opened.map_err(|err| (written, CastError::new(err.to_string(), 502)))?);
         }
-        Ok(written)
-      } => result,
-      _ = tx.closed() => Ok(0),
-    };
-    media.drop_reader(reader_id);
-    bag.destroy("splice closed");
-    result
+        let next = async {
+            let stream = stream.as_mut().expect("opened stream");
+            let next = if !active && media.sender_http_alive() {
+                tokio::time::timeout(Duration::from_millis(3_500), stream.next())
+                    .await
+                    .map_err(|_| CastError::new("Upstream slice stalled", 504))?
+            } else {
+                stream.next().await
+            };
+            next.map_err(|err| CastError::new(err.to_string(), 502))
+        };
+        let Some(next) = while_connected(tx, next).await else {
+            return Ok(written);
+        };
+        let Some(chunk) = next.map_err(|err| (written, err))? else {
+            return Ok(written);
+        };
+        let len = chunk.len() as u64;
+        if !lease.send(tx, chunk).await {
+            return Ok(written);
+        }
+        written += len;
+        media.advance_reader(lease.id, start + written, len);
+    }
 }
 
 /// The status loop's next mode: P2P once anything is cached or a peer holds the video.
@@ -855,6 +880,82 @@ pub fn media_snapshot(media: &Media) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn lease_media() -> Media {
+        Media::new(
+            "lease".into(),
+            json!({}),
+            "video/mp4".into(),
+            "p2p".into(),
+            "p2p".into(),
+            false,
+            None,
+            None,
+            None,
+            None,
+            String::new(),
+            None,
+            false,
+        )
+    }
+
+    #[tokio::test]
+    async fn disconnect_cancels_slow_open_and_drops_reader_resources() {
+        let media = lease_media();
+        let budget = Arc::new(tokio::sync::Semaphore::new(100));
+        let (tx, rx) = mpsc::channel(1);
+        let mut lease = ReaderLease::new(&media, 500, 50);
+        lease.budget = Some(budget.clone());
+        assert_eq!(lease.reserve(), 50);
+        drop(rx);
+        assert!(
+            while_connected(&tx, std::future::pending::<()>())
+                .await
+                .is_none()
+        );
+        drop(lease);
+        assert!(media.readers.lock().unwrap().is_empty());
+        assert_eq!(budget.available_permits(), 100);
+    }
+
+    #[test]
+    fn demand_only_reader_retries_and_panics_release_its_lease() {
+        let media = lease_media();
+        let budget = Arc::new(tokio::sync::Semaphore::new(100));
+        let (_, held) = reserve_window(Some(budget.clone()), 100);
+        let mut lease = ReaderLease::new(&media, 500, 50);
+        lease.budget = Some(budget.clone());
+        assert_eq!(lease.reserve(), 0);
+        drop(held);
+        assert_eq!(lease.reserve(), 50);
+        assert_eq!(
+            budget.available_permits(),
+            50,
+            "leave room for an overlapping seek"
+        );
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+            let _lease = lease;
+            panic!("reader failure");
+        }));
+        assert!(result.is_err());
+        assert!(media.readers.lock().unwrap().is_empty());
+        assert_eq!(budget.available_permits(), 100);
+    }
+
+    #[tokio::test]
+    async fn stalled_client_releases_its_reader_and_prefetch_window() {
+        let media = lease_media();
+        let budget = Arc::new(tokio::sync::Semaphore::new(100));
+        let (tx, _rx) = mpsc::channel(1);
+        let mut lease = ReaderLease::new(&media, 500, 50);
+        lease.budget = Some(budget.clone());
+        assert_eq!(lease.reserve(), 50);
+        assert!(lease.send(&tx, Bytes::from_static(b"a")).await);
+        assert!(!lease.send(&tx, Bytes::from_static(b"b")).await);
+        drop(lease);
+        assert!(media.readers.lock().unwrap().is_empty());
+        assert_eq!(budget.available_permits(), 100);
+    }
 
     #[test]
     fn concurrent_responses_share_one_prefetch_budget() {

@@ -747,85 +747,94 @@ async fn replicate_core(
 
 #[tokio::test]
 async fn memory_receiver_evicts_behind_without_media_files() {
-    let dir = tempfile::tempdir().unwrap();
-    let store = Corestore::open_with_options(
-        dir.path(),
-        hypercore::storage::StoreOptions {
-            memory: true,
-            ..Default::default()
-        },
-    )
-    .unwrap();
-    let writer_dir = tempfile::tempdir().unwrap();
-    let writer = Corestore::open(writer_dir.path()).unwrap();
-    let key = replicate_core(&writer, &store, "video", &vec![data(BLOCK); 64]).await;
-    let host = TestHost::new(0);
-    *lock(&host.0.storage) = Some(store.clone());
-    let blobs = Blobs::open(
-        dir.path().to_owned(),
-        store.clone(),
-        TestChannel::new([9; 32], [8; 32]),
-        TestSwarm::default(),
-        host,
-        false,
-    )
-    .await
-    .unwrap();
-    let session = blobs.blob_core(&key).await.unwrap();
-    blobs
-        .evict_behind(
-            &key,
-            hyperblobs::BlobId {
-                block_offset: 0,
-                block_length: 64,
-                byte_offset: 0,
-                byte_length: 64 * BLOCK as u64,
-            },
-            peartube_native::node::blobs::EvictOptions {
-                playhead_byte: 48 * BLOCK as u64,
-                keep_behind_bytes: 2 * BLOCK as u64,
-                max_bytes: None,
-                keep_ahead_bytes: None,
+    for block_size in [BLOCK, 16 * 1024] {
+        let blocks = (64 * BLOCK / block_size) as u64;
+        let dir = tempfile::tempdir().unwrap();
+        let store = Corestore::open_with_options(
+            dir.path(),
+            hypercore::storage::StoreOptions {
+                memory: true,
+                ..Default::default()
             },
         )
-        .await;
-    assert!(!session.has(16));
-    assert!(session.has(40));
-    blobs
-        .evict_behind(
-            &key,
-            hyperblobs::BlobId {
-                block_offset: 0,
-                block_length: 64,
-                byte_offset: 0,
-                byte_length: 64 * BLOCK as u64,
-            },
-            peartube_native::node::blobs::EvictOptions {
-                playhead_byte: 0,
-                keep_behind_bytes: 2 * BLOCK as u64,
-                keep_ahead_bytes: Some(8 * BLOCK as u64),
-                max_bytes: None,
-            },
+        .unwrap();
+        let writer_dir = tempfile::tempdir().unwrap();
+        let writer = Corestore::open(writer_dir.path()).unwrap();
+        let key = replicate_core(
+            &writer,
+            &store,
+            "video",
+            &vec![data(block_size); blocks as usize],
         )
         .await;
-    assert!(
-        !session.has(40),
-        "backwards seek must discard stale future data"
-    );
-    assert!(session.has(63), "retain the tail metadata guard");
-    assert_eq!(std::fs::read_dir(dir.path().join("db")).unwrap().count(), 0);
-    writer.close().await;
-    store.close().await;
-    let reopened = Corestore::open_with_options(
-        dir.path(),
-        hypercore::storage::StoreOptions {
-            memory: true,
-            ..Default::default()
-        },
-    )
-    .unwrap();
-    assert!(reopened.list().unwrap().is_empty());
-    reopened.close().await;
+        let host = TestHost::new(0);
+        *lock(&host.0.storage) = Some(store.clone());
+        let blobs = Blobs::open(
+            dir.path().to_owned(),
+            store.clone(),
+            TestChannel::new([9; 32], [8; 32]),
+            TestSwarm::default(),
+            host,
+            false,
+        )
+        .await
+        .unwrap();
+        let session = blobs.blob_core(&key).await.unwrap();
+        blobs
+            .evict_behind(
+                &key,
+                hyperblobs::BlobId {
+                    block_offset: 0,
+                    block_length: blocks,
+                    byte_offset: 0,
+                    byte_length: 64 * BLOCK as u64,
+                },
+                peartube_native::node::blobs::EvictOptions {
+                    playhead_byte: 48 * BLOCK as u64,
+                    keep_behind_bytes: 2 * BLOCK as u64,
+                    max_bytes: None,
+                    keep_ahead_bytes: None,
+                },
+            )
+            .await;
+        assert!(!session.has((16 * BLOCK / block_size) as u64));
+        assert!(session.has((47 * BLOCK / block_size) as u64));
+        blobs
+            .evict_behind(
+                &key,
+                hyperblobs::BlobId {
+                    block_offset: 0,
+                    block_length: blocks,
+                    byte_offset: 0,
+                    byte_length: 64 * BLOCK as u64,
+                },
+                peartube_native::node::blobs::EvictOptions {
+                    playhead_byte: 0,
+                    keep_behind_bytes: 2 * BLOCK as u64,
+                    keep_ahead_bytes: Some(8 * BLOCK as u64),
+                    max_bytes: None,
+                },
+            )
+            .await;
+        assert!(
+            !session.has((47 * BLOCK / block_size) as u64),
+            "backwards seek must discard stale future data"
+        );
+        assert!(session.has(blocks - 1), "retain the tail metadata guard");
+        assert_eq!(std::fs::read_dir(dir.path().join("db")).unwrap().count(), 0);
+        writer.close().await;
+        store.close().await;
+        let reopened = Corestore::open_with_options(
+            dir.path(),
+            hypercore::storage::StoreOptions {
+                memory: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(reopened.list().unwrap().is_empty());
+        reopened.close().await;
+    }
 }
 
 #[tokio::test]
