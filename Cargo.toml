@@ -48,7 +48,7 @@ unicode-normalization = "0.1"
 url = "2"
 
 [target.'cfg(unix)'.dependencies]
-rustix = { version = "1", features = ["process"] }
+rustix = { version = "1", features = ["fs", "process"] }
 
 [dev-dependencies]
 tempfile = "3"

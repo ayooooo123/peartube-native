@@ -2795,7 +2795,7 @@ fn content_bytes(session: &Session) -> u64 {
 }
 
 /// Local blocks in `[start, end)`; hypercore-rs has no range count.
-fn count_local(session: &Session, start: u64, end: u64) -> u64 {
+pub(crate) fn count_local(session: &Session, start: u64, end: u64) -> u64 {
     let end = end.min(session.length());
     let mut count = 0;
     for index in start..end {

@@ -424,6 +424,8 @@ struct ConnectionState {
     lan: bool,
     private: bool,
     transport: Option<libudx::UdxStreamAbort>,
+    /// Raw bytes through this connection, as the route counters see them.
+    bytes: Option<WireBytes>,
     /// The transport pieces the mux does not own (socket handle, direct-dial runtime).
     _keepalive: Vec<Box<dyn Any + Send + Sync>>,
 }
@@ -452,6 +454,29 @@ impl ConnectionHandle {
         if !self.0.closed.swap(true, Ordering::AcqRel) {
             (self.0.close)();
         }
+    }
+}
+
+/// The relay's upload sharing (`traffic.js`) sees connections through this.
+impl crate::traffic::Connection for ConnectionHandle {
+    fn id(&self) -> u64 {
+        Arc::as_ptr(&self.0) as usize as u64
+    }
+    fn raw_bytes_written(&self) -> u64 {
+        self.0.bytes.as_ref().map_or(0, WireBytes::tx)
+    }
+    // shortcut: pausing a bulk HiveRelay connection is a no-op, so `uploadMbps` does not cap
+    // HiveRelay seeding yet; add a UDX read/write pause when hiverelay-seed is ported.
+    fn pause(&self) {}
+    fn resume(&self) {}
+    fn destroyed(&self) -> bool {
+        ConnectionHandle::destroyed(self)
+    }
+    fn mux(&self) -> Mux {
+        self.0.mux.clone()
+    }
+    fn remote_public_key(&self) -> Option<[u8; 32]> {
+        Some(self.0.peer)
     }
 }
 
@@ -719,6 +744,7 @@ impl Network {
             private,
             _keepalive: keepalive,
             transport,
+            bytes,
         }));
         {
             let mut connections = lock(&self.connections);

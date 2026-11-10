@@ -658,8 +658,9 @@ impl<N: Node> Api<N> {
             }
             if *method == Method::PUT && path == "/v1/settings" {
                 let patch = self.read_body(req.body).await?;
-                let mut settings = settings.lock().await;
                 let updated = settings
+                    .lock()
+                    .await
                     .update(&patch)
                     .map_err(|error| HttpError::new(error.status(), error.message()))?;
                 let changed: Vec<String> = updated
@@ -672,13 +673,13 @@ impl<N: Node> Api<N> {
                     })
                     .unwrap_or_default();
                 let mut warning = None;
+                // Unlocked: applying reads the settings it just saved.
                 if !changed.is_empty()
                     && let Some(apply) = &self.options.apply_settings
                     && let Err(message) = apply(changed.clone()).await
                 {
                     warning = Some(message);
                 }
-                drop(settings);
                 let mut out = object(updated);
                 if let Some(warning) = warning {
                     out.insert("warning".to_owned(), Value::String(warning));

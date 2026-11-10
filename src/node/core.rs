@@ -539,6 +539,41 @@ impl CoreNode {
         self.inner.net.get().cloned().expect("network open")
     }
 
+    /// `createTrafficGate({ node, uploadMbps })`: upload sharing over this node's connections,
+    /// present and future. Call the returned closure and `TrafficGate::stop` to end it.
+    pub fn traffic_gate(
+        self: &Arc<Self>,
+        upload_mbps: f64,
+    ) -> (crate::traffic::TrafficGate, Box<dyn Fn() + Send + Sync>) {
+        use crate::traffic::{Options, TrafficGate};
+        let (viewing, bulk) = (Arc::downgrade(self), Arc::downgrade(self));
+        let gate = TrafficGate::new(Options {
+            upload_mbps,
+            private_routing: self.private_routing(),
+            http_viewing: Some(Arc::new(move || {
+                viewing.upgrade().is_some_and(|node| node.viewing_now())
+            })),
+            mark_bulk_peer: Some(Arc::new(move |key: &str, on| {
+                if let Some(node) = bulk.upgrade() {
+                    node.blobs().mark_bulk_peer(key, on);
+                }
+            })),
+            ..Options::default()
+        });
+        let net = self.net();
+        let attach = gate.clone();
+        let detach = net.on_connection(Arc::new(move |conn| attach.attach(Arc::new(conn))));
+        for conn in net.connections() {
+            gate.attach(Arc::new(conn));
+        }
+        (gate, detach)
+    }
+
+    /// The HTTP blob server served a viewer within the last 3 s.
+    fn viewing_now(&self) -> bool {
+        now_ms().saturating_sub(self.blobs().last_http_view_at()) < 3_000
+    }
+
     fn blobs(&self) -> &Blobs<Arc<Channel>, Arc<Network>, Host> {
         self.inner.blobs.get().expect("blobs open")
     }
@@ -1826,7 +1861,7 @@ impl Node for CoreNode {
     }
 
     async fn http_viewing(&self) -> bool {
-        now_ms().saturating_sub(self.blobs().last_http_view_at()) < 3_000
+        self.viewing_now()
     }
 
     async fn mark_bulk_peer(&self, key: &str, on: bool) {

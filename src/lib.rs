@@ -24,6 +24,7 @@ pub mod mirror;
 pub mod node;
 pub mod private_overlay;
 pub mod relay;
+pub mod replicate;
 pub mod resolution;
 pub mod settings;
 pub mod traffic;

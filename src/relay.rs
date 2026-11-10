@@ -22,8 +22,13 @@ use crate::http::{self, Api, ApiServer, BlobAddr, HttpError, Options};
 use crate::mirror::{ArtFeed, LocalMirrorFiles, MirrorHost, MirrorOptions};
 use crate::node::Node;
 use crate::node::core::{CoreNode, NodeStreams, create_node};
+use crate::private_overlay::dht::DhtOptions;
+use crate::private_overlay::peeroxide::open_dht;
+use crate::private_overlay::{GuardOptions, PrivateGuard, create_private_guard, to_hex};
 use crate::protocol::API_PORT;
+use crate::replicate::{ReplicateConfig, Replicator};
 use crate::settings::Settings;
+use crate::traffic::TrafficGate;
 
 type Shared<T> = Arc<Mutex<Option<T>>>;
 
@@ -33,6 +38,17 @@ struct Open {
     acquirer: Acquirer<CoreNode>,
     mirror: Arc<MirrorHost<CoreNode>>,
     changes: tokio::task::JoinHandle<()>,
+    replication: Replication,
+}
+
+/// `p2p-replicate` and the traffic gate whose `peersBusy` it waits on.
+struct Replication {
+    replicator: Replicator,
+    traffic: TrafficGate,
+    detach_traffic: Box<dyn Fn() + Send + Sync>,
+    /// `scheduleReplicate`: catalog changes ask for a pass, 2 s later and one at a time.
+    kick: Arc<tokio::sync::Notify>,
+    kicker: tokio::task::JoinHandle<()>,
 }
 
 struct Inner {
@@ -47,6 +63,8 @@ struct Inner {
     mirror: Shared<Arc<MirrorHost<CoreNode>>>,
     /// `state.extraStatus`'s LAN endpoint and private-routing flag, refreshed on each open.
     extra: Arc<Mutex<Value>>,
+    /// `privateGuard`: the forwarder for other peers' private routing, with the settings it runs.
+    guard: Arc<Mutex<Option<(String, PrivateGuard)>>>,
     shutting_down: AtomicBool,
 }
 
@@ -91,9 +109,8 @@ impl Relay {
             serde_json::to_value(crate::app::idle_status()).unwrap_or_else(|_| json!({}));
         fallback_status["tracker"] = json!(tracker);
         let tls = read_tls(&env, &storage);
-        let extra = Arc::new(Mutex::new(
-            json!({ "lan": null, "privateRouting": false, "privateGuard": null }),
-        ));
+        let extra = Arc::new(Mutex::new(json!({ "lan": null, "privateRouting": false })));
+        let guard: Arc<Mutex<Option<(String, PrivateGuard)>>> = Arc::new(Mutex::new(None));
 
         let relay = Arc::new_cyclic(|weak: &std::sync::Weak<Inner>| {
             let weak = weak.clone();
@@ -105,8 +122,16 @@ impl Relay {
                     .filter(|t| !t.is_empty()),
                 fallback_status: Some(fallback_status),
                 extra_status: Some({
-                    let extra = extra.clone();
-                    Arc::new(move || extra.lock().unwrap_or_else(|e| e.into_inner()).clone())
+                    let (extra, guard) = (extra.clone(), guard.clone());
+                    Arc::new(move || {
+                        let mut status = extra.lock().unwrap_or_else(|e| e.into_inner()).clone();
+                        status["privateGuard"] = guard
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner())
+                            .as_ref()
+                            .map_or(Value::Null, |(_, guard)| guard_status(guard));
+                        status
+                    })
                 }),
                 fallback_jobs: Some(Arc::new(move || {
                     let jobs: Vec<Value> = std::fs::read_to_string(&jobs_file)
@@ -199,6 +224,7 @@ impl Relay {
                 acquirer: Arc::new(Mutex::new(None)),
                 mirror: Arc::new(Mutex::new(None)),
                 extra: extra.clone(),
+                guard: guard.clone(),
                 shutting_down: AtomicBool::new(false),
             }
         });
@@ -236,6 +262,9 @@ impl Relay {
     pub async fn start(&self) -> Result<Value, String> {
         let mut open = self.0.open.lock().await;
         self.open_locked(&mut open).await?;
+        if let Err(error) = self.apply_guard().await {
+            log("private guard failed to start", json!({ "error": error }));
+        }
         let status = match open.as_ref() {
             Some(open) => serde_json::to_value(open.node.status().await).unwrap_or(Value::Null),
             None => Value::Null,
@@ -271,6 +300,63 @@ impl Relay {
         }
         let mut open = self.0.open.lock().await;
         self.close_locked(&mut open).await;
+        self.stop_guard().await;
+    }
+
+    /// `applyGuard()`: the guard runs on its own HyperDHT and port with a fresh key each
+    /// start, and opens no Corestore. JS runs it as a child process; here it is in-process.
+    async fn apply_guard(&self) -> Result<(), String> {
+        let port = self.cfg("privateGuardPort").await.as_u64().unwrap_or(0) as u16;
+        let bootstrap = strings(&self.cfg("bootstrap").await);
+        let want = js_truthy(&self.cfg("privateGuard").await)
+            .then(|| json!([port, bootstrap]).to_string());
+        let running = self
+            .0
+            .guard
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|(config, _)| config.clone());
+        if want == running {
+            return Ok(());
+        }
+        self.stop_guard().await;
+        let Some(want) = want else { return Ok(()) };
+        if port != 0 && self.cfg("dhtPort").await.as_u64() == Some(u64::from(port)) {
+            return Err("privateGuardPort: use a different port from the peer port".into());
+        }
+        let host = self.0.env.get("PEARTUBE_PRIVATE_HOST").cloned();
+        // No `bootstrap` setting means the public DHT, as for the node.
+        let bootstrap = crate::node::network::resolve_bootstrap(bootstrap);
+        let dht = open_dht(DhtOptions {
+            host: host.clone(),
+            port,
+            bootstrap: bootstrap.clone(),
+        })
+        .await
+        .map_err(|e| format!("privateGuard: {e}"))?;
+        let guard = create_private_guard(
+            dht,
+            GuardOptions {
+                host,
+                port,
+                bootstrap,
+                ..GuardOptions::default()
+            },
+        )
+        .await
+        .map_err(|e| format!("privateGuard: {e}"))?;
+        log("private-guard ready", guard_status(&guard));
+        *self.0.guard.lock().unwrap() = Some((want, guard));
+        self.notify("update");
+        Ok(())
+    }
+
+    async fn stop_guard(&self) {
+        let running = self.0.guard.lock().unwrap().take();
+        if let Some((_, guard)) = running {
+            let _ = guard.close().await;
+        }
     }
 
     fn notify(&self, event: &str) {
@@ -352,7 +438,6 @@ impl Relay {
         *self.0.extra.lock().unwrap() = json!({
             "lan": lan_status(&node).await,
             "privateRouting": node.private_routing(),
-            "privateGuard": null,
         });
         self.0.api.set_node(node.clone());
         let sources = node.list_sources().await;
@@ -406,11 +491,16 @@ impl Relay {
             .await,
         );
         *self.0.mirror.lock().unwrap() = Some(mirror.clone());
+        let replication = self
+            .start_replication(&node, &mirror, &cfg, notify.clone())
+            .await;
 
         let mut changes = node.onchange();
+        let kick = replication.kick.clone();
         let changes = tokio::spawn(async move {
             while changes.changed().await.is_ok() {
                 notify();
+                kick.notify_one();
             }
         });
         *open = Some(Open {
@@ -418,9 +508,60 @@ impl Relay {
             acquirer,
             mirror,
             changes,
+            replication,
         });
         self.notify("update");
         Ok(())
+    }
+
+    async fn start_replication(
+        &self,
+        node: &Arc<CoreNode>,
+        mirror: &Arc<MirrorHost<CoreNode>>,
+        cfg: &impl Fn(&str) -> Value,
+        onchange: Arc<dyn Fn() + Send + Sync>,
+    ) -> Replication {
+        let (traffic, detach_traffic) =
+            node.traffic_gate(cfg("hiverelayUploadMbps").as_f64().unwrap_or(0.0).max(0.0));
+        let replicator = Replicator::new(
+            node.clone(),
+            self.0.storage.clone(),
+            traffic.clone(),
+            self.replicate_config().await,
+            Some(onchange),
+        );
+        mirror.register(Arc::new(replicator.clone()));
+        let kick = Arc::new(tokio::sync::Notify::new());
+        let kicker = {
+            let (mirror, kick, replicator) = (mirror.clone(), kick.clone(), replicator.clone());
+            tokio::spawn(async move {
+                loop {
+                    kick.notified().await;
+                    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                    if replicator.enabled() {
+                        let _ = mirror.run("p2p-replicate", json!({})).await;
+                    }
+                }
+            })
+        };
+        kick.notify_one();
+        Replication {
+            replicator,
+            traffic,
+            detach_traffic,
+            kick,
+            kicker,
+        }
+    }
+
+    /// `mirrorConfig()`'s `replicate*` part.
+    async fn replicate_config(&self) -> ReplicateConfig {
+        ReplicateConfig::new(
+            js_truthy(&self.cfg("replicate").await),
+            &strings(&self.cfg("replicateSources").await),
+            self.cfg("replicateFreeGb").await.as_f64().unwrap_or(0.0),
+            self.cfg("replicateMbps").await.as_f64().unwrap_or(0.0),
+        )
     }
 
     /// The node keeps serving until the plugins have stopped.
@@ -430,11 +571,15 @@ impl Relay {
             acquirer,
             mirror,
             changes,
+            replication,
         }) = open.take()
         else {
             return;
         };
         mirror.close().await;
+        replication.kicker.abort();
+        (replication.detach_traffic)();
+        replication.traffic.stop();
         *self.0.mirror.lock().unwrap() = None;
         *self.0.acquirer.lock().unwrap() = None;
         acquirer.close();
@@ -463,12 +608,17 @@ impl Relay {
         };
         let Some(current) = open.as_ref().filter(|_| live) else {
             self.close_locked(&mut open).await;
-            return self.open_locked(&mut open).await;
+            self.open_locked(&mut open).await?;
+            return self.apply_guard().await;
         };
         let (node, acquirer, mirror) = (
             current.node.clone(),
             current.acquirer.clone(),
             current.mirror.clone(),
+        );
+        let (replicator, kick) = (
+            current.replication.replicator.clone(),
+            current.replication.kick.clone(),
         );
         let has = |keys: &[&str]| changed.iter().any(|key| keys.contains(&key.as_str()));
         if has(&["allowedPeers"]) {
@@ -506,6 +656,16 @@ impl Relay {
                 Some(strings(&self.cfg("feeds").await)),
             );
         }
+        if has(&[
+            "replicate",
+            "replicateSources",
+            "replicateFreeGb",
+            "replicateMbps",
+        ]) {
+            // Turning it off stops the running pass at its next window check.
+            replicator.configure(self.replicate_config().await);
+            kick.notify_one();
+        }
         if has(&["lan", "lanHost"]) {
             let lan = match js_truthy(&self.cfg("lan").await) {
                 true => match self.lan_host(&self.cfg("lanHost").await) {
@@ -522,6 +682,7 @@ impl Relay {
             node.net().set_lan(lan).await.map_err(|e| e.to_string())?;
             self.0.extra.lock().unwrap()["lan"] = lan_status(&node).await;
         }
+        self.apply_guard().await?;
         self.notify("update");
         Ok(())
     }
@@ -687,6 +848,20 @@ impl Relay {
             .cloned()
             .unwrap_or_else(|| self.0.storage.join("ubit").display().to_string())
     }
+}
+
+/// `status.privateGuard`: `{ publicKey, port, ...guard.stats() }`, as the JS relay reports it.
+fn guard_status(guard: &PrivateGuard) -> Value {
+    let stats = guard.stats();
+    json!({
+        "publicKey": to_hex(&guard.public_key()),
+        "port": guard.address().map_or(0, |addr| addr.port()),
+        "registeredRoutes": stats.registered_routes,
+        "activeCircuits": stats.active_circuits,
+        "rendezvousTopics": stats.rendezvous_topics,
+        "putMutableCount": stats.put_mutable_count,
+        "rvRegisterCount": stats.rv_register_count,
+    })
 }
 
 /// `status.lan`: where LAN peers reach this relay. The key is extra over JS (which draws a

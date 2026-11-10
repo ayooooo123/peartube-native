@@ -10,19 +10,24 @@ use peartube_native::relay::Relay;
 use serde_json::Value;
 
 fn get_json(addr: SocketAddr, path: &str) -> Value {
+    request_json(addr, "GET", path, "")
+}
+
+fn request_json(addr: SocketAddr, method: &str, path: &str, body: &str) -> Value {
     let mut stream = TcpStream::connect(addr).expect("api listens");
     stream
         .set_read_timeout(Some(Duration::from_secs(10)))
         .unwrap();
     write!(
         stream,
-        "GET {path} HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n"
+        "{method} {path} HTTP/1.1\r\nHost: {addr}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
     )
     .unwrap();
     let mut raw = String::new();
     stream.read_to_string(&mut raw).expect("a response");
     let (head, body) = raw.split_once("\r\n\r\n").expect("headers end");
-    assert!(head.starts_with("HTTP/1.1 200"), "{path}: {head}");
+    assert!(head.starts_with("HTTP/1.1 200"), "{method} {path}: {head}");
     serde_json::from_str(body).expect("JSON body")
 }
 
@@ -80,4 +85,29 @@ async fn a_relay_founds_its_channel_and_keeps_it_across_restarts() {
         "a restart keeps the same channel"
     );
     again.shutdown().await;
+}
+
+/// A live setting applies in place and the request returns: applying reads the settings the
+/// request just saved.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_live_setting_applies_without_a_reopen() {
+    let dir = tempfile::tempdir().unwrap();
+    let relay = Relay::listen(env(dir.path())).await.expect("relay listens");
+    let ready = relay.start().await.expect("node opens");
+    let addr = relay.addresses()[0];
+    let updated = tokio::task::spawn_blocking(move || {
+        request_json(addr, "PUT", "/v1/settings", r#"{"acquireConcurrency":2}"#)
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        updated["changed"],
+        serde_json::json!(["acquireConcurrency"])
+    );
+    assert_eq!(updated["warning"], Value::Null);
+    assert_eq!(
+        relay.status().await.expect("still open")["writer"],
+        ready["writer"]
+    );
+    relay.shutdown().await;
 }

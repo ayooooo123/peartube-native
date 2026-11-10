@@ -1,9 +1,9 @@
 //! Mirror plugin host for PearTube relays, ported from `src/mirror.js`.
 //!
 //! Built-in plugins: `http-acquire` (the durable acquirer as a plugin), `channel-backfill`, `blob-rechunk`,
-//! `watch-dir` and `feed-mirror`. `p2p-replicate` and `hiverelay-seed` are not built here: replication needs
-//! block-range downloads off a remote core, which `node::Node` deliberately does not expose, and the HiveRelay
-//! seeder owns its own module. Both register through `MirrorHost::register` exactly as the app's plugins do.
+//! `watch-dir` and `feed-mirror`. `p2p-replicate` (`crate::replicate`) and `hiverelay-seed` are not built here:
+//! replication needs block-range downloads off a remote core, which `node::Node` deliberately does not expose, and
+//! the HiveRelay seeder owns its own module. Both register through `MirrorHost::register` as the app's plugins do.
 //!
 //! The filesystem and remote-feed fetches sit behind small traits so a test can script them.
 
@@ -1597,7 +1597,7 @@ where
 
     /// `configure`: the watch folder and followed feeds take effect without a restart.
     ///
-    /// `replicate*` keys belong to the unported `p2p-replicate` plugin and are ignored here.
+    /// `replicate*` keys go to `crate::replicate::Replicator::configure`.
     pub fn configure(&self, watch_dir: Option<Option<String>>, feeds: Option<Vec<String>>) {
         if let Some(dir) = watch_dir
             && dir != *self.watch_dir.lock().expect("watch dir")

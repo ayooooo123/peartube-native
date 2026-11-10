@@ -18,10 +18,12 @@ README for ownership and threading requirements.
 same `PEARTUBE_*` environment, `settings.json`, `sources.json`, `directory.json` and
 `jobs.json` in `PEARTUBE_STORAGE`, the API with the relay UI on `PEARTUBE_API_HOST:PEARTUBE_API_PORT`,
 HTTPS on `PEARTUBE_HTTPS_PORT` when `tls.crt`/`tls.key` exist, and the acquirer with the
-`http-acquire`, `channel-backfill`, `blob-rechunk`, `watch-dir` and `feed-mirror` plugins.
-Not yet ported: the `p2p-replicate` and `hiverelay-seed` plugins, the private guard
-(`PEARTUBE_PRIVATE_RELAY`, `privateGuard`), cast routes, and JS plugins from
-`<storage>/plugins`. `status.lan` also carries the LAN `publicKey`. The UI and web player
+`http-acquire`, `channel-backfill`, `blob-rechunk`, `watch-dir`, `feed-mirror` and
+`p2p-replicate` plugins (`replicate`, over the `traffic` gate's `peartube/bulk-busy`).
+The `privateGuard` setting runs the guard forwarder in-process on its own HyperDHT and port
+(JS spawns `bin/private-relay.js`). Not yet ported: the `hiverelay-seed` plugin (so
+`PEARTUBE_HIVERELAY_UPLOAD_MBPS` caps nothing), standalone guard mode (`PEARTUBE_PRIVATE_RELAY`),
+cast routes, and JS plugins from `<storage>/plugins`. `status.lan` also carries the LAN `publicKey`. The UI and web player
 come from `PEARTUBE_WEB_DIR` (default: `web/` beside the binary). `relay.Dockerfile`
 builds the image from this stack and the app's `src/ui.js` and `web/assets`.
 
@@ -78,6 +80,7 @@ than presented as live network parity.
 - `tests/cast.rs`: JS cast fixtures and receiver/controller interop over HTTP and a TCP secret-stream stand-in. `tests/cast_default.rs` exercises the real default adapters and a JS receiver on a local testnet.
 - `tests/hiverelay.rs`: JS relay wire vectors and secret-stream interop.
 - `tests/traffic.rs`: JS traffic-gate decisions and npm Protomux busy-channel interop.
+- `tests/replicate.rs`: `p2p-replicate` pulls a followed channel's title on a local testnet and skips it under an unmet disk reserve. `tests/relay.rs`: the relay founds its channel and keeps it across restarts.
 - `tests/private_overlay.rs`: JS overlay vectors and behavior with a fake DHT, plus JS interop. `tests/network_private.rs` checks private routing fails closed and public routing joins topics; it is not a JS comparison.
 - `tests/lan_mdns.rs`: JS TXT records and parsing plus live Bonjour interop. `tests/lan_interop.rs`: JS/Rust and Rust/Rust isolated LAN discovery, streaming and connection rules.
 - `tests/node_api_shapes.rs`: node JSON shape round trips. `tests/node_mixed.rs`: real JS/Rust publication, following, streaming and restart on a local HyperDHT testnet.
@@ -264,7 +267,7 @@ tested and rejected for lack of repeatable wins. No ACK, pacing or wire changes.
 
 ## Known gaps and differences
 
-- `p2p-replicate` and `hiverelay-seed` mirror plugins are not built in; hosts can register plugins with `MirrorHost::register`.
+- The `hiverelay-seed` mirror plugin is not built in; hosts can register plugins with `MirrorHost::register`. `p2p-replicate` (`replicate`) is built on `CoreNode` and registered by the relay; it runs one title at a time (the app's default `replicateConcurrency`).
 - The default cast adapter has no `PeerFactory`: a load targeting a different network reuses the current node. Continuous read-ahead retargeting and `holdIfThin` are not wired; retry window timing differs. See [cast notes](docs/port-notes-cast.md).
 - LAN mDNS and the isolated DHT are implemented, but the real-interface interoperability matrix remains environment-blocked on this Mac. A standalone raw UDP probe also receives no LAN multicast; an ALF “permitted” query alone does not establish delivery. See [LAN notes](docs/port-notes-lan.md).
 - Corestore storage tuning uses engine defaults; free disk space is unknown. Status reports live blob-peer in-flight requests and UDX RTT/retransmitted packets; see [node notes](docs/node-api.md).

@@ -5,7 +5,6 @@ use std::collections::HashMap;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::{LazyLock, Mutex};
 
 use hypercore::crypto::KeyPair;
@@ -15,16 +14,10 @@ use hypercore::{Core, CoreOptions};
 use super::LOW_DISK_BOOT_BYTES;
 
 /// Free bytes for non-root users on the filesystem holding `dir`, as `statfsSync` reports
-/// `bavail * bsize`. `df -kP` reads the same fields; the port has no `statvfs` without `unsafe`.
+/// `bavail * bsize`. A syscall, not `df`: the relay image has no shell tools.
 pub fn free_disk_bytes(dir: &Path) -> Option<u64> {
-    let output = Command::new("df").arg("-kP").arg(dir).output().ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let text = String::from_utf8_lossy(&output.stdout);
-    let line = text.lines().nth(1)?;
-    let available: u64 = line.split_whitespace().nth(3)?.parse().ok()?;
-    Some(available.saturating_mul(1024))
+    let stat = rustix::fs::statvfs(dir).ok()?;
+    Some(stat.f_bavail.saturating_mul(stat.f_frsize))
 }
 
 /// `freeDiskBytes` with the app's `Infinity` fallback.
