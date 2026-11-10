@@ -551,6 +551,21 @@ fn rust_to_rust_over_lan() {
         "the follower is connected over LAN: {stats}"
     );
 
+    let cast_peer = peartube_native::cast::adapters::NodePeer::new(follower.clone());
+    let status = peartube_native::cast::traits::CastPeer::status(&cast_peer);
+    assert_eq!(
+        status.peers, 0,
+        "cast peers excludes its separately counted LAN peers"
+    );
+    assert_eq!(status.lan_peers, follower.net().connection_count());
+    assert_eq!(status.connected_peers.len() as u64, status.lan_peers);
+    assert!(
+        status
+            .connected_peers
+            .iter()
+            .all(|peer| peer["route"] == "lan" && peer["remoteAddress"].is_string())
+    );
+
     rt.block_on(follower.close()).expect("close follower");
     rt.block_on(publisher.close()).expect("close publisher");
     let _ = std::fs::remove_dir_all(&publisher_storage);

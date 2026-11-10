@@ -457,13 +457,23 @@ impl ConnectionHandle {
 
 #[derive(Default, Clone, Copy)]
 struct Bucket {
-    closed_rx: u64,
-    closed_tx: u64,
+    prev_rx: u64,
+    prev_tx: u64,
     down_bps: f64,
     up_bps: f64,
 }
 
 impl Bucket {
+    fn sample(&mut self, rx: u64, tx: u64, dt: u64) {
+        if dt < 500 {
+            return;
+        }
+        self.down_bps = ((rx.saturating_sub(self.prev_rx)) as f64 * 1000.0 / dt as f64).round();
+        self.up_bps = ((tx.saturating_sub(self.prev_tx)) as f64 * 1000.0 / dt as f64).round();
+        self.prev_rx = rx;
+        self.prev_tx = tx;
+    }
+
     fn route(&self, peers: u64, rx: u64, tx: u64) -> Route {
         Route {
             peers,
@@ -511,8 +521,7 @@ pub struct Network {
     overlay_topics: Mutex<HashMap<String, [u8; 32]>>,
     allowed: Mutex<Option<HashSet<String>>>,
     lan: Mutex<Option<LanState>>,
-    public: Bucket,
-    lan_bucket: Bucket,
+    traffic: Mutex<[Bucket; 3]>,
     /// Frames read and written on the swarm's connections (the public route's bytes).
     wire_rx: Arc<AtomicU64>,
     wire_tx: Arc<AtomicU64>,
@@ -521,8 +530,6 @@ pub struct Network {
     lan_wires: Arc<Mutex<Vec<WireBytes>>>,
     lan_closed_rx: AtomicU64,
     lan_closed_tx: AtomicU64,
-    lan_prev_rx: AtomicU64,
-    lan_prev_tx: AtomicU64,
     prev_rx: AtomicU64,
     prev_tx: AtomicU64,
     prev_at: AtomicU64,
@@ -565,7 +572,6 @@ impl Network {
         rpc.bootstrap = bootstrap;
         rpc.port = port;
         rpc.host = host;
-        rpc.firewalled = false;
         config.dht.dht = rpc;
         let (_task, swarm, mut incoming) = peeroxide::spawn(config)
             .await
@@ -600,15 +606,12 @@ impl Network {
             overlay_topics: Mutex::new(HashMap::new()),
             allowed: Mutex::new(allowed),
             lan: Mutex::new(None),
-            public: Bucket::default(),
-            lan_bucket: Bucket::default(),
+            traffic: Mutex::new([Bucket::default(); 3]),
             wire_rx: Arc::new(AtomicU64::new(0)),
             wire_tx: Arc::new(AtomicU64::new(0)),
             lan_wires: Arc::new(Mutex::new(Vec::new())),
             lan_closed_rx: AtomicU64::new(0),
             lan_closed_tx: AtomicU64::new(0),
-            lan_prev_rx: AtomicU64::new(0),
-            lan_prev_tx: AtomicU64::new(0),
             prev_rx: AtomicU64::new(0),
             prev_tx: AtomicU64::new(0),
             prev_at: AtomicU64::new(now_ms()),
@@ -755,6 +758,18 @@ impl Network {
             .iter()
             .filter(|connection| connection.is_lan())
             .count() as u64
+    }
+
+    /// Read-only transport diagnostics; keys are prefixes, never secret material.
+    pub fn peer_connections(&self) -> Vec<Value> {
+        self.connections().iter().map(|connection| {
+            let route = if connection.is_private() { "private" } else if connection.is_lan() { "lan" } else { "public" };
+            serde_json::json!({
+                "publicKey": hex(&connection.0.peer[..8]),
+                "route": route,
+                "remoteAddress": connection.0.transport.as_ref().and_then(|transport| transport.remote_addr()).map(|address| address.to_string()),
+            })
+        }).collect()
     }
 
     pub fn dht(&self) -> &HyperDhtHandle {
@@ -1127,6 +1142,7 @@ impl Network {
     /// connection to carry its bytes, so nothing is ever labelled private, and a LAN binding
     /// hands over its connection's counters, so the LAN route counts exactly its peers.
     pub fn sample(&self) -> Sample {
+        let mut traffic = lock(&self.traffic);
         let now = now_ms();
         let prev_at = self.prev_at.load(Ordering::Relaxed);
         let dt = now.saturating_sub(prev_at);
@@ -1142,12 +1158,9 @@ impl Network {
         );
         let connections = self.connections();
         let peers = connections.len() as u64;
-        let mut public = self.public;
-        let mut lan = self.lan_bucket;
-        public.closed_rx = public_rx;
-        public.closed_tx = public_tx;
-        lan.closed_rx = lan_rx;
-        lan.closed_tx = lan_tx;
+        traffic[0].sample(public_rx, public_tx, dt);
+        traffic[1].sample(lan_rx, lan_tx, dt);
+        traffic[2].sample(private_rx, private_tx, dt);
         let prev_rx = self.prev_rx.load(Ordering::Relaxed);
         let prev_tx = self.prev_tx.load(Ordering::Relaxed);
         if dt >= 500 {
@@ -1157,18 +1170,6 @@ impl Network {
             *lock(&self.up_bps) = ((tx.saturating_sub(prev_tx)) as f64 * 1000.0 / dt as f64)
                 .round()
                 .max(0.0);
-            public.down_bps = self.down_bps();
-            public.up_bps = self.up_bps();
-            let lan_prev_rx = self.lan_prev_rx.load(Ordering::Relaxed);
-            let lan_prev_tx = self.lan_prev_tx.load(Ordering::Relaxed);
-            lan.down_bps = ((lan_rx.saturating_sub(lan_prev_rx)) as f64 * 1000.0 / dt as f64)
-                .round()
-                .max(0.0);
-            lan.up_bps = ((lan_tx.saturating_sub(lan_prev_tx)) as f64 * 1000.0 / dt as f64)
-                .round()
-                .max(0.0);
-            self.lan_prev_rx.store(lan_rx, Ordering::Relaxed);
-            self.lan_prev_tx.store(lan_tx, Ordering::Relaxed);
             self.prev_rx.store(rx, Ordering::Relaxed);
             self.prev_tx.store(tx, Ordering::Relaxed);
             self.prev_at.store(now, Ordering::Relaxed);
@@ -1177,11 +1178,13 @@ impl Network {
             .iter()
             .filter(|connection| connection.is_lan())
             .count() as u64;
-        let public_peers = peers.saturating_sub(lan_peers + private_peers);
-        let public_route = public.route(public_peers, public.closed_rx, public.closed_tx);
-        // The private overlay's own route; nothing when it never started.
-        let private_route = Bucket::default().route(private_peers, private_rx, private_tx);
-        let lan_route = lan.route(lan_peers, lan.closed_rx, lan.closed_tx);
+        let public_peers = connections
+            .iter()
+            .filter(|connection| !connection.is_lan() && !connection.is_private())
+            .count() as u64;
+        let public_route = traffic[0].route(public_peers, public_rx, public_tx);
+        let private_route = traffic[2].route(private_peers, private_rx, private_tx);
+        let lan_route = traffic[1].route(lan_peers, lan_rx, lan_tx);
         let mut rtt_sum = 0u64;
         let mut rtt_count = 0u64;
         let mut retransmits = 0u64;
@@ -1305,6 +1308,29 @@ impl super::api::Swarm for NetworkSwarm {
 mod tests {
     use super::*;
 
+    #[test]
+    fn route_rates_are_independent_and_survive_fast_status_polls() {
+        let mut traffic = [Bucket::default(); 3];
+        for (bucket, (rx, tx)) in traffic
+            .iter_mut()
+            .zip([(0, 0), (10_000, 2_000), (500, 100)])
+        {
+            bucket.sample(rx, tx, 1000);
+        }
+        assert_eq!(traffic[0].route(0, 0, 0).down_bps, number(0.0));
+        assert_eq!(
+            traffic[1].route(1, 10_000, 2_000).down_bps,
+            number(10_000.0)
+        );
+        assert_eq!(traffic[2].route(1, 500, 100).up_bps, number(100.0));
+        traffic[1].sample(10_100, 2_010, 50);
+        assert_eq!(traffic[1].down_bps, 10_000.0);
+        traffic[1].sample(10_500, 2_100, 500);
+        assert_eq!(traffic[1].down_bps, 1000.0);
+        assert_eq!(traffic[1].up_bps, 200.0);
+        assert_eq!(traffic[0].down_bps, 0.0);
+    }
+
     #[tokio::test]
     async fn open_does_not_wait_for_an_unreachable_bootstrap() {
         let storage = tempfile::tempdir().unwrap();
@@ -1329,6 +1355,11 @@ mod tests {
             tokio::time::timeout(Duration::from_millis(50), network.dht.bootstrapped())
                 .await
                 .is_err(),
+        );
+        assert_eq!(
+            network.dht.dht().firewalled().await.unwrap(),
+            peeroxide_dht::hyperdht_messages::FIREWALL_UNKNOWN,
+            "public reachability must be probed, not assumed open",
         );
         network.close().await;
     }

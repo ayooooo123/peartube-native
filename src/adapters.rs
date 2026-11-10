@@ -22,13 +22,16 @@ fn metahub(kind: &str, size: &str) -> ArtLookup {
 }
 
 /// `state.extraStatus`: the fields the API adds over the node's own status.
-fn extra_status(url: Arc<Mutex<Option<String>>>) -> Arc<dyn Fn() -> Value + Send + Sync> {
+fn extra_status(
+    url: Arc<Mutex<Option<String>>>,
+    network: Arc<crate::node::network::Network>,
+) -> Arc<dyn Fn() -> Value + Send + Sync> {
     Arc::new(move || {
         let url = url
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .clone();
-        json!({ "apiUrl": url })
+        json!({ "apiUrl": url, "connectedPeers": network.peer_connections() })
     })
 }
 
@@ -68,11 +71,12 @@ impl ApiServerTrait<CoreNode> for LoopbackApi {
     ) -> Result<Option<String>, Self::Error> {
         let api_url = Arc::new(Mutex::new(None));
         let blob = node.blob_server();
+        let network = node.net();
         let options = || Options {
             blob: Some(BlobAddr::new(blob.ip().to_string(), blob.port())),
             poster: Some(metahub("poster", "small")),
             backdrop: Some(metahub("background", "medium")),
-            extra_status: Some(extra_status(api_url.clone())),
+            extra_status: Some(extra_status(api_url.clone(), network.clone())),
             on_sources_changed: Some(on_sources.clone()),
             ..Options::default()
         };

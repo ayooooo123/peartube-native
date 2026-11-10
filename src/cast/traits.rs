@@ -75,11 +75,49 @@ pub trait DhtServer: Send + Sync {
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct PeerStatus {
+    /// Non-LAN peers; callers add `lan_peers` once, as in JS.
     pub peers: u64,
     pub lan_peers: u64,
     /// `status().routes`, echoed in `/cast/v1/info` when present.
     #[serde(skip)]
     pub routes: Option<Value>,
+    #[serde(skip)]
+    pub connected_peers: Vec<Value>,
+}
+
+impl PeerStatus {
+    pub(crate) fn from_routes(routes: crate::node::api::Routes) -> Self {
+        Self {
+            peers: routes.public.peers + routes.private.peers,
+            lan_peers: routes.lan.peers,
+            routes: serde_json::to_value(routes).ok(),
+            connected_peers: Vec::new(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod peer_status_tests {
+    use super::*;
+
+    #[test]
+    fn lan_peers_are_counted_once() {
+        let route = |peers| crate::node::api::Route {
+            peers,
+            rx_bytes: 0,
+            tx_bytes: 0,
+            down_bps: 0.into(),
+            up_bps: 0.into(),
+        };
+        let status = PeerStatus::from_routes(crate::node::api::Routes {
+            public: route(2),
+            private: route(1),
+            lan: route(3),
+        });
+        assert_eq!(status.peers, 3);
+        assert_eq!(status.lan_peers, 3);
+        assert_eq!(status.peers + status.lan_peers, 6);
+    }
 }
 
 /// What `openUri` answers with.

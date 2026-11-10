@@ -928,6 +928,7 @@ async fn receiver_routes_match_the_app_contract() {
     let receiver = start_receiver(&dir, false).await;
     let base = format!("http://127.0.0.1:{}", receiver.port());
     let client = HttpClient::new();
+    assert_eq!(receiver.info()["connectedPeers"], json!([]));
 
     let page = client
         .request(Method::GET, &base, Vec::new(), None, Duration::from_secs(5))

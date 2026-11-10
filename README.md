@@ -37,6 +37,15 @@ The node contract, JSON shapes and adapter details are in [docs/node-api.md](doc
 Custom bootstrap names are resolved with peeroxide's IPv4-preferring DNS resolver before
 selecting the DHT bind address. A loopback name therefore binds like its numeric address;
 otherwise the Noise handshake advertises non-loopback interfaces and misses a local testnet.
+The public DHT starts firewalled and probes reachability like JS; only isolated
+LAN DHTs assume an open socket. Neither worklet mode nor LAN discovery disables
+public topic joins. The local peeroxide fork also bounds a cross-egress,
+authenticated advertised-LAN fallback (see its `peeroxide-dht/README.md`).
+Loopback `/v1/status` and receiver `/cast/v1/info` include `connectedPeers`:
+16-hex public-key prefixes, the discovery route (`public`, `lan`, `private`),
+and the live transport address (null if unavailable). A public-DHT connection
+can use a private address; its discovery route remains public. Cast counts
+each connection once, and per-route rates retain independent sampling state.
 
 ## Evidence
 

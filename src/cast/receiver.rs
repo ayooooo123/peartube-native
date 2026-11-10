@@ -205,6 +205,13 @@ impl Inner {
         out.insert("capabilities".into(), Value::Object(self.capabilities()));
         out.insert("authRequired".into(), json!(!self.open_auth));
         out.insert(
+            "connectedPeers".into(),
+            status
+                .as_ref()
+                .map(|s| json!(s.connected_peers))
+                .unwrap_or_else(|| json!([])),
+        );
+        out.insert(
             "routes".into(),
             status.and_then(|s| s.routes).unwrap_or(Value::Null),
         );

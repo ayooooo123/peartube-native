@@ -150,9 +150,8 @@ impl CastPeer for NodePeer {
         let net = self.net();
         let sample = net.sample();
         PeerStatus {
-            peers: net.connection_count(),
-            lan_peers: net.lan_connection_count(),
-            routes: serde_json::to_value(sample.routes).ok(),
+            connected_peers: net.peer_connections(),
+            ..PeerStatus::from_routes(sample.routes)
         }
     }
 
