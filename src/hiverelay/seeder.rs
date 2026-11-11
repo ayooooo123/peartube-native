@@ -589,6 +589,8 @@ impl HiverelaySeeder {
 
             let mut requests: Vec<SeedRequest> = Vec::with_capacity(page.len());
             for core in &page {
+                let discovery_key = unhex32(&core.key)
+                    .ok_or_else(|| MirrorError::plain(format!("Invalid core key {}", core.key)))?;
                 let length = lengths.get(&core.key).copied().unwrap_or(0);
                 let drive = self.ensure_core_beacon(core, length).await?;
                 let blobs_bytes = {
@@ -600,7 +602,7 @@ impl HiverelaySeeder {
                 };
                 let mut request = SeedRequest {
                     app_key: drive.key,
-                    discovery_keys: vec![unhex32(&core.key).unwrap_or_default()],
+                    discovery_keys: vec![discovery_key],
                     replication_factor: replicas,
                     geo_preference: "[]".into(),
                     max_storage_bytes: bound_bytes(
