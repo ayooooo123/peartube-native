@@ -4,12 +4,20 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
-use peartube_native::relay::{Relay, log};
+use peartube_native::relay::{Relay, guard_mode, guard_only, log};
 use serde_json::json;
 
 #[tokio::main]
 async fn main() {
     let env: HashMap<String, String> = std::env::vars().collect();
+    // `PEARTUBE_PRIVATE_RELAY`: a standalone Corestore-free guard forwarder, never a content relay.
+    if guard_mode(&env) {
+        if let Err(error) = guard_only(env).await {
+            log("private guard failed to start", json!({ "error": error }));
+            std::process::exit(1);
+        }
+        return;
+    }
     let relay = match Relay::listen(env).await {
         Ok(relay) => relay,
         Err(error) => {

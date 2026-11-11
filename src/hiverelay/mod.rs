@@ -6,6 +6,9 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 
+/// The relay's `hiverelay-seed` seeder plugin.
+pub mod seeder;
+
 pub const PROTOCOL: &str = "hiverelay-seed";
 pub const HANDSHAKE: &[u8] = br#"{"major":1,"minor":0}"#;
 pub const SIGNATURE_DOMAIN: &[u8] = b"hiverelay.seed-request.v3\0";
@@ -28,9 +31,15 @@ pub fn epoch_topics(now_ms: u64) -> [[u8; 32]; 2] {
         .map(|b| crypto::hash(&[format!("hiverelay-discovery-v1-epoch-{b}").as_bytes()]))
 }
 pub fn publisher_keypair(channel_secret: &[u8; 64]) -> KeyPair {
+    publisher_key(channel_secret)
+}
+
+/// `crypto_sign_seed_keypair` over the domain-separated seed material: a channel writer's secret
+/// key, or the store's primary key for a read-only node.
+pub fn publisher_key(material: &[u8]) -> KeyPair {
     let mut h = Sha256::new();
     h.update(b"peartube/hiverelay-publisher/v1");
-    h.update(channel_secret);
+    h.update(material);
     KeyPair::from_seed(&h.finalize().into())
 }
 
