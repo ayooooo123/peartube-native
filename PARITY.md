@@ -80,6 +80,16 @@ The generators read only what the app exports at `JS_REF`. At `3f3c9f840` these 
   `seedDenyEncoding`, `signSeedRequest`, `computeBoundBytes`, `blake2bTopic`, `encodeHyperdriveHeader`,
   `encodeHyperdriveSingleRootNode`.
 
+One generator has no way to run against the current app at all: `tests/js/cast-fixtures.mjs` lifts
+`receiverAddress` out of `src/cast.js`, and `fe2897172` deleted that function together with the browser
+receiver and the HTTP control routes: a cast now runs over the peer connection both nodes already share
+(`src/cast-control.js`), so the cast fixtures are rebuilt against that protocol by `align-cast`. Until then
+`check.mjs` reports `ERROR fixtures/cast-reference.json`.
+
+The check compares against whatever `PEARTUBE_APP` points at and says so when that checkout has uncommitted
+changes; CI's checkout is the `JS_REF` commit itself, so a local run should use a clean checkout at `JS_REF`
+(or a fresh `git archive` of it) to mean the same thing.
+
 ## How to bump JS_REF
 
 `JS_REF` moves only together with the comparisons that prove the port still matches it. In one change:

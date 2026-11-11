@@ -208,7 +208,7 @@ fn settings_files_match_byte_for_byte() {
 
 /// The generator cannot load files Rust writes, so this cross-check runs the JS reference on them.
 #[test]
-#[ignore = "needs node and `npm install` in fixtures/gen"]
+#[ignore = "needs node and the app checkout at JS_REF (PEARTUBE_APP)"]
 fn rust_written_settings_load_in_js() {
     let Some(app) = std::env::var_os("PEARTUBE_APP")
         .map(PathBuf::from)
