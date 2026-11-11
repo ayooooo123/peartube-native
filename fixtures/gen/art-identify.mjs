@@ -130,6 +130,9 @@ fixture.fileName = [
   { url: 'https://cdn.example/a/My%20Film.mkv', headers: {} },
   { url: 'https://cdn.example/dld/abc?filename=A+B.mkv', headers: {} },
   { url: 'https://cdn.example/a/%zz.mkv', headers: {} },
+  { url: 'https://cdn.example/dl/100%25?filename=', headers: {} },
+  { url: 'https://cdn.example/dl/100%', headers: {} },
+  { url: 'https://cdn.example/dld/abc', headers: { 'content-disposition': 'attachment; filename=bare.mkv' } },
   { url: 'not a url', headers: {} },
   { url: 'https://cdn.example/dld/abc', headers: { 'content-disposition': 'attachment; filename*=utf-8\'\'Lower.MKV' } }
 ].map(test => {

@@ -50,7 +50,7 @@ Paths on the right are in the PearTube app unless otherwise stated.
 | `cast` | `src/cast.js`, `src/cast-ui.js`: controller, receiver, pairing and media serving |
 | `lan` | `src/lan.js`: mDNS and isolated LAN DHT; worker host Bonjour events and interface selection |
 | `hiverelay`, `hiverelay::seeder`, `traffic`, `private_overlay` | `src/hiverelay.js`, `src/traffic.js`, `src/private-overlay.js`: relay protocol and the `hiverelay-seed` seeder, traffic gate and private routing (the standalone guard is `bin/private-relay.js`) |
-| `node/storage`, `network`, `channel`, `apply`, `sources`, `catalog`, `blobs` | Corresponding `src/node/*.js`: storage, replication, channel operations, source and catalog management, blob storage and streaming |
+| `node/storage`, `network`, `channel`, `apply`, `sources`, `catalog`, `blobs` | Corresponding `src/node/*.js`: storage, replication, channel operations, source and catalog management, blob storage and streaming. `node/hash_state` is the libsodium-layout SHA-256 state `blobs` checkpoints a resumed ingest with |
 | `node/core`, `node/factory` | `src/index.js`: compose and open the native node; default worker factory |
 | `protocol`, `mnemonic`, `identity` | `src/protocol.js`, `src/mnemonic.js`, `src/identity.js`: wire formats, recovery and keys, identity storage |
 | `settings`, `resolution` | App settings and media resolution selection |
@@ -102,7 +102,7 @@ identified below rather than presented as live network parity.
 - `tests/http.rs`: JS API responses, status and headers against a scripted node.
 - `tests/acquire_mirror.rs`: JS acquisition and mirror call and JSON traces against scripted dependencies.
 - `tests/apply.rs`: JS apply operations, host calls and view bytes on a real Hyperbee.
-- `tests/blobs.rs`: JS blob operations, core keys, announce fields, encrypted and plain block bytes, and cache decisions.
+- `tests/blobs.rs`: JS blob operations, core keys, announce fields, encrypted and plain block bytes, cache decisions, and ingested SHA-256 checkpoint/resume in both directions with `sodium-native` (`tests/js/sha256-state.mjs`).
 - `tests/cast.rs`: JS cast fixtures and receiver/controller interop over HTTP and a TCP secret-stream stand-in. `tests/cast_default.rs` exercises the real default adapters and a JS receiver on a local testnet.
 - `tests/hiverelay.rs`: JS relay wire vectors, secret-stream interop, and the app's own `createHiverelaySeeder` beside this crate's seeder against one HiveRelay stand-in: identical `/seed-core` bodies and identical `hiverelay-seed` request bytes.
 - `tests/traffic.rs`: JS traffic-gate decisions and npm Protomux busy-channel interop; a `peartube/bulk-busy` claim over the wire counts only from a peer the gate was told is a source peer.

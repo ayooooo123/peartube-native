@@ -18,6 +18,7 @@ use peartube_native::node::blobs::{
     BlobHost, BlobStreams, Blobs, BlobsError, ChannelView, Compact, ContentSwarm, RechunkOptions,
     SendFuture,
 };
+use peartube_native::node::hash_state::{Sha256State, base64_decode, base64_encode};
 use serde_json::{Map, Value, json};
 use tokio::io::{AsyncRead, AsyncWriteExt};
 
@@ -680,6 +681,366 @@ async fn truncated_transfer_is_rejected() {
             .iter()
             .all(|k| h.blobs.slot_keys().contains(k))
     );
+}
+
+// ---------------------------------------------------------------------------------------------
+// Checkpointed hashing
+
+/// Streams a payload in chunks that straddle block boundaries, and keeps a session on the named core the ingest
+/// writes so every checkpoint it reports can be compared with what the core had really committed at that moment.
+/// Every checkpoint handed over: `(reported bytes, committed bytes at that moment)`.
+type Checkpoints = Arc<Mutex<Vec<(u64, u64)>>>;
+/// Every state handed over with the prefix it covers.
+type CheckpointStates = Arc<Mutex<Vec<(Vec<u8>, u64)>>>;
+
+struct CheckpointSource {
+    data: Vec<u8>,
+    store: Corestore,
+    name: String,
+    session: Option<hypercore::Session>,
+    checks: Checkpoints,
+    states: CheckpointStates,
+}
+
+impl CheckpointSource {
+    fn new(data: Vec<u8>, store: Corestore, name: &str) -> Self {
+        Self {
+            data,
+            store,
+            name: name.to_owned(),
+            session: None,
+            checks: Arc::new(Mutex::new(Vec::new())),
+            states: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+}
+
+/// Hands out at most 100 000 bytes per read, so the 64 MiB checkpoint falls inside a block the writer has not
+/// flushed yet (a 256 KiB read would land on a 512 KiB block boundary, where the core is always caught up).
+struct ShortReader {
+    data: Vec<u8>,
+    at: usize,
+}
+
+impl AsyncRead for ShortReader {
+    fn poll_read(
+        mut self: std::pin::Pin<&mut Self>,
+        _cx: &mut std::task::Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        let take = (self.data.len() - self.at)
+            .min(buf.remaining())
+            .min(100_000);
+        buf.put_slice(&self.data[self.at..self.at + take]);
+        self.at += take;
+        std::task::Poll::Ready(Ok(()))
+    }
+}
+
+impl PutSource for CheckpointSource {
+    type Error = std::io::Error;
+
+    async fn open(
+        &mut self,
+        offset: u64,
+        _meta: &mut PutMeta,
+    ) -> Result<std::pin::Pin<Box<dyn AsyncRead + Send>>, Self::Error> {
+        self.session = Some(
+            self.store
+                .get(StoreGetOptions::name(self.name.as_str()))
+                .await
+                .expect("the ingest's core"),
+        );
+        Ok(Box::pin(ShortReader {
+            data: self.data[offset as usize..].to_vec(),
+            at: 0,
+        }))
+    }
+
+    fn on_data(&mut self, _bytes: u64) {}
+
+    fn on_hash_state(&mut self, state: &[u8], bytes: u64) {
+        let committed = self.session.as_ref().map_or(0, |s| s.byte_length());
+        lock(&self.checks).push((bytes, committed));
+        lock(&self.states).push((state.to_vec(), bytes));
+    }
+}
+
+/// A checkpoint is only handed to the job once the core has committed past it: a resume imports a state with
+/// `hashBytes <= core byteLength`, so one taken ahead of the core would be discarded and re-read.
+#[tokio::test]
+async fn a_hash_checkpoint_never_runs_ahead_of_the_core() {
+    let primary = [0x31; 32];
+    let h = harness(primary, [0x32; 32], 1_000_000).await;
+    let size = 80 * 1024 * 1024 + 7;
+    let payload = data(size);
+    let mut meta = put_meta(
+        "youtube:checkpoint",
+        "Checkpoint",
+        "video:fixture-checkpoint",
+    );
+    meta.expected_size = Some(Some(size as u64));
+    let source = CheckpointSource::new(payload.clone(), h.store.clone(), "video:fixture-checkpoint");
+    let checks = source.checks.clone();
+    let states = source.states.clone();
+    let announce = h.blobs.put(meta, source).await.expect("put");
+    assert_eq!(announce.sha256, digest(&payload));
+    assert_eq!(announce.size, size as u64);
+
+    let checks = lock(&checks).clone();
+    assert!(!checks.is_empty(), "the 64 MiB checkpoint was offered");
+    for (reported, committed) in &checks {
+        assert!(
+            reported <= committed,
+            "checkpoint at {reported} bytes was handed over with only {committed} committed"
+        );
+    }
+    // Each state covers exactly `bytes` and resumes to the film's digest over the rest.
+    for (state, bytes) in lock(&states).clone() {
+        let mut resumed = Sha256State::from_bytes(&state).expect("a libsodium state");
+        assert_eq!(resumed.bytes(), bytes);
+        resumed.update(&payload[bytes as usize..]);
+        let digest: String = resumed.finalize().iter().map(|b| format!("{b:02x}")).collect();
+        assert_eq!(digest, announce.sha256, "state at {bytes} resumes");
+    }
+}
+
+/// A job whose saved state covers the committed prefix resumes from that state: the head block is gone from disk
+/// (as a purge of the write-ahead cache leaves it) and only the gap between the state and the core is read.
+#[tokio::test]
+async fn a_saved_state_resumes_an_ingest_without_reading_its_prefix() {
+    let h = harness([0x41; 32], [0x42; 32], 1_000_000).await;
+    let payload = data(3 * BLOCK + 7);
+    let name = "video:fixture-resumed-state";
+    let core = h
+        .store
+        .get(StoreGetOptions::name(name))
+        .await
+        .expect("core");
+    core.append(&[&payload[..BLOCK], &payload[BLOCK..2 * BLOCK]])
+        .await
+        .expect("prefix");
+    // The two committed blocks are known by length only; the first is not on this disk any more.
+    core.clear(0, 1).await.expect("clear the head block");
+    core.close();
+
+    let mut state = Sha256State::new();
+    state.update(&payload[..BLOCK]);
+    let mut meta = put_meta("clip:resumedstate", "Resumed", name);
+    meta.expected_size = Some(Some(payload.len() as u64));
+    meta.extra
+        .insert("hashState".into(), json!(base64_encode(&state.to_bytes())));
+    meta.extra.insert("hashBytes".into(), json!(BLOCK as u64));
+    let announce = h
+        .blobs
+        .put(meta, BufferSource::new(payload.clone()))
+        .await
+        .expect("resumed put");
+    assert_eq!(announce.size, payload.len() as u64);
+    assert_eq!(announce.sha256, digest(&payload));
+}
+
+/// A state ahead of the committed core is discarded, not trusted: the ingest folds the core's own bytes instead.
+#[tokio::test]
+async fn a_state_ahead_of_the_core_is_discarded() {
+    let h = harness([0x51; 32], [0x52; 32], 1_000_000).await;
+    let payload = data(3 * BLOCK + 7);
+    let name = "video:fixture-ahead-state";
+    let core = h
+        .store
+        .get(StoreGetOptions::name(name))
+        .await
+        .expect("core");
+    core.append(&[&payload[..BLOCK]]).await.expect("prefix");
+    core.close();
+
+    // The checkpoint claims two blocks; the core holds one.
+    let mut state = Sha256State::new();
+    state.update(&payload[..2 * BLOCK]);
+    let mut meta = put_meta("clip:aheadstate", "Ahead", name);
+    meta.expected_size = Some(Some(payload.len() as u64));
+    meta.extra
+        .insert("hashState".into(), json!(base64_encode(&state.to_bytes())));
+    meta.extra.insert("hashBytes".into(), json!((2 * BLOCK) as u64));
+    let announce = h
+        .blobs
+        .put(meta, BufferSource::new(payload.clone()))
+        .await
+        .expect("put");
+    assert_eq!(announce.size, payload.len() as u64);
+    assert_eq!(
+        announce.sha256,
+        digest(&payload),
+        "the core's block was folded, not the state's extra block"
+    );
+}
+
+fn app_dir() -> Option<std::path::PathBuf> {
+    let app = std::env::var_os("PEARTUBE_APP").map(std::path::PathBuf::from)?;
+    app.join("node_modules/sodium-native").is_dir().then_some(app)
+}
+
+fn run_node_script(script: &str, args: &[&str], app: &std::path::Path) -> Value {
+    let output = std::process::Command::new("node")
+        .arg(script)
+        .args(args)
+        .env("PEARTUBE_APP", app)
+        .output()
+        .expect("node");
+    assert!(
+        output.status.success(),
+        "{script} failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    serde_json::from_slice(&output.stdout).expect("JSON from the script")
+}
+
+/// Dropping a job's half-written core releases its blocks and leaves the name openable: a purged core cannot be
+/// created again from its discovery key, so the retry at the same name failed `NotFound`.
+#[tokio::test]
+async fn a_dropped_named_core_can_be_ingested_again() {
+    let h = harness([0x71; 32], [0x72; 32], 1_000_000).await;
+    let name = "video:fixture-dropped";
+    let payload = data(BLOCK + 33);
+    let core = h
+        .store
+        .get(StoreGetOptions::name(name))
+        .await
+        .expect("core");
+    core.append(&[&payload[..BLOCK]]).await.expect("half");
+    core.close();
+    h.blobs.drop_store(name).await.expect("drop");
+
+    let mut meta = put_meta("clip:dropped", "Dropped", name);
+    meta.expected_size = Some(Some(payload.len() as u64));
+    let announce = h
+        .blobs
+        .put(meta, BufferSource::new(payload.clone()))
+        .await
+        .expect("the retry opens the same name");
+    assert_eq!(announce.size, payload.len() as u64);
+    assert_eq!(announce.sha256, digest(&payload));
+    assert_eq!(announce.blob.block_length, 2, "both blocks came from the retry");
+}
+
+/// A private core on disk whose per-job key is missing cannot be read or stitched: `put` empties it and
+/// refuses, so the next attempt starts from zero under a key the job carries.
+#[tokio::test]
+async fn a_private_core_without_its_key_is_reset_not_resumed() {
+    let h = harness([0x61; 32], [0x62; 32], 1_000_000).await;
+    h.host.set_epoch_key([0x63; 32]);
+    let name = "video:fixture-private-resume";
+    let payload = data(BLOCK + 40);
+    let core = h
+        .store
+        .get(StoreGetOptions::name(name))
+        .await
+        .expect("core");
+    core.append(&[&payload[..BLOCK]]).await.expect("half");
+    core.close();
+
+    let mut meta = put_meta("clip:privatekey", "Private", name);
+    meta.private_entry = Some(true);
+    meta.epoch = Some(1);
+    meta.expected_size = Some(Some(payload.len() as u64));
+    let err = h
+        .blobs
+        .put(meta.clone(), BufferSource::new(payload.clone()))
+        .await
+        .expect_err("a private core without its key");
+    assert!(matches!(err, BlobsError::PrivateKeyMissing { .. }), "{err}");
+
+    meta.extra.insert("storeKey".into(), json!(hex(&[0x64; 32])));
+    let announce = h
+        .blobs
+        .put(meta, BufferSource::new(payload.clone()))
+        .await
+        .expect("keyed put");
+    assert_eq!(announce.size, payload.len() as u64);
+    assert_eq!(announce.sha256, digest(&payload));
+    // The whole film is under the job's key: the previous key's bytes never stitched onto them.
+    let mut opts = StoreGetOptions::key(unhex32(&announce.blobs));
+    opts.encryption_key = Some([0x64; 32]);
+    let session = h.store.get(opts).await.expect("open with the job's key");
+    let mut joined = Vec::new();
+    for index in 0..session.length() {
+        let block = session
+            .get(index, GetOptions::default())
+            .await
+            .unwrap()
+            .unwrap();
+        joined.extend_from_slice(&block);
+    }
+    session.close();
+    assert_eq!(joined, payload);
+}
+
+/// The app's `sodium-native` state is the format this crate writes: a state it exports resumes here to the
+/// film's digest, and a state exported here finalises there to the same digest.
+#[tokio::test]
+async fn a_js_sha256_state_resumes_here() {
+    let Some(app) = app_dir() else {
+        eprintln!("skipped: set PEARTUBE_APP to the app checkout with node_modules installed");
+        return;
+    };
+    let script = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/js/sha256-state.mjs");
+    let fixture = run_node_script(script, &[], &app);
+    let size = fixture["size"].as_u64().expect("size") as usize;
+    assert_eq!(size, 2 * 1024 * 1024 + 12345);
+    let payload = data(size);
+    let whole = digest(&payload);
+
+    let mut rust_states = Vec::new();
+    for point in fixture["points"].as_array().expect("points") {
+        let bytes = point["bytes"].as_u64().expect("bytes") as usize;
+        assert_eq!(point["digest"].as_str(), Some(whole.as_str()));
+        let state = base64_decode(point["state"].as_str().expect("state")).expect("base64");
+        let mut resumed = Sha256State::from_bytes(&state).expect("a libsodium state");
+        assert_eq!(resumed.bytes(), bytes as u64);
+        resumed.update(&payload[bytes..]);
+        let digest: String = resumed
+            .finalize()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        assert_eq!(digest, whole, "the app's state at {bytes} resumes here");
+
+        // The same prefix folded here is the same state the app exported (its `buf` tail is never read).
+        let mut own = Sha256State::new();
+        own.update(&payload[..bytes]);
+        let own_bytes = own.to_bytes();
+        assert_eq!(
+            &own_bytes[..40],
+            &state[..40],
+            "words and count at {bytes}"
+        );
+        assert_eq!(
+            &own_bytes[40..40 + bytes % 64],
+            &state[40..40 + bytes % 64],
+            "partial block at {bytes}"
+        );
+        rust_states.push(json!({"bytes": bytes, "state": base64_encode(&own_bytes)}));
+    }
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let input = dir.path().join("rust-states.json");
+    std::fs::write(
+        &input,
+        json!({"size": size, "states": rust_states}).to_string(),
+    )
+    .expect("write states");
+    let digests = run_node_script(script, &[input.to_str().expect("path")], &app);
+    let digests = digests.as_array().expect("digests");
+    assert_eq!(digests.len(), fixture["points"].as_array().expect("points").len());
+    for (digest, point) in digests.iter().zip(fixture["points"].as_array().expect("points")) {
+        assert_eq!(digest["bytes"], point["bytes"]);
+        assert_eq!(
+            digest["digest"].as_str(),
+            Some(whole.as_str()),
+            "the state Rust exported at {} finalises there",
+            point["bytes"]
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
