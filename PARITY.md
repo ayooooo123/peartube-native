@@ -21,72 +21,55 @@ Status meanings:
 - `pending: align-<slice>`: the named alignment worktree owns the port of this JS change; the row moves to
   `match`, or to `debt:` with a reason, when that slice lands.
 
-The last column is the app commit the Rust tree was last matched against, short form: `2b88b0281` is the tree
-this port was written against before the alignment, and `73d2dfa47` is the relay change absorbed as Rust
-`d9a520e`. Every `pending` row is expected to reach `3f3c9f840` (the commit in `JS_REF`) when its slice lands.
-`—` means there is no Rust code to compare.
+The last column is the app commit the Rust module was last matched against (short form of `JS_REF`). `—` means
+there is no Rust code to compare.
 
 | JS module | Rust module | Status | JS commit last absorbed |
 | --- | --- | --- | --- |
-| `bin/private-relay.js` | `private_overlay`, `relay` (in-process guard) | `pending: align-relay` (standalone guard mode `PEARTUBE_PRIVATE_RELAY`) | `2b88b0281` |
+| `bin/private-relay.js` | `relay` (`PEARTUBE_PRIVATE_RELAY` standalone guard), `private_overlay::guard` | `match` | `8286e22f6` |
 | `bin/rebuild-view.js` | — | `JS-only:` one-off repair tool, run with the relay stopped; no Rust runtime path | — |
-| `bin/relay.js` | `relay`, `src/bin/peartube-relay.rs` | `pending: align-relay` (standalone guard, `status.lan` shape) | `73d2dfa47` |
-| `src/acquire.js` | `acquire` | `pending: align-acquire` | `2b88b0281` |
-| `src/app-settings.js` | `app_settings` | `match` | `2b88b0281` |
-| `src/apply.js` | `node/apply` | `match` (the `makeApply` writer hook is gone from both sides) | `501d17ace` |
-| `src/art.js` | `art` | `debt:` artwork HTTP timeout covers the whole exchange, unlike the app's socket inactivity timeout — see README "Known gaps" | `2b88b0281` |
-| `src/blob-server.js` | `node/blobs`, `http` (Range streaming) | `match` | `2b88b0281` |
-| `src/cast-control.js` | `cast/rpc` | `pending: align-cast` | `2b88b0281` |
-| `src/cast.js` | `cast/` (`controller`, `receiver`, `pairing`, `state`, `media`, `mdns`, `http`, `disk`, `traits`) | `pending: align-cast` | `2b88b0281` |
-| `src/hiverelay.js` | `hiverelay` | `pending: align-relay` | `2b88b0281` |
-| `src/http.js` | `http` | `pending: align-cast` (removed cast routes) | `73d2dfa47` |
-| `src/identify.js` | `identify` | `pending: align-acquire` | `2b88b0281` |
-| `src/index.js` | `node/core`, `node/factory` | `pending: align-node, align-cast` | `2b88b0281` |
-| `src/lan.js` | `lan/` (`discovery`, `mdns`, `host`) | `debt:` the real-interface interop matrix is blocked on this host's network — see README "Known gaps" | `2b88b0281` |
-| `src/mirror.js` | `mirror`, `replicate` | `pending: align-acquire` | `2b88b0281` |
-| `src/mnemonic.js` | `mnemonic` | `match` | `2b88b0281` |
-| `src/node/blobs.js` | `node/blobs` | `pending: align-acquire, align-node` | `2b88b0281` |
-| `src/node/catalog.js` | `node/catalog` | `pending: align-node` | `2b88b0281` |
-| `src/node/channel.js` | `node/channel` | `pending: align-node` | `2b88b0281` |
-| `src/node/identity.js` | `identity` | `match` | `2b88b0281` |
-| `src/node/network.js` | `node/network` | `pending: align-node` | `2b88b0281` |
-| `src/node/sources.js` | `node/sources` | `pending: align-node` | `2b88b0281` |
-| `src/node/storage.js` | `node/storage` | `pending: align-node` | `2b88b0281` |
-| `src/private-overlay.js` | `private_overlay` | `pending: align-node` (RPC channel paired before it opens) | `2b88b0281` |
-| `src/protocol.js` | `protocol` | `pending: align-node` (`parseReceiver` `p2p` default) | `2b88b0281` |
-| `src/qr.js` | `cast/qr` | `pending: align-cast` (the cast fixture generator needs the `JS_REF` receiver) | `2b88b0281` |
+| `bin/relay.js` | `relay`, `src/bin/peartube-relay.rs` | `match` (cast routes, `hiverelay-seed`, standalone guard, `status.lan` as `{host, port}`) | `8286e22f6` |
+| `src/acquire.js` | `acquire` | `match` | `8286e22f6` |
+| `src/app-settings.js` | `app_settings` | `match` | `8286e22f6` |
+| `src/apply.js` | `node/apply` | `match` | `8286e22f6` |
+| `src/art.js` | `art` | `debt:` artwork HTTP timeout covers the whole exchange, unlike the app's socket inactivity timeout — see README "Known gaps" | `8286e22f6` |
+| `src/blob-server.js` | `node/blobs`, `http` (Range streaming) | `match` | `8286e22f6` |
+| `src/cast-control.js` | `cast/control` | `match` | `8286e22f6` |
+| `src/cast.js` | `cast/` (`controller`, `receiver`, `pairing`, `state`, `media`, `mdns`, `http`, `disk`) | `match` (the live LAN cast test needs working multicast; see `src/lan.js`) | `8286e22f6` |
+| `src/hiverelay.js` | `hiverelay`, `hiverelay::seeder` | `match` (on stop the relay leaves its topics; it has no `leavePeer` for recruited relays, and the process closes right after) | `8286e22f6` |
+| `src/http.js` | `http` | `match` | `8286e22f6` |
+| `src/identify.js` | `identify` | `match` | `8286e22f6` |
+| `src/index.js` | `node/core`, `node/factory` | `match` | `8286e22f6` |
+| `src/lan.js` | `lan/` (`discovery`, `mdns`, `host`) | `debt:` the real-interface interop matrix is blocked on this host's network — see README "Known gaps" | `8286e22f6` |
+| `src/mirror.js` | `mirror`, `replicate` | `match` | `8286e22f6` |
+| `src/mnemonic.js` | `mnemonic` | `match` | `8286e22f6` |
+| `src/node/blobs.js` | `node/blobs`, `node/hash_state` | `match` | `8286e22f6` |
+| `src/node/catalog.js` | `node/catalog` | `match` | `8286e22f6` |
+| `src/node/channel.js` | `node/channel` | `match` | `8286e22f6` |
+| `src/node/identity.js` | `identity` | `match` | `8286e22f6` |
+| `src/node/network.js` | `node/network` | `match` | `8286e22f6` |
+| `src/node/sources.js` | `node/sources` | `debt:` with no `findingPeers` guard held, hypercore-rs `update()` still waits for a first peer where Hypercore returns at once; every app path holds the guard, so the node behaves the same | `8286e22f6` |
+| `src/node/storage.js` | `node/storage` | `match` | `8286e22f6` |
+| `src/private-overlay.js` | `private_overlay` | `match` | `8286e22f6` |
+| `src/protocol.js` | `protocol` | `match` | `8286e22f6` |
+| `src/qr.js` | `cast/qr` | `match` | `8286e22f6` |
 | `src/rebuild-view.js` | — | `JS-only:` the library behind `bin/rebuild-view.js`; an operator repair tool, not a runtime path | — |
-| `src/resolution.js` | `resolution` | `match` | `2b88b0281` |
-| `src/settings.js` | `settings` | `match` | `73d2dfa47` |
-| `src/traffic.js` | `traffic` | `match` (a busy claim counts only from a source peer, and `pause`/`resume` hold the connection's inbound reads) | `501d17ace` |
-| `src/ui.js` | — | `JS-only:` shared asset; `relay.Dockerfile` copies the app's own file to `web/index.html` at image build and the relay serves it | `3f3c9f840` |
-| `worklet/worker.js` | `app`, `lifecycle`, `ipc`, `backend` | `pending: align-cast` (cast method and event shapes) | `2b88b0281` |
-| `<storage>/plugins/*.mjs` (user plugins) | — | `JS-only:` Rust cannot execute JS plugins; the built-in plugins are ports of the app's own (`http-acquire`, `channel-backfill`, `blob-rechunk`, `watch-dir`, `feed-mirror`, `p2p-replicate`) | — |
+| `src/resolution.js` | `resolution` | `match` | `8286e22f6` |
+| `src/settings.js` | `settings` | `match` | `8286e22f6` |
+| `src/traffic.js` | `traffic` | `match` | `8286e22f6` |
+| `src/ui.js` | — | `JS-only:` shared asset; `relay.Dockerfile` copies the app's own file to `web/index.html` at image build and the relay serves it | `8286e22f6` |
+| `worklet/worker.js` | `app`, `lifecycle`, `ipc`, `backend` | `match` | `8286e22f6` |
+| `<storage>/plugins/*.mjs (user plugins)` | — | `JS-only:` Rust cannot execute JS plugins; the built-in plugins are ports of the app's own (`http-acquire`, `channel-backfill`, `blob-rechunk`, `watch-dir`, `feed-mirror`, `p2p-replicate`, `hiverelay-seed`) | — |
 
-`src/cast-ui.js`, `bin/receiver.js` and the cast web routes exist before `fe2897172` but not at `JS_REF`; the
-matching Rust files are deleted by `align-cast`. `src/ui.js` is the one file taken as-is from the app commit
-rather than ported, so its row follows `JS_REF`.
+`src/cast-ui.js`, `bin/receiver.js` and the browser-receiver cast routes were removed from the app in `fe2897172`;
+their Rust counterparts are deleted too.
 
 ## Generator dependencies on the app
 
-The generators read only what the app exports at `JS_REF`. At `3f3c9f840` these names are module-private, so
-`check.mjs` reports an `ERROR` for the matching references until the app exports them:
-
-- `src/mnemonic.js`: `entropyToMnemonic` (`gen.mjs`, `apply.mjs`).
-- `src/art.js`: `metaFor`. `src/identify.js`: `fileName`, `probe`, `ubitInfo`, `norm`, `strong`.
-- `src/hiverelay.js`: `SEED_HANDSHAKE`, `seedRequestEncoding`, `seedAcceptEncoding`, `unseedRequestEncoding`,
-  `seedDenyEncoding`, `signSeedRequest`, `computeBoundBytes`, `blake2bTopic`, `encodeHyperdriveHeader`,
-  `encodeHyperdriveSingleRootNode`.
-
-One generator has no way to run against the current app at all: `tests/js/cast-fixtures.mjs` lifts
-`receiverAddress` out of `src/cast.js`, and `fe2897172` deleted that function together with the browser
-receiver and the HTTP control routes: a cast now runs over the peer connection both nodes already share
-(`src/cast-control.js`), so the cast fixtures are rebuilt against that protocol by `align-cast`. Until then
-`check.mjs` reports `ERROR fixtures/cast-reference.json`.
-
-The check compares against whatever `PEARTUBE_APP` points at and says so when that checkout has uncommitted
-changes; CI's checkout is the `JS_REF` commit itself, so a local run should use a clean checkout at `JS_REF`
-(or a fresh `git archive` of it) to mean the same thing.
+The generators read only what the app exports at `JS_REF`: `entropyToMnemonic` (`src/mnemonic.js`), `metaFor`
+(`src/art.js`), `fileName`, `probe`, `ubitInfo`, `norm`, `strong` (`src/identify.js`) and the HiveRelay wire
+helpers (`src/hiverelay.js`) are exported by the app for exactly this. A generator must never copy app code;
+if it needs something the app keeps private, export it from the app in the same change.
 
 ## How to bump JS_REF
 
