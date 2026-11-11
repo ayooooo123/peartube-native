@@ -196,6 +196,7 @@ pub mod catalog;
 pub mod channel;
 pub mod core;
 pub mod factory;
+pub mod hash_state;
 pub mod network;
 pub mod sources;
 pub mod storage;

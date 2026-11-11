@@ -372,7 +372,24 @@
     {
       "url": "https://cdn.example/a/%zz.mkv",
       "headers": {},
-      "error": "URI malformed"
+      "out": "%zz.mkv"
+    },
+    {
+      "url": "https://cdn.example/dl/100%25?filename=",
+      "headers": {},
+      "out": "100%"
+    },
+    {
+      "url": "https://cdn.example/dl/100%",
+      "headers": {},
+      "out": "100%"
+    },
+    {
+      "url": "https://cdn.example/dld/abc",
+      "headers": {
+        "content-disposition": "attachment; filename=bare.mkv"
+      },
+      "out": "bare.mkv"
     },
     {
       "url": "not a url",

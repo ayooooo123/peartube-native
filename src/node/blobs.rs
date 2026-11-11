@@ -12,11 +12,12 @@
 //!
 //! Deliberate differences from the JS:
 //!
-//! - No checkpointed SHA-256 state (`sodium-native`'s exportable state). A resumed ingest re-reads
-//!   the committed prefix off the core and folds it into the hasher before the tail arrives, which
-//!   is the same byte order without the state blob, so `PutSource::on_hash_state` is never called.
-//! - `PutSource` errors carry no `restart` flag: a named core is always kept across a failed ingest
-//!   and an unnamed one is always purged. A caller that must drop a named core calls `drop_store`.
+//! - Checkpointed SHA-256 is byte-compatible with the app's: the state is libsodium's
+//!   `crypto_hash_sha256_state` as [`hash_state`] exports it, offered to the job every 64 MiB once the
+//!   core has committed past it, so a job begun by either side can be finished by the other.
+//! - `PutSource` errors carry no `restart` flag; the acquirer sees its own `AcquireError::Restart` (a
+//!   rotated encode) and drops the named core, so the next attempt starts from zero. Any other failed
+//!   ingest keeps the named core and purges an unnamed one.
 //! - hypercore-rs has no `upload` event, so serving-driven read-ahead (`warmAhead`, `bulkPeers`
 //!   filtering) has no trigger; `mark_bulk_peer`/`set_player_active` keep their shape.
 //! - The HTTP resolver receives only a key, so `info.head`/`info.range`-driven warmth and
@@ -37,7 +38,6 @@ use hyperbee::{Bee, RangeOptions};
 use hyperblobs::{BlobId, Blobs as Hyperblobs};
 use hypercore::{CoreError, CoreEvent, GetOptions, RequestBag, Session};
 use serde_json::{Map, Value, json};
-use sha2::{Digest, Sha256};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 
 use crate::mnemonic::{unwrap_video_key, wrap_video_key};
@@ -46,6 +46,7 @@ use crate::node::api::{
     Announce, Blob, CacheCeiling, CacheCleared, Published, PutMeta, RechunkResult, StorageGc,
     SyncResult,
 };
+use crate::node::hash_state::{SHA256_STATE_BYTES, Sha256State, base64_decode};
 use crate::protocol::{
     BLOB_BLOCK_SIZE, BlobSize, clean_text, decode_op, format_watch_uri, is_hex64,
     is_system_view_key, is_uniform_512,
@@ -63,6 +64,9 @@ const MAX_OPEN_CORES_WORKLET: usize = 6;
 /// Sessions kept for owned cores answering HTTP, and how long each lingers.
 const MAX_HTTP_OWNED: usize = 4;
 const HTTP_OWNED_TTL: Duration = Duration::from_secs(30);
+/// Bytes between SHA-256 checkpoints offered to an ingest's job: the gap re-read on resume is at most this
+/// plus one write batch.
+const HASH_CHECKPOINT: u64 = 64 * 1024 * 1024;
 /// Recency of a film still considered "being watched" when the ceiling runs without a keep hint.
 const RECENT_WINDOW_MS: u64 = 10 * 60 * 1000;
 /// Debounce for persisting the LRU ledger (one file write per burst, not per block).
@@ -118,6 +122,10 @@ pub enum BlobsError {
         hashed: u64,
         size: u64,
     },
+    /// A private core on disk whose per-video key the job does not carry: it cannot be read or stitched.
+    PrivateKeyMissing {
+        id: String,
+    },
     InvalidAnnounce,
     Sha256Mismatch {
         id: String,
@@ -153,6 +161,9 @@ impl std::fmt::Display for BlobsError {
             Self::MissingLocalBlock => write!(f, "Missing local block during rechunk"),
             Self::HashOutOfStep { id, hashed, size } => {
                 write!(f, "Hash is out of step for {id}: {hashed} of {size} bytes")
+            }
+            Self::PrivateKeyMissing { id } => {
+                write!(f, "Cannot resume private {id} without its key")
             }
             Self::InvalidAnnounce => write!(f, "Invalid channel announce payload"),
             Self::Sha256Mismatch { id, expected, got } => {
@@ -1922,6 +1933,23 @@ where
         let session = self.inner.store.get(opts).await?;
         let started = {
             let start = if named { content_bytes(&session) } else { 0 };
+            if private
+                && start > 0
+                && meta
+                    .extra
+                    .get("storeKey")
+                    .and_then(Value::as_str)
+                    .and_then(parse_hex32)
+                    .is_none()
+            {
+                // The half on disk was written under the key the job carried; another key reads it as garbage,
+                // and two halves under two keys never stitch. Only resetting the core is safe here.
+                let error = BlobsError::PrivateKeyMissing {
+                    id: meta.id.clone(),
+                };
+                reset_named_core(&session).await?;
+                return Err(error);
+            }
             self.ingest(&session, &meta, &mut source, start).await
         };
         match started {
@@ -1976,18 +2004,50 @@ where
         start: u64,
     ) -> Result<Announce, BlobsError> {
         let id = meta.id.clone();
-        // Appends are durable, so a named core holds every block an earlier attempt wrote; the
-        // hasher re-reads that prefix instead of trusting an external SHA-256 state blob.
+        // Appends are durable, so a named core holds every block an earlier attempt wrote. A job's checkpointed
+        // state covers the prefix it already folded; only the gap between that and the committed core is re-read.
         let resumed = start > 0;
         let mut expected = meta.expected_size.flatten();
         let complete = resumed && expected == Some(start);
         let core = session.core().clone();
         let blobs = Hyperblobs::new(core.clone(), BLOB_BLOCK_SIZE as usize);
-        let mut sha = Sha256::new();
+        let mut sha = Sha256State::new();
         let mut size = start;
         let mut hashed = 0u64;
-        if start > 0 {
-            hashed = hash_committed(session, &mut sha, start).await?;
+        let mut checkpoint = 0u64;
+        if let Some((state, bytes)) = saved_hash_state(meta)
+            && bytes > 0
+            && bytes <= start
+        {
+            sha = state;
+            hashed = bytes;
+            checkpoint = bytes;
+        }
+        let block = BLOB_BLOCK_SIZE as usize;
+        // Fold committed bytes the checkpoint does not cover BEFORE the tail streams in, so the state stays in
+        // byte order. The fold checkpoints as it goes, so a restart during it continues from there.
+        while hashed < start {
+            let data = session
+                .get(
+                    hashed / BLOB_BLOCK_SIZE,
+                    GetOptions {
+                        wait: false,
+                        ..Default::default()
+                    },
+                )
+                .await?
+                .ok_or(BlobsError::MissingLocalBlock)?;
+            let skip = (hashed % BLOB_BLOCK_SIZE) as usize;
+            if skip >= data.len() {
+                return Err(BlobsError::MissingLocalBlock);
+            }
+            let take = ((data.len() - skip) as u64).min(start - hashed) as usize;
+            sha.update(&data[skip..skip + take]);
+            hashed += take as u64;
+            if hashed - checkpoint >= HASH_CHECKPOINT {
+                checkpoint = hashed;
+                source.on_hash_state(&sha.to_bytes(), hashed);
+            }
         }
         if !complete {
             let mut source_meta = meta.clone();
@@ -2000,7 +2060,10 @@ where
             let mut writer = blobs.writer().await;
             let mut pending = BytesMut::with_capacity(BLOB_BLOCK_SIZE as usize + 8192);
             let mut chunk = vec![0u8; 256 * 1024];
-            let block = BLOB_BLOCK_SIZE as usize;
+            // hyperblobs acks a batch it has not committed yet, so a snapshot taken at the hasher can sit ahead of
+            // the core's byte length; a resume discards such a state and re-reads the film. Hold the newest
+            // snapshot until the core has committed past it, so every state handed out covers bytes the core holds.
+            let mut held: Option<([u8; SHA256_STATE_BYTES], u64)> = None;
             loop {
                 let read = reader.read(&mut chunk).await.map_err(BlobsError::Io)?;
                 if read == 0 {
@@ -2013,6 +2076,17 @@ where
                 pending.extend_from_slice(&chunk[..read]);
                 while pending.len() >= block {
                     writer.write(pending.split_to(block).freeze()).await?;
+                }
+                if hashed - checkpoint >= HASH_CHECKPOINT {
+                    checkpoint = hashed;
+                    held = Some((sha.to_bytes(), hashed));
+                }
+                if held
+                    .as_ref()
+                    .is_some_and(|(_, bytes)| content_bytes(session) >= *bytes)
+                {
+                    let (state, bytes) = held.take().expect("checked above");
+                    source.on_hash_state(&state, bytes);
                 }
             }
             if !pending.is_empty() {
@@ -2054,7 +2128,10 @@ where
         })
     }
 
-    /// `dropStore`: purges a half-written core when its job is cancelled or dead-lettered.
+    /// `dropStore`: drops a half-written core when its job is cancelled, dead-lettered or restarted, so its
+    /// blocks leave the disk. The core is truncated and closed rather than purged: the name's alias outlives a
+    /// purge in this stack and a purged core cannot be created again from its discovery key, so the next
+    /// attempt at the same name would fail `NotFound` instead of starting from zero.
     pub async fn drop_store(&self, name: &str) -> Result<(), BlobsError> {
         if name.is_empty() {
             return Ok(());
@@ -2062,9 +2139,7 @@ where
         let mut opts = StoreGetOptions::name(name.as_bytes());
         opts.inactive = true;
         let session = self.inner.store.get(opts).await?;
-        self.inner.store.purge(session.discovery_key()).await?;
-        session.close();
-        Ok(())
+        reset_named_core(&session).await
     }
 
     fn published(&self, op: Announce) -> Published {
@@ -2786,6 +2861,14 @@ fn write_private(path: &std::path::Path, bytes: &[u8]) {
     }
 }
 
+/// Empties a named core and closes it, so the next `get` by name opens the same core (its own key pair, the
+/// caller's encryption key) at byte zero.
+async fn reset_named_core(session: &Session) -> Result<(), BlobsError> {
+    session.core().truncate(0, None).await?;
+    session.close();
+    Ok(())
+}
+
 /// Bytes of content in a core. hypercore-rs counts an encrypted core's per-block padding in
 /// `byte_length`, where the JS reports the plaintext length the app links use.
 fn content_bytes(session: &Session) -> u64 {
@@ -2805,30 +2888,15 @@ async fn slot_has_blocks(slot: &Session, entry: &Announce) -> bool {
     (entry.blob.block_offset..end).all(|index| slot.has(index))
 }
 
-async fn hash_committed(
-    session: &Session,
-    sha: &mut Sha256,
-    bytes: u64,
-) -> Result<u64, BlobsError> {
-    let mut remaining = bytes;
-    let mut index = 0u64;
-    while remaining > 0 {
-        let block = session
-            .get(
-                index,
-                GetOptions {
-                    wait: false,
-                    ..Default::default()
-                },
-            )
-            .await?
-            .ok_or(BlobsError::MissingLocalBlock)?;
-        let take = remaining.min(block.len() as u64) as usize;
-        sha.update(&block[..take]);
-        remaining -= take as u64;
-        index += 1;
-    }
-    Ok(bytes)
+/// The running SHA-256 state a job carries (`hashState` base64, `hashBytes`), or nothing when the job has none.
+fn saved_hash_state(meta: &PutMeta) -> Option<(Sha256State, u64)> {
+    let text = meta.extra.get("hashState")?.as_str()?;
+    let bytes = meta
+        .extra
+        .get("hashBytes")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    Some((Sha256State::from_bytes(&base64_decode(text)?)?, bytes))
 }
 
 fn announce_from_op(op: &Value) -> Option<Announce> {
