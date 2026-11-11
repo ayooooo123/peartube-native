@@ -32,6 +32,7 @@ use tokio::time::{Instant, Sleep};
 use crate::identify::{self, DownloadProgress, Downloaded};
 use crate::node::Node;
 use crate::node::api::PutMeta;
+use crate::node::hash_state::base64_encode;
 
 /// A source that will never recover without a person: 400/401/403/404/410/451.
 pub const TERMINAL_STATUS: [u16; 6] = [400, 401, 403, 404, 410, 451];
@@ -236,25 +237,6 @@ fn hex(bytes: &[u8]) -> String {
     let mut out = String::with_capacity(bytes.len() * 2);
     for byte in bytes {
         out.push_str(&format!("{byte:02x}"));
-    }
-    out
-}
-
-/// `b4a.toString(state, 'base64')`: standard alphabet, padded.
-pub fn base64(bytes: &[u8]) -> String {
-    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
-    for chunk in bytes.chunks(3) {
-        let second = chunk.get(1).copied().unwrap_or(0);
-        let third = chunk.get(2).copied().unwrap_or(0);
-        let n = (u32::from(chunk[0]) << 16) | (u32::from(second) << 8) | u32::from(third);
-        for i in 0..4 {
-            if i <= chunk.len() {
-                out.push(ALPHABET[((n >> (18 - i * 6)) & 0x3f) as usize] as char);
-            } else {
-                out.push('=');
-            }
-        }
     }
     out
 }
@@ -2179,7 +2161,7 @@ where
     fn on_hash_state(&self, state: &[u8], bytes: u64) {
         if let Some(inner) = self.inner.upgrade() {
             inner.with_job(&self.job_id, |job| {
-                job.hash_state = Some(json!(base64(state)));
+                job.hash_state = Some(json!(base64_encode(state)));
                 job.hash_bytes = Some(bytes);
             });
             inner.save();

@@ -538,16 +538,29 @@ fn disposition_star(disposition: &str) -> Option<String> {
 }
 
 /// `filename="…"` or the bare token many CDNs send (`filename=film.mkv`) from a content disposition.
+///
+/// The app's `/filename=(?:"([^"]*)"|([^;\s]+))/i`: the quoted form may hold spaces and semicolons and
+/// an empty one is no name, the bare token ends at `;` or whitespace and is not trimmed, and a
+/// `filename=` that answers neither is skipped for the next one.
 fn disposition_name(disposition: &str) -> Option<String> {
-    let start = find_ci(disposition, "filename=")? + "filename=".len();
-    let value = disposition.get(start..)?;
-    if let Some(quoted) = value.strip_prefix('"') {
-        let end = quoted.find('"')?;
-        return (!quoted[..end].is_empty()).then(|| quoted[..end].to_owned());
+    let mut from = 0;
+    while let Some(found) = find_ci(&disposition[from..], "filename=") {
+        let start = from + found + "filename=".len();
+        let value = &disposition[start..];
+        if let Some(quoted) = value.strip_prefix('"')
+            && let Some(end) = quoted.find('"')
+        {
+            return (!quoted[..end].is_empty()).then(|| quoted[..end].to_owned());
+        }
+        let end = value
+            .find(|c: char| c == ';' || c.is_whitespace())
+            .unwrap_or(value.len());
+        if end > 0 {
+            return Some(value[..end].to_owned());
+        }
+        from = start;
     }
-    let end = value.find(';').unwrap_or(value.len());
-    let token = value[..end].trim();
-    (!token.is_empty()).then(|| token.to_owned())
+    None
 }
 
 /// `fileName`: the media name a reply carries, preferring the query, then the disposition, then the path.

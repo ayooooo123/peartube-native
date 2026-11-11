@@ -133,6 +133,11 @@ fixture.fileName = [
   { url: 'https://cdn.example/dl/100%25?filename=', headers: {} },
   { url: 'https://cdn.example/dl/100%', headers: {} },
   { url: 'https://cdn.example/dld/abc', headers: { 'content-disposition': 'attachment; filename=bare.mkv' } },
+  // The bare token stops at whitespace (`[^;\s]+`), so a spaced release name is no name at all...
+  { url: 'https://cdn.example/dld/abc', headers: { 'content-disposition': 'attachment; filename=Dune Part Two.mkv' } },
+  // ...and it is never trimmed: a name that starts with a space does not match.
+  { url: 'https://cdn.example/dld/abc', headers: { 'content-disposition': 'attachment; filename= Dune.2021.mkv' } },
+  { url: 'https://cdn.example/dld/abc', headers: { 'content-disposition': 'attachment; filename= "x.mkv"' } },
   { url: 'not a url', headers: {} },
   { url: 'https://cdn.example/dld/abc', headers: { 'content-disposition': 'attachment; filename*=utf-8\'\'Lower.MKV' } }
 ].map(test => {

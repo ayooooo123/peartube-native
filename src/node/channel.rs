@@ -110,6 +110,22 @@ struct Landing {
     held: bool,
 }
 
+/// One landing's place in the flat open map. `openLanding` records the core before `ready` answers, so
+/// the slot exists from the call on: a purge or a supersede during `store.get` finds it, and the open
+/// that resolves afterwards has nothing to fill.
+#[derive(Default)]
+struct LandingSlot {
+    state: Mutex<SlotState>,
+}
+
+#[derive(Default)]
+struct SlotState {
+    /// The open session, once `store.get` answered.
+    session: Option<Arc<Session>>,
+    /// `closeWhenWhole` asked for this landing while its open was still in flight.
+    close_when_whole: bool,
+}
+
 /// `mirrorLanding`/`releaseLanding`/`closeWhenWhole` from `channel.js`.
 ///
 /// Fast-forward lands only on views stamped by the channel owner; a landing leaves those cores
@@ -122,8 +138,9 @@ pub struct Landings {
     closing: Arc<AtomicBool>,
     /// Channel hex -> `system`/`view` landing.
     by_channel: Mutex<HashMap<String, HashMap<&'static str, Landing>>>,
-    /// Core hex -> the open session, the flat view the relay seeds from and the node closes.
-    open: Mutex<HashMap<[u8; 32], Arc<Session>>>,
+    /// Core hex -> the landing's slot, reserved before the open resolves; the relay seeds the
+    /// sessions in it and the node closes them.
+    open: Mutex<HashMap<[u8; 32], Arc<LandingSlot>>>,
 }
 
 impl Landings {
@@ -136,14 +153,26 @@ impl Landings {
         })
     }
 
-    /// The landed cores currently held open, as the relay seeds them.
-    pub fn open_keys(&self) -> Vec<[u8; 32]> {
-        lock(&self.open).keys().copied().collect()
+    /// The landed cores open and resolved, as the relay seeds them. `seedableCores` seeds a landing
+    /// by the session's own length and byte length, and skips one whose open has not answered.
+    pub fn open_cores(&self) -> Vec<([u8; 32], u64, u64)> {
+        let open = lock(&self.open);
+        let mut out = Vec::new();
+        for (hex, slot) in open.iter() {
+            let Some(session) = lock(&slot.state).session.clone() else {
+                continue;
+            };
+            out.push((*hex, session.length(), session.byte_length()));
+        }
+        out
     }
 
-    /// The landed core's length, for the seedable-cores list.
-    pub fn open_len(&self, hex: &[u8; 32]) -> Option<u64> {
-        lock(&self.open).get(hex).map(|core| core.length())
+    /// The landed cores currently held open, as the relay seeds them.
+    pub fn open_keys(&self) -> Vec<[u8; 32]> {
+        self.open_cores()
+            .into_iter()
+            .map(|(key, _, _)| key)
+            .collect()
     }
 
     fn held_elsewhere(&self, hex: &[u8; 32], channel_hex: &str) -> bool {
@@ -161,10 +190,38 @@ impl Landings {
         })
     }
 
+    /// Remove this landing's slot only while it is still the slot at its key: a re-landing that took the
+    /// key over keeps its own session.
+    fn drop_slot(&self, hex: &[u8; 32], slot: &Arc<LandingSlot>) {
+        let removed = {
+            let mut open = lock(&self.open);
+            let ours = open
+                .get(hex)
+                .is_some_and(|current| Arc::ptr_eq(current, slot));
+            if ours { open.remove(hex) } else { None }
+        };
+        let session = removed.and_then(|slot| lock(&slot.state).session.take());
+        if let Some(session) = session {
+            session.close();
+        }
+    }
+
     fn open_landing(self: &Arc<Self>, hex: [u8; 32]) {
-        if self.closing.load(Ordering::Acquire) || lock(&self.open).contains_key(&hex) {
+        if self.closing.load(Ordering::Acquire) {
             return;
         }
+        let slot = {
+            let mut open = lock(&self.open);
+            if open.contains_key(&hex) {
+                return;
+            }
+            // The slot is recorded before the await, as `landedCores.set` is: a purge or a
+            // supersede while `store.get` runs must find it, or the session it resolves to would
+            // outlive the landing that asked for it.
+            let slot = Arc::new(LandingSlot::default());
+            open.insert(hex, Arc::clone(&slot));
+            slot
+        };
         let landings = Arc::clone(self);
         let store = self.store.clone();
         tokio::spawn(async move {
@@ -172,40 +229,68 @@ impl Landings {
                 return;
             };
             let session = Arc::new(session);
-            {
-                let mut open = lock(&landings.open);
-                if landings.closing.load(Ordering::Acquire) || open.contains_key(&hex) {
-                    session.close();
-                    return;
+            // Locks are taken in the map-then-slot order every accessor uses.
+            let ours = {
+                let open = lock(&landings.open);
+                let ours = open
+                    .get(&hex)
+                    .is_some_and(|current| Arc::ptr_eq(current, &slot))
+                    && !landings.closing.load(Ordering::Acquire);
+                if ours {
+                    lock(&slot.state).session = Some(Arc::clone(&session));
                 }
-                open.insert(hex, Arc::clone(&session));
+                ours
+            };
+            if !ours {
+                // The landing went while its open was in flight.
+                session.close();
+                return;
+            }
+            if lock(&slot.state).close_when_whole {
+                // The channel hibernated during the open: keep the landing only until it is whole.
+                landings.hold_until_whole(hex, slot);
+                return;
             }
             let _ = session.download(0, None, false).await;
         });
     }
 
-    fn drop_landing(&self, hex: &[u8; 32]) -> Option<Arc<Session>> {
-        lock(&self.open).remove(hex)
+    fn drop_landing(&self, hex: &[u8; 32]) {
+        let slot = lock(&self.open).remove(hex);
+        let session = slot.and_then(|slot| lock(&slot.state).session.take());
+        if let Some(session) = session {
+            session.close();
+        }
     }
 
     fn close_when_whole(self: &Arc<Self>, hex: [u8; 32]) {
-        let Some(core) = lock(&self.open).get(&hex).cloned() else {
+        let Some(slot) = lock(&self.open).get(&hex).cloned() else {
             return;
         };
+        {
+            let mut state = lock(&slot.state);
+            if state.session.is_none() {
+                // Still opening: the open task takes it from here.
+                state.close_when_whole = true;
+                return;
+            }
+        }
+        self.hold_until_whole(hex, slot);
+    }
+
+    /// Keep a landing open only until it is whole, then close it (`closeWhenWhole`).
+    fn hold_until_whole(self: &Arc<Self>, hex: [u8; 32], slot: Arc<LandingSlot>) {
         let landings = Arc::clone(self);
         tokio::spawn(async move {
+            let Some(core) = lock(&slot.state).session.clone() else {
+                return;
+            };
             let length = core.length();
             if !core.has_range(0, length) {
                 let _ = core.download(0, Some(length), false).await;
             }
-            let still_open = lock(&landings.open)
-                .get(&hex)
-                .is_some_and(|current| Arc::ptr_eq(current, &core));
-            if still_open
-                && !landings.held_elsewhere(&hex, "")
-                && let Some(core) = landings.drop_landing(&hex)
-            {
-                core.close();
+            if !landings.held_elsewhere(&hex, "") {
+                landings.drop_slot(&hex, &slot);
             }
         });
     }
@@ -263,9 +348,7 @@ impl Landings {
             self.open_landing(hex);
         }
         for hex in superseded {
-            if let Some(core) = self.drop_landing(&hex) {
-                core.close();
-            }
+            self.drop_landing(&hex);
         }
     }
 
@@ -300,9 +383,7 @@ impl Landings {
                 self.close_when_whole(hex);
                 continue;
             }
-            if let Some(core) = self.drop_landing(&hex) {
-                core.close();
-            }
+            self.drop_landing(&hex);
             let discovery = hypercore::crypto::discovery_key(&hex);
             let _ = self.store.purge(&discovery).await;
         }
@@ -310,9 +391,13 @@ impl Landings {
 
     /// `close()`: every landing goes.
     pub async fn close(&self) {
-        let open: Vec<Arc<Session>> = lock(&self.open).drain().map(|(_, core)| core).collect();
-        for core in open {
-            core.close();
+        let open: Vec<Arc<LandingSlot>> =
+            lock(&self.open).drain().map(|(_, slot)| slot).collect();
+        for slot in open {
+            let session = lock(&slot.state).session.take();
+            if let Some(session) = session {
+                session.close();
+            }
         }
         lock(&self.by_channel).clear();
     }
@@ -1165,5 +1250,72 @@ mod tests {
         landings.release_landing(&other, true).await;
         wait_open(&landings, 0).await;
         assert!(landings.open_keys().is_empty());
+    }
+
+    /// `openLanding` records the core before `ready` answers, as `landedCores.set` does: an unfollow
+    /// in that window finds the slot, and the open that resolves afterwards never revives the core.
+    #[tokio::test]
+    async fn an_unfollow_before_the_open_resolves_never_revives_the_landing() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Corestore::open(dir.path()).unwrap();
+        let landings = Landings::new(store, Arc::new(AtomicBool::new(false)));
+        let channel = "cc".repeat(32);
+        let key = [7u8; 32];
+        landings.mirror_landing(landing(Some(key), None), &channel);
+        // The same tick as the open: `store.get` has not answered yet.
+        landings.release_landing(&channel, true).await;
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        assert!(
+            landings.open_keys().is_empty(),
+            "the purged landing stays closed"
+        );
+        assert!(
+            landings.open_cores().is_empty(),
+            "no session outlives the purge"
+        );
+    }
+
+    /// A re-landing in the same tick as the first open supersedes it: the late open must not leak a
+    /// second session beside the one the channel holds.
+    #[tokio::test]
+    async fn a_supersede_before_the_open_resolves_does_not_leak_the_old_core() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Corestore::open(dir.path()).unwrap();
+        let landings = Landings::new(store, Arc::new(AtomicBool::new(false)));
+        let channel = "dd".repeat(32);
+        let (first, second) = ([8u8; 32], [9u8; 32]);
+        landings.mirror_landing(landing(Some(first), None), &channel);
+        landings.mirror_landing(landing(Some(second), None), &channel);
+        wait_open(&landings, 1).await;
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        assert_eq!(
+            landings.open_keys(),
+            vec![second],
+            "the superseded core never comes back"
+        );
+    }
+
+    /// `seedableCores` seeds a landed core by the session's own byte length, never the block-count
+    /// estimate the owner's system and view cores use.
+    #[tokio::test]
+    async fn a_landed_core_reports_its_own_byte_length() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Corestore::open(dir.path()).unwrap();
+        let writer = store
+            .get(StoreGetOptions::name("landed-fixture"))
+            .await
+            .unwrap();
+        writer.core().append(&[vec![9u8; 1000]]).await.unwrap();
+        let key = *writer.key();
+        writer.close();
+        let landings = Landings::new(store, Arc::new(AtomicBool::new(false)));
+        landings.open_landing(key);
+        for _ in 0..200 {
+            if !landings.open_cores().is_empty() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert_eq!(landings.open_cores(), vec![(key, 1, 1000)]);
     }
 }

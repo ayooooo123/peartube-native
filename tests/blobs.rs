@@ -806,6 +806,42 @@ async fn a_hash_checkpoint_never_runs_ahead_of_the_core() {
     }
 }
 
+/// The checkpoint of a stream's tail crosses the threshold inside the writer's last batch, so it is released once
+/// the pipeline finishes (`emitCheckpoint()` after `pipelinePromise`): a restart resumes from the whole film
+/// instead of folding its tail in again.
+#[tokio::test]
+async fn the_final_hash_checkpoint_is_released_after_the_pipeline() {
+    let h = harness([0x61; 32], [0x62; 32], 1_000_000).await;
+    let size = 64 * 1024 * 1024 + 7;
+    let payload = data(size);
+    let mut meta = put_meta(
+        "clip:finalcheckpoint",
+        "Final checkpoint",
+        "video:fixture-final-checkpoint",
+    );
+    meta.expected_size = Some(Some(size as u64));
+    let source = CheckpointSource::new(
+        payload.clone(),
+        h.store.clone(),
+        "video:fixture-final-checkpoint",
+    );
+    let states = source.states.clone();
+    let announce = h.blobs.put(meta, source).await.expect("put");
+    assert_eq!(announce.sha256, digest(&payload));
+    assert_eq!(announce.size, size as u64);
+
+    let states = lock(&states).clone();
+    let (state, bytes) = states
+        .last()
+        .expect("the tail checkpoint is offered once the writer committed it")
+        .clone();
+    assert_eq!(bytes, size as u64, "it covers the whole film");
+    let resumed = Sha256State::from_bytes(&state).expect("a libsodium state");
+    assert_eq!(resumed.bytes(), bytes);
+    let digest: String = resumed.finalize().iter().map(|b| format!("{b:02x}")).collect();
+    assert_eq!(digest, announce.sha256, "the whole film resumes from it");
+}
+
 /// A job whose saved state covers the committed prefix resumes from that state: the head block is gone from disk
 /// (as a purge of the write-ahead cache leaves it) and only the gap between the state and the core is read.
 #[tokio::test]

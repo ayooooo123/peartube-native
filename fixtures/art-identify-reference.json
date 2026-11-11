@@ -392,6 +392,27 @@
       "out": "bare.mkv"
     },
     {
+      "url": "https://cdn.example/dld/abc",
+      "headers": {
+        "content-disposition": "attachment; filename=Dune Part Two.mkv"
+      },
+      "out": "abc"
+    },
+    {
+      "url": "https://cdn.example/dld/abc",
+      "headers": {
+        "content-disposition": "attachment; filename= Dune.2021.mkv"
+      },
+      "out": "abc"
+    },
+    {
+      "url": "https://cdn.example/dld/abc",
+      "headers": {
+        "content-disposition": "attachment; filename= \"x.mkv\""
+      },
+      "out": "abc"
+    },
+    {
       "url": "not a url",
       "headers": {},
       "error": "Invalid URL"

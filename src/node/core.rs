@@ -802,15 +802,11 @@ impl CoreNode {
                         );
                     }
                 }
-                for key in channel.landings().open_keys() {
-                    if let Some(length) = channel.landings().open_len(&key) {
-                        push(
-                            &mut out,
-                            hex(&key),
-                            "channel",
-                            length,
-                            length.saturating_mul(4096),
-                        );
+                // `seedableCores` seeds a landed core by its session's own length and byte length (the
+                // core is open here), and skips one whose open has not answered yet.
+                for (key, length, byte_length) in channel.landings().open_cores() {
+                    if length > 0 {
+                        push(&mut out, hex(&key), "channel", length, byte_length);
                     }
                 }
             }
@@ -1439,6 +1435,19 @@ pub async fn create_node(options: Value) -> Result<Arc<CoreNode>, NodeError> {
 /// `createNetwork` reading `ctx.blobs.ownedBlobs`/`cachedBlobs`: the announcement rotation's list.
 struct BlobIndex(Weak<Shared>);
 
+impl BlobIndex {
+    /// `ownedBlobs`: the per-video cores this node published, without the shared legacy slots.
+    fn owned_videos_in(blobs: &Blobs<Arc<Channel>, Arc<Network>, Host>) -> Vec<[u8; 32]> {
+        let mut out = Vec::new();
+        for (key, meta) in blobs.owned_blobs() {
+            if meta.length > 0 {
+                out.push(key);
+            }
+        }
+        out
+    }
+}
+
 impl super::network::ContentIndex for BlobIndex {
     fn owned(&self) -> Vec<[u8; 32]> {
         let Some(blobs) = self
@@ -1454,12 +1463,19 @@ impl super::network::ContentIndex for BlobIndex {
                 out.push(key);
             }
         }
-        for (key, meta) in blobs.owned_blobs() {
-            if meta.length > 0 {
-                out.push(key);
-            }
-        }
+        out.extend(Self::owned_videos_in(&blobs));
         out
+    }
+
+    fn owned_videos(&self) -> Vec<[u8; 32]> {
+        let Some(blobs) = self
+            .0
+            .upgrade()
+            .and_then(|shared| shared.blobs.get().cloned())
+        else {
+            return Vec::new();
+        };
+        Self::owned_videos_in(&blobs)
     }
 
     fn complete_cached(&self) -> Vec<[u8; 32]> {
@@ -2192,6 +2208,104 @@ mod tests {
             "sleeping sources still serve their snapshot"
         );
         assert!(entries[0].key.ends_with(":0"), "JS deduplication ranking");
+        node.close().await.unwrap();
+    }
+
+    /// `seedableCores` seeds a landed core by the session's own byte length and skips one whose open has
+    /// not answered; only the owner's system and view cores estimate their bytes from the block count.
+    #[tokio::test]
+    async fn a_landed_core_is_seeded_by_its_own_byte_length() {
+        let dir = tempfile::tempdir().unwrap();
+        let node = create_node(json!({
+            "storage": dir.path(), "bootstrap": ["127.0.0.1:9"], "worklet": true
+        }))
+        .await
+        .unwrap();
+        // A landed core with content: written under a name, so the same store reopens it writable.
+        let store = node.storage().store().clone();
+        let landed = store
+            .get(corestore::GetOptions::name("landed-fixture"))
+            .await
+            .unwrap();
+        landed.core().append(&[vec![5u8; 1000]]).await.unwrap();
+        let key = *landed.key();
+        landed.close();
+        for index in 0..20 {
+            node.append(json!({
+                "type": "announce", "id": format!("imdb:tt000000{index}"), "title": "Flush fixture",
+                "size": 1, "sha256": "33".repeat(32), "blobs": "22".repeat(32),
+                "blob": { "blockOffset": 0, "blockLength": 1, "byteOffset": 0, "byteLength": 1 }
+            }))
+            .await
+            .unwrap();
+        }
+        assert!(
+            node.channel().flushes() >= 16,
+            "the seedable list pins landings past 16 flushes"
+        );
+        let primary = node.channel().primary_key();
+        node.channel().landings().mirror_landing(
+            autobee::updates::Changes {
+                system: Some(autobee::updates::Change {
+                    flushes: 20,
+                    from: None,
+                    to: Some(autobee::types::Head {
+                        key: Some(key),
+                        length: 1,
+                    }),
+                    incremental: false,
+                }),
+                view: None,
+            },
+            &primary,
+        );
+        for _ in 0..200 {
+            if !node.channel().landings().open_cores().is_empty() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let seedable = node.seedable_cores_value(false).await;
+        let entry = seedable
+            .iter()
+            .find(|core| core.key == hex(&key))
+            .expect("the landing is seeded");
+        assert_eq!(entry.kind, "channel");
+        assert_eq!(entry.length, 1);
+        assert_eq!(
+            entry.byte_length, 1000,
+            "the session's byte length, not the block-count estimate"
+        );
+        node.close().await.unwrap();
+    }
+
+    /// `rotateAnnouncement` walks the videos this node published; a complete legacy slot is announced
+    /// once at boot (`primeContent`) and never rotated back in.
+    #[tokio::test]
+    async fn the_rotation_never_announces_a_legacy_slot() {
+        let dir = tempfile::tempdir().unwrap();
+        let node = create_node(json!({
+            "storage": dir.path(), "bootstrap": ["127.0.0.1:9"], "worklet": true
+        }))
+        .await
+        .unwrap();
+        // A legacy slot that holds a local block, put there after boot: the only rotation candidate.
+        let blobs = node.blobs();
+        let slot = blobs.blobs_key();
+        let session = blobs.blob_core(&slot).await.expect("the slot's session");
+        session.core().append(&[vec![7u8; 4096]]).await.unwrap();
+        blobs.sync_block_counter(&session).await;
+        assert!(blobs.local_blocks(&slot) > 0);
+        assert!(
+            !node.net().content_topics().contains(&slot),
+            "the slot was empty when the boot pass announced"
+        );
+
+        node.net().rotate_announcement();
+        assert!(
+            !node.net().content_topics().contains(&slot),
+            "the rotation announces published videos, not legacy slots"
+        );
         node.close().await.unwrap();
     }
 }

@@ -2130,6 +2130,14 @@ where
                 writer.write(pending.split().freeze()).await?;
             }
             writer.finish().await?;
+            // The writer committed its last batch after the last chunk the hasher saw, so a final
+            // checkpoint the core now covers goes out too (`emitCheckpoint()` after the pipeline): a
+            // restart resumes from the whole film instead of folding its tail in again.
+            if let Some((state, bytes)) = held
+                && content_bytes(session) >= bytes
+            {
+                source.on_hash_state(&state, bytes);
+            }
         }
         if let Some(expected) = expected
             && size != expected

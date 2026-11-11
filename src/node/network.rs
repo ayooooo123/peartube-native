@@ -167,8 +167,14 @@ pub trait WakeupSink: Send + Sync {
 /// What the announcement rotation enumerates from the blob store: `network.js` reads
 /// `ctx.blobs.ownedBlobs` and (for a relay) `cachedBlobs`/`blobCores` directly.
 pub trait ContentIndex: Send + Sync {
-    /// Videos this node published, complete legacy slots first, in the app's announcement order.
+    /// `primeContent`'s boot joins: the videos this node published, complete legacy slots first,
+    /// then the per-video cores, in the app's announcement order.
     fn owned(&self) -> Vec<[u8; 32]>;
+    /// `ownedBlobs`: the per-video cores the rotation walks. A legacy slot is announced once at
+    /// boot and never rotated back in.
+    fn owned_videos(&self) -> Vec<[u8; 32]> {
+        self.owned()
+    }
     /// Complete cached copies, for a relay's announce rotation.
     fn complete_cached(&self) -> Vec<[u8; 32]>;
 }
@@ -1283,7 +1289,7 @@ impl Network {
     }
 
     /// `rotateTimer`: one video past the cap gets its turn.
-    fn rotate_announcement(&self) {
+    pub(crate) fn rotate_announcement(&self) {
         let index = { lock(&self.content_index).clone() };
         let Some(index) = index else {
             return;
@@ -1292,7 +1298,7 @@ impl Network {
         if self.announce_cache {
             candidates.extend(index.complete_cached());
         }
-        candidates.extend(index.owned());
+        candidates.extend(index.owned_videos());
         let announced = lock(&self.content)
             .announced
             .iter()

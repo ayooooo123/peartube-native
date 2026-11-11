@@ -72,6 +72,8 @@ channel, because private discovery reaches only the channels it follows.
 A node announces a video's DHT topic (its Hypercore discovery key) only when it
 published that video, plus, as a relay (`announceCache`, which `peartube-relay`
 sets), complete cached copies under the same 48-topic cap and 20-second rotation.
+A complete legacy slot is announced once at boot, never rotated back in: the
+rotation walks the per-video cores this node published.
 The title being read is looked up as a client (at most four at once) and never
 announced, so watching a film does not tell the DHT this address holds it.
 `peersBusy` in the traffic gate counts a `peartube/bulk-busy` claim only from a
