@@ -70,9 +70,9 @@ async fn a_relay_founds_its_channel_and_keeps_it_across_restarts() {
         serde_json::from_str(&std::fs::read_to_string(dir.path().join("settings.json")).unwrap())
             .unwrap();
     assert_eq!(
-        settings["tracker"],
+        settings["channel"],
         tracker.as_str(),
-        "the founded tracker is saved"
+        "the founded channel is saved"
     );
 
     let again = Relay::listen(env(dir.path()))

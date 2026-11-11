@@ -160,18 +160,6 @@ const fn spec(key: &'static str, env: &'static str, kind: Kind, def: Default) ->
 
 /// The relay fields, in view order.
 const SPEC: &[Spec] = &[
-    spec(
-        "streamHost",
-        "PEARTUBE_STREAM_HOST",
-        Kind::Host,
-        Default::Str("127.0.0.1"),
-    ),
-    spec(
-        "streamPort",
-        "PEARTUBE_STREAM_PORT",
-        Kind::Port,
-        Default::Num(8175.0),
-    ),
     spec("lan", "PEARTUBE_LAN_HOST", Kind::Bool, Default::Bool(false))
         .live()
         .env_parse(env_truthy),
@@ -216,7 +204,7 @@ const SPEC: &[Spec] = &[
         Default::Num(0.0),
     )
     .live(),
-    spec("tracker", "PEARTUBE_TRACKER", Kind::Key, Default::Str("")),
+    spec("channel", "PEARTUBE_CHANNEL", Kind::Key, Default::Str("")),
     spec(
         "allowedPeers",
         "PEARTUBE_ALLOWED_PEERS",
@@ -422,17 +410,29 @@ impl Settings {
     pub fn new(storage: impl AsRef<Path>, env: HashMap<String, String>) -> Self {
         let file = storage.as_ref().join("settings.json");
         // shortcut: a file whose JSON is not an object reads as defaults, where JS would spread its keys.
-        let saved = fs::read_to_string(&file)
+        let mut saved = fs::read_to_string(&file)
             .ok()
             .and_then(|text| serde_json::from_str::<Value>(&text).ok())
             .and_then(|value| value.as_object().cloned())
             .unwrap_or_default();
+        // Files from before channels: `tracker` was this key, and the blob server had its own LAN port.
+        let tracker = saved.remove("tracker");
+        let stream = [saved.remove("streamHost"), saved.remove("streamPort")];
+        let migrate = tracker.is_some() || stream.iter().any(Option::is_some);
+        if let Some(tracker) = tracker.filter(js_truthy)
+            && !saved.contains_key("channel")
+        {
+            saved.insert("channel".into(), tracker);
+        }
         let mut settings = Self {
             file,
             saved,
             env,
             applied: Map::new(),
         };
+        if migrate {
+            let _ = settings.write(&settings.saved);
+        }
         settings.applied = settings.snapshot_map();
         settings
     }

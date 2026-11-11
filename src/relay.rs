@@ -90,11 +90,7 @@ impl Relay {
         create_private_dir(&storage).map_err(|e| format!("storage {}: {e}", storage.display()))?;
         let settings = Settings::new(&storage, env.clone());
         let cinemeta = text(&settings.get("cinemetaUrl"));
-        let stream = BlobAddr::new(
-            non_empty(text(&settings.get("streamHost"))).unwrap_or_else(|| "127.0.0.1".into()),
-            settings.get("streamPort").as_u64().unwrap_or(0) as u16,
-        );
-        let tracker = text(&settings.get("tracker"));
+        let channel = text(&settings.get("channel"));
         let settings = Arc::new(tokio::sync::Mutex::new(settings));
         let ubit_config = env
             .get("UBIT_CONFIG_DIR")
@@ -107,7 +103,7 @@ impl Relay {
         let tls_ca = std::fs::read(tls_ca).ok();
         let mut fallback_status =
             serde_json::to_value(crate::app::idle_status()).unwrap_or_else(|_| json!({}));
-        fallback_status["tracker"] = json!(tracker);
+        fallback_status["tracker"] = json!(channel);
         let tls = read_tls(&env, &storage);
         let extra = Arc::new(Mutex::new(json!({ "lan": null, "privateRouting": false })));
         let guard: Arc<Mutex<Option<(String, PrivateGuard)>>> = Arc::new(Mutex::new(None));
@@ -207,7 +203,8 @@ impl Relay {
                 }),
                 poster: Some(http::cinemeta_lookup(&cinemeta, http::Art::Poster)),
                 backdrop: Some(http::cinemeta_lookup(&cinemeta, http::Art::Backdrop)),
-                blob: Some(stream),
+                // Set when the node opens: its blob server binds loopback on a fresh port.
+                blob: None,
                 tls_ca: tls_ca.map(Into::into),
                 web_dir: Some(web_dir(&env)),
                 acquirer: Some(Arc::new(AcquirerBridge(weak.clone()))),
@@ -388,11 +385,10 @@ impl Relay {
         };
         let mut options = json!({
             "storage": self.0.storage.display().to_string(),
-            "tracker": non_empty(text(&cfg("tracker"))),
+            "tracker": non_empty(text(&cfg("channel"))),
             "sources": self.saved_sources(),
             "allowedPeers": list("allowedPeers"),
-            "streamHost": cfg("streamHost"),
-            "streamPort": cfg("streamPort"),
+            // The blob server stays on loopback; clients stream through /v1/blob on the API port.
             "privateRouting": js_truthy(&cfg("privateRouting")),
             "relayThrough": list("relayThrough"),
         });
@@ -404,6 +400,10 @@ impl Relay {
         }
         let node = create_node(options).await.map_err(|e| e.to_string())?;
         self.0.settings.lock().await.mark_applied(&snapshot);
+        let blob = *node.blob_server();
+        self.0
+            .api
+            .set_blob(Some(BlobAddr::new(blob.ip().to_string(), blob.port())));
 
         if js_truthy(&cfg("lan"))
             && let Some(host) = self.lan_host(&cfg("lanHost"))
@@ -424,15 +424,15 @@ impl Relay {
             }
         }
 
-        // A relay started without a tracker founds its own, keyed by its writer; saved sources
+        // A relay started without a channel founds its own, keyed by its writer; saved sources
         // would otherwise replace it as the primary catalog on the next start.
         let status = node.status().await;
-        if text(&cfg("tracker")).is_empty() {
+        if text(&cfg("channel")).is_empty() {
             let mut settings = self.0.settings.lock().await;
             if status.tracker == status.writer {
-                let _ = settings.remember("tracker", &json!(status.writer));
+                let _ = settings.remember("channel", &json!(status.writer));
             } else {
-                let _ = settings.update(&json!({ "tracker": status.writer }));
+                let _ = settings.update(&json!({ "channel": status.writer }));
             }
         }
         *self.0.extra.lock().unwrap() = json!({
@@ -585,6 +585,7 @@ impl Relay {
         acquirer.close();
         changes.abort();
         self.0.api.clear_node();
+        self.0.api.set_blob(None);
         if let Err(error) = node.close().await {
             log("node close failed", json!({ "error": error.to_string() }));
         }
@@ -703,7 +704,7 @@ impl Relay {
                 .settings
                 .lock()
                 .await
-                .update(&json!({ "tracker": claim.channel }));
+                .update(&json!({ "channel": claim.channel }));
             self.reopen().await.map_err(|e| HttpError::new(500, e))?;
             if let Some(node) = self.0.api.node() {
                 let _ = node.claim_with_mnemonic(&mnemonic, &alias).await;

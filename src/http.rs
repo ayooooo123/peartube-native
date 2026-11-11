@@ -289,6 +289,8 @@ pub struct Api<N: Node> {
     settings: Option<Arc<tokio::sync::Mutex<Settings>>>,
     resolutions: Mutex<HashMap<String, Resolution>>,
     downloads: Mutex<HashMap<String, (String, String)>>,
+    /// `state.node.blobServer`: where `/v1/blob` proxies; the relay sets it on each open.
+    blob: Mutex<Option<BlobAddr>>,
     web_cache: Mutex<HashMap<String, Bytes>>,
     sse: Arc<Mutex<Vec<mpsc::Sender<Bytes>>>>,
 }
@@ -297,10 +299,12 @@ impl<N: Node> Api<N> {
     /// `createApi(state)` with no node yet; [`Api::set_node`] attaches one when it opens.
     pub fn new(mut options: Options) -> Self {
         let settings = options.settings.take();
+        let blob = Mutex::new(options.blob.take());
         Self {
             node: Mutex::new(None),
             options,
             settings,
+            blob,
             resolutions: Mutex::new(HashMap::new()),
             downloads: Mutex::new(HashMap::new()),
             web_cache: Mutex::new(HashMap::new()),
@@ -322,6 +326,32 @@ impl<N: Node> Api<N> {
     /// Back to the pre-start answers while the relay reopens its node (`state.node = null`).
     pub fn clear_node(&self) {
         *self.node.lock().unwrap() = None;
+    }
+
+    /// The blob server `/v1/blob` proxies to, `None` while no node serves blobs.
+    pub fn set_blob(&self, blob: Option<BlobAddr>) {
+        *self.blob.lock().unwrap() = blob;
+    }
+
+    fn blob(&self) -> Option<BlobAddr> {
+        self.blob.lock().unwrap().clone()
+    }
+
+    /// Every stream URL the API hands out goes through `/v1/blob` on the address the client
+    /// reached: one port for the relay, and clients that admit private addresses only for their
+    /// configured add-on (MediaStorm) can play.
+    fn via_api(&self, headers: &HeaderMap, remote: SocketAddr, entries: &mut [Entry]) {
+        let host = headers.get(header::HOST).and_then(|v| v.to_str().ok());
+        let (Some(host), true) = (host, self.blob().is_some()) else {
+            return;
+        };
+        let origin = format!("{}://{host}/v1/blob", scheme(headers, remote));
+        for entry in entries {
+            if let Ok(stream) = Url::parse(&entry.stream_url) {
+                let search = stream.query().map(|q| format!("?{q}")).unwrap_or_default();
+                entry.stream_url = format!("{origin}{search}");
+            }
+        }
     }
 
     pub fn node(&self) -> Option<Arc<N>> {
@@ -459,7 +489,7 @@ impl<N: Node> Api<N> {
         }
         if matches!(method, Method::GET | Method::HEAD)
             && path == "/v1/blob"
-            && self.options.blob.is_some()
+            && self.blob().is_some()
         {
             return self
                 .blob_route(&method, &url, parts.headers.get(header::RANGE))
@@ -531,13 +561,14 @@ impl<N: Node> Api<N> {
             return response;
         }
         if method == Method::GET && path == "/v1/playlist.m3u" {
-            let entries = match self.node() {
+            let mut entries = match self.node() {
                 Some(node) => node
                     .search(None, SearchOptions::default())
                     .await
                     .unwrap_or_default(),
                 None => Vec::new(),
             };
+            self.via_api(&parts.headers, remote, &mut entries);
             let mut lines = vec!["#EXTM3U".to_owned()];
             for entry in &entries {
                 let title: String = entry
@@ -793,7 +824,11 @@ impl<N: Node> Api<N> {
                 offset: Some(js_number(query(url, "offset").as_deref())),
             };
             let results = match &node {
-                Some(node) => value(node.search(Some(&id), options).await.map_err(node_error)?)?,
+                Some(node) => {
+                    let mut entries = node.search(Some(&id), options).await.map_err(node_error)?;
+                    self.via_api(req.headers, req.remote, &mut entries);
+                    value(entries)?
+                }
                 None => Value::Array(Vec::new()),
             };
             return Ok(Some(json!({ "results": results })));
@@ -806,7 +841,11 @@ impl<N: Node> Api<N> {
                 offset: Some(js_number(query(url, "offset").as_deref())),
             };
             let results = match &node {
-                Some(node) => value(node.search(None, options).await.map_err(node_error)?)?,
+                Some(node) => {
+                    let mut entries = node.search(None, options).await.map_err(node_error)?;
+                    self.via_api(req.headers, req.remote, &mut entries);
+                    value(entries)?
+                }
                 None => Value::Array(Vec::new()),
             };
             return Ok(Some(json!({ "results": results })));
@@ -1164,24 +1203,18 @@ impl<N: Node> Api<N> {
             && let Some(raw) = stream_id(path)
         {
             let id = stremio_to_pear_id(&raw);
-            let entries = match &node {
+            let mut entries = match &node {
                 Some(node) => node
                     .search(Some(&id), SearchOptions::default())
                     .await
                     .unwrap_or_default(),
                 None => Vec::new(),
             };
+            self.via_api(req.headers, req.remote, &mut entries);
             let labels = futures_util::future::join_all(
                 entries.iter().map(|entry| self.resolution_of(entry)),
             )
             .await;
-            let origin = match (
-                req.headers.get(header::HOST).and_then(|v| v.to_str().ok()),
-                &self.options.blob,
-            ) {
-                (Some(host), Some(_)) => Some(format!("{}://{host}/v1/blob", proto(req))),
-                _ => None,
-            };
             let mut streams = Vec::with_capacity(entries.len());
             for (index, entry) in entries.iter().enumerate() {
                 let label = match entry.id.rsplit_once(':') {
@@ -1202,13 +1235,7 @@ impl<N: Node> Api<N> {
                     None => name,
                 };
                 let source = first_units(&entry.source, 8);
-                let url = match (&origin, Url::parse(&entry.stream_url)) {
-                    (Some(origin), Ok(stream)) => format!(
-                        "{origin}{}",
-                        stream.query().map(|q| format!("?{q}")).unwrap_or_default()
-                    ),
-                    _ => entry.stream_url.clone(),
-                };
+                let url = entry.stream_url.clone();
                 streams.push(json!({
                     "name": name,
                     "title": format!("{label}\n{:.1} MB · {source}…", entry.size as f64 / 1_048_576.0),
@@ -1255,7 +1282,7 @@ impl<N: Node> Api<N> {
 
     /// `resolutionOf`: the stream's resolution label, read from the blob server and cached.
     async fn resolution_of(&self, entry: &Entry) -> Option<String> {
-        let blob = self.options.blob.as_ref()?;
+        let blob = self.blob()?;
         // The app answers `null` without a bound port, before asking the blob server anything.
         if blob.port == 0 {
             return None;
@@ -1318,7 +1345,7 @@ impl<N: Node> Api<N> {
         url: &Url,
         range: Option<&HeaderValue>,
     ) -> Response<Body> {
-        let blob = self.options.blob.as_ref().unwrap();
+        let blob = self.blob().unwrap();
         let download = query(url, "download");
         let up = UriQuery::without(url, "download").unwrap_or_default();
         let mut meta = None;
@@ -1708,11 +1735,14 @@ fn is_private(remote: SocketAddr) -> bool {
 
 /// `reqProto`: `https` behind a local TLS terminator, `http` otherwise.
 fn proto(req: &RequestContext<'_>) -> &'static str {
-    let forwarded = req
-        .headers
+    scheme(req.headers, req.remote)
+}
+
+fn scheme(headers: &HeaderMap, remote: SocketAddr) -> &'static str {
+    let forwarded = headers
         .get("x-forwarded-proto")
         .and_then(|value| value.to_str().ok());
-    if is_private(req.remote) && forwarded == Some("https") {
+    if is_private(remote) && forwarded == Some("https") {
         "https"
     } else {
         "http"

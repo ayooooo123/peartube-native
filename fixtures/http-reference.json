@@ -129,7 +129,7 @@
             "access-control-expose-headers": "content-length, content-range, accept-ranges, content-disposition",
             "cross-origin-resource-policy": "cross-origin"
           },
-          "body": "{\"results\":[{\"key\":\"k1\",\"id\":\"imdb:tt1234567\",\"title\":\"Film\",\"size\":10485760,\"sha256\":\"h\",\"local\":false,\"cachedBytes\":0,\"private\":false,\"epoch\":0,\"locked\":false,\"source\":\"source-key-1\",\"sourceKind\":\"channel\",\"season\":null,\"episode\":null,\"seriesKey\":\"film\",\"baseTitle\":\"Film\",\"year\":\"2019\",\"streamUrl\":\"http://127.0.0.1:9/?key=aaa&blob=bbb&type=video%2Fmp4\",\"magnetUrl\":\"pear://watch/film\"}]}"
+          "body": "{\"results\":[{\"key\":\"k1\",\"id\":\"imdb:tt1234567\",\"title\":\"Film\",\"size\":10485760,\"sha256\":\"h\",\"local\":false,\"cachedBytes\":0,\"private\":false,\"epoch\":0,\"locked\":false,\"source\":\"source-key-1\",\"sourceKind\":\"channel\",\"season\":null,\"episode\":null,\"seriesKey\":\"film\",\"baseTitle\":\"Film\",\"year\":\"2019\",\"streamUrl\":\"http://relay.test:8174/v1/blob?key=aaa&blob=bbb&type=video%2Fmp4\",\"magnetUrl\":\"pear://watch/film\"}]}"
         },
         {
           "method": "GET",
@@ -147,7 +147,7 @@
             "access-control-expose-headers": "content-length, content-range, accept-ranges, content-disposition",
             "cross-origin-resource-policy": "cross-origin"
           },
-          "body": "{\"results\":[{\"key\":\"k1\",\"id\":\"imdb:tt1234567\",\"title\":\"Film\",\"size\":10485760,\"sha256\":\"h\",\"local\":false,\"cachedBytes\":0,\"private\":false,\"epoch\":0,\"locked\":false,\"source\":\"source-key-1\",\"sourceKind\":\"channel\",\"season\":null,\"episode\":null,\"seriesKey\":\"film\",\"baseTitle\":\"Film\",\"year\":\"2019\",\"streamUrl\":\"http://127.0.0.1:9/?key=aaa&blob=bbb&type=video%2Fmp4\",\"magnetUrl\":\"pear://watch/film\"},{\"key\":\"k2\",\"id\":\"imdb:tt7654321:s01e02\",\"title\":\"Show\",\"size\":10485760,\"sha256\":\"h\",\"local\":true,\"cachedBytes\":0,\"private\":false,\"epoch\":0,\"locked\":false,\"source\":\"source-key-2\",\"sourceKind\":\"followed\",\"season\":1,\"episode\":2,\"seriesKey\":\"show\",\"baseTitle\":\"Show\",\"year\":null,\"streamUrl\":\"http://127.0.0.1:9/?key=aaa&blob=bbb&type=video%2Fmp4\",\"magnetUrl\":\"pear://watch/film\"}]}"
+          "body": "{\"results\":[{\"key\":\"k1\",\"id\":\"imdb:tt1234567\",\"title\":\"Film\",\"size\":10485760,\"sha256\":\"h\",\"local\":false,\"cachedBytes\":0,\"private\":false,\"epoch\":0,\"locked\":false,\"source\":\"source-key-1\",\"sourceKind\":\"channel\",\"season\":null,\"episode\":null,\"seriesKey\":\"film\",\"baseTitle\":\"Film\",\"year\":\"2019\",\"streamUrl\":\"http://relay.test:8174/v1/blob?key=aaa&blob=bbb&type=video%2Fmp4\",\"magnetUrl\":\"pear://watch/film\"},{\"key\":\"k2\",\"id\":\"imdb:tt7654321:s01e02\",\"title\":\"Show\",\"size\":10485760,\"sha256\":\"h\",\"local\":true,\"cachedBytes\":0,\"private\":false,\"epoch\":0,\"locked\":false,\"source\":\"source-key-2\",\"sourceKind\":\"followed\",\"season\":1,\"episode\":2,\"seriesKey\":\"show\",\"baseTitle\":\"Show\",\"year\":null,\"streamUrl\":\"http://relay.test:8174/v1/blob?key=aaa&blob=bbb&type=video%2Fmp4\",\"magnetUrl\":\"pear://watch/film\"}]}"
         },
         {
           "method": "GET",
@@ -562,7 +562,7 @@
             "access-control-expose-headers": "content-length, content-range, accept-ranges, content-disposition",
             "cross-origin-resource-policy": "cross-origin"
           },
-          "body": "#EXTM3U\n#EXTINF:-1 tvg-id=\"imdb:tt1234567\" group-title=\"channel:source-k\",Film (imdb:tt1234567)\nhttp://127.0.0.1:9/?key=aaa&blob=bbb&type=video%2Fmp4\n#EXTINF:-1 tvg-id=\"imdb:tt7654321:s01e02\" group-title=\"followed:source-k\",Show (imdb:tt7654321:s01e02)\nhttp://127.0.0.1:9/?key=aaa&blob=bbb&type=video%2Fmp4\n"
+          "body": "#EXTM3U\n#EXTINF:-1 tvg-id=\"imdb:tt1234567\" group-title=\"channel:source-k\",Film (imdb:tt1234567)\nhttp://relay.test:8174/v1/blob?key=aaa&blob=bbb&type=video%2Fmp4\n#EXTINF:-1 tvg-id=\"imdb:tt7654321:s01e02\" group-title=\"followed:source-k\",Show (imdb:tt7654321:s01e02)\nhttp://relay.test:8174/v1/blob?key=aaa&blob=bbb&type=video%2Fmp4\n"
         },
         {
           "method": "GET",

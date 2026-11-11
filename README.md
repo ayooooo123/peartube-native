@@ -16,8 +16,11 @@ README for ownership and threading requirements.
 
 `relay` and the `peartube-relay` binary are the headless relay (`bin/relay.js`): the
 same `PEARTUBE_*` environment, `settings.json`, `sources.json`, `directory.json` and
-`jobs.json` in `PEARTUBE_STORAGE`, the API with the relay UI on `PEARTUBE_API_HOST:PEARTUBE_API_PORT`,
-HTTPS on `PEARTUBE_HTTPS_PORT` when `tls.crt`/`tls.key` exist, and the acquirer with the
+`jobs.json` in `PEARTUBE_STORAGE`, and one port, `PEARTUBE_API_HOST:PEARTUBE_API_PORT`, for the
+relay UI, the API and video (`/v1/blob`; the node's blob server stays on loopback). `PEARTUBE_CHANNEL`
+(the `channel` setting) is the channel it serves; a pre-channel `settings.json` has its `tracker`
+moved to `channel` and its `streamHost`/`streamPort` dropped at start. HTTPS runs on
+`PEARTUBE_HTTPS_PORT` when `tls.crt`/`tls.key` exist. The acquirer comes with the
 `http-acquire`, `channel-backfill`, `blob-rechunk`, `watch-dir`, `feed-mirror` and
 `p2p-replicate` plugins (`replicate`, over the `traffic` gate's `peartube/bulk-busy`).
 The `privateGuard` setting runs the guard forwarder in-process on its own HyperDHT and port

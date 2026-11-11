@@ -1617,22 +1617,6 @@
           "op": "view",
           "ok": {
             "settings": {
-              "streamHost": {
-                "type": "host",
-                "live": false,
-                "source": "default",
-                "env": "PEARTUBE_STREAM_HOST",
-                "envSet": false,
-                "value": "127.0.0.1"
-              },
-              "streamPort": {
-                "type": "port",
-                "live": false,
-                "source": "default",
-                "env": "PEARTUBE_STREAM_PORT",
-                "envSet": false,
-                "value": 8175
-              },
               "lan": {
                 "type": "bool",
                 "live": true,
@@ -1697,11 +1681,11 @@
                 "envSet": false,
                 "value": 0
               },
-              "tracker": {
+              "channel": {
                 "type": "key",
                 "live": false,
                 "source": "default",
-                "env": "PEARTUBE_TRACKER",
+                "env": "PEARTUBE_CHANNEL",
                 "envSet": false,
                 "value": ""
               },
@@ -1856,8 +1840,8 @@
         },
         {
           "op": "get",
-          "key": "streamPort",
-          "ok": 8175
+          "key": "dhtPort",
+          "ok": 0
         },
         {
           "op": "get",
@@ -1871,14 +1855,12 @@
         },
         {
           "op": "isLive",
-          "key": "streamPort",
+          "key": "dhtPort",
           "ok": false
         },
         {
           "op": "snapshot",
           "ok": {
-            "streamHost": "\"127.0.0.1\"",
-            "streamPort": "8175",
             "lan": "false",
             "lanHost": "\"\"",
             "dhtPort": "0",
@@ -1887,7 +1869,7 @@
             "privateRouting": "false",
             "privateGuard": "false",
             "privateGuardPort": "0",
-            "tracker": "\"\"",
+            "channel": "\"\"",
             "allowedPeers": "[]",
             "publishChannel": "true",
             "directory": "false",
@@ -1912,22 +1894,6 @@
       "finalFile": null,
       "reloadedView": {
         "settings": {
-          "streamHost": {
-            "type": "host",
-            "live": false,
-            "source": "default",
-            "env": "PEARTUBE_STREAM_HOST",
-            "envSet": false,
-            "value": "127.0.0.1"
-          },
-          "streamPort": {
-            "type": "port",
-            "live": false,
-            "source": "default",
-            "env": "PEARTUBE_STREAM_PORT",
-            "envSet": false,
-            "value": 8175
-          },
           "lan": {
             "type": "bool",
             "live": true,
@@ -1992,11 +1958,11 @@
             "envSet": false,
             "value": 0
           },
-          "tracker": {
+          "channel": {
             "type": "key",
             "live": false,
             "source": "default",
-            "env": "PEARTUBE_TRACKER",
+            "env": "PEARTUBE_CHANNEL",
             "envSet": false,
             "value": ""
           },
@@ -2152,7 +2118,6 @@
     {
       "name": "env fallbacks",
       "env": {
-        "PEARTUBE_STREAM_PORT": "9100",
         "PEARTUBE_LAN_HOST": "0",
         "PEARTUBE_PRIVATE_ROUTING": "1",
         "PEARTUBE_HIVERELAYS": "https://relay.example/api,https://other.example/v1=TOKEN",
@@ -2168,22 +2133,6 @@
           "op": "view",
           "ok": {
             "settings": {
-              "streamHost": {
-                "type": "host",
-                "live": false,
-                "source": "default",
-                "env": "PEARTUBE_STREAM_HOST",
-                "envSet": false,
-                "value": "127.0.0.1"
-              },
-              "streamPort": {
-                "type": "port",
-                "live": false,
-                "source": "env",
-                "env": "PEARTUBE_STREAM_PORT",
-                "envSet": true,
-                "value": 9100
-              },
               "lan": {
                 "type": "bool",
                 "live": true,
@@ -2248,11 +2197,11 @@
                 "envSet": false,
                 "value": 0
               },
-              "tracker": {
+              "channel": {
                 "type": "key",
                 "live": false,
                 "source": "default",
-                "env": "PEARTUBE_TRACKER",
+                "env": "PEARTUBE_CHANNEL",
                 "envSet": false,
                 "value": ""
               },
@@ -2437,8 +2386,6 @@
         {
           "op": "snapshot",
           "ok": {
-            "streamHost": "\"127.0.0.1\"",
-            "streamPort": "9100",
             "lan": "true",
             "lanHost": "\"0\"",
             "dhtPort": "9000",
@@ -2447,7 +2394,7 @@
             "privateRouting": "true",
             "privateGuard": "false",
             "privateGuardPort": "0",
-            "tracker": "\"\"",
+            "channel": "\"\"",
             "allowedPeers": "[]",
             "publishChannel": "true",
             "directory": "false",
@@ -2472,22 +2419,6 @@
       "finalFile": null,
       "reloadedView": {
         "settings": {
-          "streamHost": {
-            "type": "host",
-            "live": false,
-            "source": "default",
-            "env": "PEARTUBE_STREAM_HOST",
-            "envSet": false,
-            "value": "127.0.0.1"
-          },
-          "streamPort": {
-            "type": "port",
-            "live": false,
-            "source": "env",
-            "env": "PEARTUBE_STREAM_PORT",
-            "envSet": true,
-            "value": 9100
-          },
           "lan": {
             "type": "bool",
             "live": true,
@@ -2552,11 +2483,11 @@
             "envSet": false,
             "value": 0
           },
-          "tracker": {
+          "channel": {
             "type": "key",
             "live": false,
             "source": "default",
-            "env": "PEARTUBE_TRACKER",
+            "env": "PEARTUBE_CHANNEL",
             "envSet": false,
             "value": ""
           },
@@ -2740,22 +2671,6 @@
           "op": "view",
           "ok": {
             "settings": {
-              "streamHost": {
-                "type": "host",
-                "live": false,
-                "source": "default",
-                "env": "PEARTUBE_STREAM_HOST",
-                "envSet": false,
-                "value": "127.0.0.1"
-              },
-              "streamPort": {
-                "type": "port",
-                "live": false,
-                "source": "default",
-                "env": "PEARTUBE_STREAM_PORT",
-                "envSet": false,
-                "value": 8175
-              },
               "lan": {
                 "type": "bool",
                 "live": true,
@@ -2820,11 +2735,11 @@
                 "envSet": false,
                 "value": 0
               },
-              "tracker": {
+              "channel": {
                 "type": "key",
                 "live": false,
                 "source": "default",
-                "env": "PEARTUBE_TRACKER",
+                "env": "PEARTUBE_CHANNEL",
                 "envSet": false,
                 "value": ""
               },
@@ -2981,22 +2896,6 @@
       "finalFile": null,
       "reloadedView": {
         "settings": {
-          "streamHost": {
-            "type": "host",
-            "live": false,
-            "source": "default",
-            "env": "PEARTUBE_STREAM_HOST",
-            "envSet": false,
-            "value": "127.0.0.1"
-          },
-          "streamPort": {
-            "type": "port",
-            "live": false,
-            "source": "default",
-            "env": "PEARTUBE_STREAM_PORT",
-            "envSet": false,
-            "value": 8175
-          },
           "lan": {
             "type": "bool",
             "live": true,
@@ -3061,11 +2960,11 @@
             "envSet": false,
             "value": 0
           },
-          "tracker": {
+          "channel": {
             "type": "key",
             "live": false,
             "source": "default",
-            "env": "PEARTUBE_TRACKER",
+            "env": "PEARTUBE_CHANNEL",
             "envSet": false,
             "value": ""
           },
@@ -3226,29 +3125,13 @@
         {
           "op": "update",
           "patch": {
-            "streamPort": 9100
+            "dhtPort": 9100
           },
           "ok": {
             "changed": [
-              "streamPort"
+              "dhtPort"
             ],
             "settings": {
-              "streamHost": {
-                "type": "host",
-                "live": false,
-                "source": "default",
-                "env": "PEARTUBE_STREAM_HOST",
-                "envSet": false,
-                "value": "127.0.0.1"
-              },
-              "streamPort": {
-                "type": "port",
-                "live": false,
-                "source": "file",
-                "env": "PEARTUBE_STREAM_PORT",
-                "envSet": false,
-                "value": 9100
-              },
               "lan": {
                 "type": "bool",
                 "live": true,
@@ -3268,10 +3151,10 @@
               "dhtPort": {
                 "type": "port",
                 "live": false,
-                "source": "default",
+                "source": "file",
                 "env": "PEARTUBE_DHT_PORT",
                 "envSet": false,
-                "value": 0
+                "value": 9100
               },
               "bootstrap": {
                 "type": "hosts",
@@ -3313,11 +3196,11 @@
                 "envSet": false,
                 "value": 0
               },
-              "tracker": {
+              "channel": {
                 "type": "key",
                 "live": false,
                 "source": "default",
-                "env": "PEARTUBE_TRACKER",
+                "env": "PEARTUBE_CHANNEL",
                 "envSet": false,
                 "value": ""
               },
@@ -3468,7 +3351,7 @@
               }
             },
             "restartNeeded": [
-              "streamPort"
+              "dhtPort"
             ]
           }
         },
@@ -3476,30 +3359,14 @@
           "op": "update",
           "patch": {
             "lan": true,
-            "tracker": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+            "channel": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
           },
           "ok": {
             "changed": [
               "lan",
-              "tracker"
+              "channel"
             ],
             "settings": {
-              "streamHost": {
-                "type": "host",
-                "live": false,
-                "source": "default",
-                "env": "PEARTUBE_STREAM_HOST",
-                "envSet": false,
-                "value": "127.0.0.1"
-              },
-              "streamPort": {
-                "type": "port",
-                "live": false,
-                "source": "file",
-                "env": "PEARTUBE_STREAM_PORT",
-                "envSet": false,
-                "value": 9100
-              },
               "lan": {
                 "type": "bool",
                 "live": true,
@@ -3519,10 +3386,10 @@
               "dhtPort": {
                 "type": "port",
                 "live": false,
-                "source": "default",
+                "source": "file",
                 "env": "PEARTUBE_DHT_PORT",
                 "envSet": false,
-                "value": 0
+                "value": 9100
               },
               "bootstrap": {
                 "type": "hosts",
@@ -3564,11 +3431,11 @@
                 "envSet": false,
                 "value": 0
               },
-              "tracker": {
+              "channel": {
                 "type": "key",
                 "live": false,
                 "source": "file",
-                "env": "PEARTUBE_TRACKER",
+                "env": "PEARTUBE_CHANNEL",
                 "envSet": false,
                 "value": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
               },
@@ -3719,8 +3586,8 @@
               }
             },
             "restartNeeded": [
-              "streamPort",
-              "tracker"
+              "dhtPort",
+              "channel"
             ]
           }
         },
@@ -3728,22 +3595,6 @@
           "op": "view",
           "ok": {
             "settings": {
-              "streamHost": {
-                "type": "host",
-                "live": false,
-                "source": "default",
-                "env": "PEARTUBE_STREAM_HOST",
-                "envSet": false,
-                "value": "127.0.0.1"
-              },
-              "streamPort": {
-                "type": "port",
-                "live": false,
-                "source": "file",
-                "env": "PEARTUBE_STREAM_PORT",
-                "envSet": false,
-                "value": 9100
-              },
               "lan": {
                 "type": "bool",
                 "live": true,
@@ -3763,10 +3614,10 @@
               "dhtPort": {
                 "type": "port",
                 "live": false,
-                "source": "default",
+                "source": "file",
                 "env": "PEARTUBE_DHT_PORT",
                 "envSet": false,
-                "value": 0
+                "value": 9100
               },
               "bootstrap": {
                 "type": "hosts",
@@ -3808,11 +3659,11 @@
                 "envSet": false,
                 "value": 0
               },
-              "tracker": {
+              "channel": {
                 "type": "key",
                 "live": false,
                 "source": "file",
-                "env": "PEARTUBE_TRACKER",
+                "env": "PEARTUBE_CHANNEL",
                 "envSet": false,
                 "value": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
               },
@@ -3963,36 +3814,20 @@
               }
             },
             "restartNeeded": [
-              "streamPort",
-              "tracker"
+              "dhtPort",
+              "channel"
             ]
           }
         },
         {
           "op": "get",
-          "key": "tracker",
+          "key": "channel",
           "ok": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
         }
       ],
-      "finalFile": "{\n  \"streamPort\": 9100,\n  \"lan\": true,\n  \"tracker\": \"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\"\n}",
+      "finalFile": "{\n  \"dhtPort\": 9100,\n  \"lan\": true,\n  \"channel\": \"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\"\n}",
       "reloadedView": {
         "settings": {
-          "streamHost": {
-            "type": "host",
-            "live": false,
-            "source": "default",
-            "env": "PEARTUBE_STREAM_HOST",
-            "envSet": false,
-            "value": "127.0.0.1"
-          },
-          "streamPort": {
-            "type": "port",
-            "live": false,
-            "source": "file",
-            "env": "PEARTUBE_STREAM_PORT",
-            "envSet": false,
-            "value": 9100
-          },
           "lan": {
             "type": "bool",
             "live": true,
@@ -4012,10 +3847,10 @@
           "dhtPort": {
             "type": "port",
             "live": false,
-            "source": "default",
+            "source": "file",
             "env": "PEARTUBE_DHT_PORT",
             "envSet": false,
-            "value": 0
+            "value": 9100
           },
           "bootstrap": {
             "type": "hosts",
@@ -4057,11 +3892,11 @@
             "envSet": false,
             "value": 0
           },
-          "tracker": {
+          "channel": {
             "type": "key",
             "live": false,
             "source": "file",
-            "env": "PEARTUBE_TRACKER",
+            "env": "PEARTUBE_CHANNEL",
             "envSet": false,
             "value": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
           },
@@ -4217,41 +4052,25 @@
     {
       "name": "clear falls back to env",
       "env": {
-        "PEARTUBE_STREAM_PORT": "9100"
+        "PEARTUBE_DHT_PORT": "9100"
       },
-      "initial": "{\n  \"streamPort\": 9000\n}",
+      "initial": "{\n  \"dhtPort\": 9000\n}",
       "steps": [
         {
           "op": "get",
-          "key": "streamPort",
+          "key": "dhtPort",
           "ok": 9000
         },
         {
           "op": "update",
           "patch": {
-            "streamPort": null
+            "dhtPort": null
           },
           "ok": {
             "changed": [
-              "streamPort"
+              "dhtPort"
             ],
             "settings": {
-              "streamHost": {
-                "type": "host",
-                "live": false,
-                "source": "default",
-                "env": "PEARTUBE_STREAM_HOST",
-                "envSet": false,
-                "value": "127.0.0.1"
-              },
-              "streamPort": {
-                "type": "port",
-                "live": false,
-                "source": "env",
-                "env": "PEARTUBE_STREAM_PORT",
-                "envSet": true,
-                "value": 9100
-              },
               "lan": {
                 "type": "bool",
                 "live": true,
@@ -4271,10 +4090,10 @@
               "dhtPort": {
                 "type": "port",
                 "live": false,
-                "source": "default",
+                "source": "env",
                 "env": "PEARTUBE_DHT_PORT",
-                "envSet": false,
-                "value": 0
+                "envSet": true,
+                "value": 9100
               },
               "bootstrap": {
                 "type": "hosts",
@@ -4316,11 +4135,11 @@
                 "envSet": false,
                 "value": 0
               },
-              "tracker": {
+              "channel": {
                 "type": "key",
                 "live": false,
                 "source": "default",
-                "env": "PEARTUBE_TRACKER",
+                "env": "PEARTUBE_CHANNEL",
                 "envSet": false,
                 "value": ""
               },
@@ -4471,7 +4290,7 @@
               }
             },
             "restartNeeded": [
-              "streamPort"
+              "dhtPort"
             ]
           }
         },
@@ -4479,22 +4298,6 @@
           "op": "view",
           "ok": {
             "settings": {
-              "streamHost": {
-                "type": "host",
-                "live": false,
-                "source": "default",
-                "env": "PEARTUBE_STREAM_HOST",
-                "envSet": false,
-                "value": "127.0.0.1"
-              },
-              "streamPort": {
-                "type": "port",
-                "live": false,
-                "source": "env",
-                "env": "PEARTUBE_STREAM_PORT",
-                "envSet": true,
-                "value": 9100
-              },
               "lan": {
                 "type": "bool",
                 "live": true,
@@ -4514,10 +4317,10 @@
               "dhtPort": {
                 "type": "port",
                 "live": false,
-                "source": "default",
+                "source": "env",
                 "env": "PEARTUBE_DHT_PORT",
-                "envSet": false,
-                "value": 0
+                "envSet": true,
+                "value": 9100
               },
               "bootstrap": {
                 "type": "hosts",
@@ -4559,11 +4362,11 @@
                 "envSet": false,
                 "value": 0
               },
-              "tracker": {
+              "channel": {
                 "type": "key",
                 "live": false,
                 "source": "default",
-                "env": "PEARTUBE_TRACKER",
+                "env": "PEARTUBE_CHANNEL",
                 "envSet": false,
                 "value": ""
               },
@@ -4714,7 +4517,7 @@
               }
             },
             "restartNeeded": [
-              "streamPort"
+              "dhtPort"
             ]
           }
         }
@@ -4722,22 +4525,6 @@
       "finalFile": "{}",
       "reloadedView": {
         "settings": {
-          "streamHost": {
-            "type": "host",
-            "live": false,
-            "source": "default",
-            "env": "PEARTUBE_STREAM_HOST",
-            "envSet": false,
-            "value": "127.0.0.1"
-          },
-          "streamPort": {
-            "type": "port",
-            "live": false,
-            "source": "env",
-            "env": "PEARTUBE_STREAM_PORT",
-            "envSet": true,
-            "value": 9100
-          },
           "lan": {
             "type": "bool",
             "live": true,
@@ -4757,10 +4544,10 @@
           "dhtPort": {
             "type": "port",
             "live": false,
-            "source": "default",
+            "source": "env",
             "env": "PEARTUBE_DHT_PORT",
-            "envSet": false,
-            "value": 0
+            "envSet": true,
+            "value": 9100
           },
           "bootstrap": {
             "type": "hosts",
@@ -4802,11 +4589,11 @@
             "envSet": false,
             "value": 0
           },
-          "tracker": {
+          "channel": {
             "type": "key",
             "live": false,
             "source": "default",
-            "env": "PEARTUBE_TRACKER",
+            "env": "PEARTUBE_CHANNEL",
             "envSet": false,
             "value": ""
           },
@@ -4962,7 +4749,7 @@
     {
       "name": "invalid patches",
       "env": {},
-      "initial": "{\n  \"streamPort\": 9000\n}",
+      "initial": "{\n  \"dhtPort\": 9000\n}",
       "steps": [
         {
           "op": "update",
@@ -4984,16 +4771,16 @@
         {
           "op": "update",
           "patch": {
-            "streamPort": 70000
+            "dhtPort": 70000
           },
-          "err": "streamPort: must be a port from 0 to 65535"
+          "err": "dhtPort: must be a port from 0 to 65535"
         },
         {
           "op": "update",
           "patch": {
-            "streamPort": "9000"
+            "dhtPort": "9000"
           },
-          "err": "streamPort: must be a port from 0 to 65535"
+          "err": "dhtPort: must be a port from 0 to 65535"
         },
         {
           "op": "update",
@@ -5012,16 +4799,16 @@
         {
           "op": "update",
           "patch": {
-            "streamHost": "bad host"
+            "lanHost": "bad host"
           },
-          "err": "streamHost: must be an IP address or host name"
+          "err": "lanHost: must be an IP address or host name"
         },
         {
           "op": "update",
           "patch": {
-            "tracker": "zz"
+            "channel": "zz"
           },
-          "err": "tracker: must be a 64-character hex key"
+          "err": "channel: must be a 64-character hex key"
         },
         {
           "op": "update",
@@ -5170,22 +4957,6 @@
               "relayThrough"
             ],
             "settings": {
-              "streamHost": {
-                "type": "host",
-                "live": false,
-                "source": "default",
-                "env": "PEARTUBE_STREAM_HOST",
-                "envSet": false,
-                "value": "127.0.0.1"
-              },
-              "streamPort": {
-                "type": "port",
-                "live": false,
-                "source": "file",
-                "env": "PEARTUBE_STREAM_PORT",
-                "envSet": false,
-                "value": 9000
-              },
               "lan": {
                 "type": "bool",
                 "live": true,
@@ -5205,10 +4976,10 @@
               "dhtPort": {
                 "type": "port",
                 "live": false,
-                "source": "default",
+                "source": "file",
                 "env": "PEARTUBE_DHT_PORT",
                 "envSet": false,
-                "value": 0
+                "value": 9000
               },
               "bootstrap": {
                 "type": "hosts",
@@ -5252,11 +5023,11 @@
                 "envSet": false,
                 "value": 0
               },
-              "tracker": {
+              "channel": {
                 "type": "key",
                 "live": false,
                 "source": "default",
-                "env": "PEARTUBE_TRACKER",
+                "env": "PEARTUBE_CHANNEL",
                 "envSet": false,
                 "value": ""
               },
@@ -5414,29 +5185,13 @@
         {
           "op": "update",
           "patch": {
-            "streamPort": 9100
+            "dhtPort": 9100
           },
           "ok": {
             "changed": [
-              "streamPort"
+              "dhtPort"
             ],
             "settings": {
-              "streamHost": {
-                "type": "host",
-                "live": false,
-                "source": "default",
-                "env": "PEARTUBE_STREAM_HOST",
-                "envSet": false,
-                "value": "127.0.0.1"
-              },
-              "streamPort": {
-                "type": "port",
-                "live": false,
-                "source": "file",
-                "env": "PEARTUBE_STREAM_PORT",
-                "envSet": false,
-                "value": 9100
-              },
               "lan": {
                 "type": "bool",
                 "live": true,
@@ -5456,10 +5211,10 @@
               "dhtPort": {
                 "type": "port",
                 "live": false,
-                "source": "default",
+                "source": "file",
                 "env": "PEARTUBE_DHT_PORT",
                 "envSet": false,
-                "value": 0
+                "value": 9100
               },
               "bootstrap": {
                 "type": "hosts",
@@ -5503,11 +5258,11 @@
                 "envSet": false,
                 "value": 0
               },
-              "tracker": {
+              "channel": {
                 "type": "key",
                 "live": false,
                 "source": "default",
-                "env": "PEARTUBE_TRACKER",
+                "env": "PEARTUBE_CHANNEL",
                 "envSet": false,
                 "value": ""
               },
@@ -5658,7 +5413,7 @@
               }
             },
             "restartNeeded": [
-              "streamPort",
+              "dhtPort",
               "relayThrough"
             ]
           }
@@ -5667,22 +5422,6 @@
           "op": "view",
           "ok": {
             "settings": {
-              "streamHost": {
-                "type": "host",
-                "live": false,
-                "source": "default",
-                "env": "PEARTUBE_STREAM_HOST",
-                "envSet": false,
-                "value": "127.0.0.1"
-              },
-              "streamPort": {
-                "type": "port",
-                "live": false,
-                "source": "file",
-                "env": "PEARTUBE_STREAM_PORT",
-                "envSet": false,
-                "value": 9100
-              },
               "lan": {
                 "type": "bool",
                 "live": true,
@@ -5702,10 +5441,10 @@
               "dhtPort": {
                 "type": "port",
                 "live": false,
-                "source": "default",
+                "source": "file",
                 "env": "PEARTUBE_DHT_PORT",
                 "envSet": false,
-                "value": 0
+                "value": 9100
               },
               "bootstrap": {
                 "type": "hosts",
@@ -5749,11 +5488,11 @@
                 "envSet": false,
                 "value": 0
               },
-              "tracker": {
+              "channel": {
                 "type": "key",
                 "live": false,
                 "source": "default",
-                "env": "PEARTUBE_TRACKER",
+                "env": "PEARTUBE_CHANNEL",
                 "envSet": false,
                 "value": ""
               },
@@ -5904,31 +5643,15 @@
               }
             },
             "restartNeeded": [
-              "streamPort",
+              "dhtPort",
               "relayThrough"
             ]
           }
         }
       ],
-      "finalFile": "{\n  \"streamPort\": 9100,\n  \"relayThrough\": [\n    \"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\"\n  ]\n}",
+      "finalFile": "{\n  \"dhtPort\": 9100,\n  \"relayThrough\": [\n    \"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\"\n  ]\n}",
       "reloadedView": {
         "settings": {
-          "streamHost": {
-            "type": "host",
-            "live": false,
-            "source": "default",
-            "env": "PEARTUBE_STREAM_HOST",
-            "envSet": false,
-            "value": "127.0.0.1"
-          },
-          "streamPort": {
-            "type": "port",
-            "live": false,
-            "source": "file",
-            "env": "PEARTUBE_STREAM_PORT",
-            "envSet": false,
-            "value": 9100
-          },
           "lan": {
             "type": "bool",
             "live": true,
@@ -5948,10 +5671,10 @@
           "dhtPort": {
             "type": "port",
             "live": false,
-            "source": "default",
+            "source": "file",
             "env": "PEARTUBE_DHT_PORT",
             "envSet": false,
-            "value": 0
+            "value": 9100
           },
           "bootstrap": {
             "type": "hosts",
@@ -5995,11 +5718,11 @@
             "envSet": false,
             "value": 0
           },
-          "tracker": {
+          "channel": {
             "type": "key",
             "live": false,
             "source": "default",
-            "env": "PEARTUBE_TRACKER",
+            "env": "PEARTUBE_CHANNEL",
             "envSet": false,
             "value": ""
           },
@@ -6161,22 +5884,6 @@
           "op": "view",
           "ok": {
             "settings": {
-              "streamHost": {
-                "type": "host",
-                "live": false,
-                "source": "default",
-                "env": "PEARTUBE_STREAM_HOST",
-                "envSet": false,
-                "value": "127.0.0.1"
-              },
-              "streamPort": {
-                "type": "port",
-                "live": false,
-                "source": "default",
-                "env": "PEARTUBE_STREAM_PORT",
-                "envSet": false,
-                "value": 8175
-              },
               "lan": {
                 "type": "bool",
                 "live": true,
@@ -6241,11 +5948,11 @@
                 "envSet": false,
                 "value": 0
               },
-              "tracker": {
+              "channel": {
                 "type": "key",
                 "live": false,
                 "source": "default",
-                "env": "PEARTUBE_TRACKER",
+                "env": "PEARTUBE_CHANNEL",
                 "envSet": false,
                 "value": ""
               },
@@ -6425,22 +6132,6 @@
               "hiverelays"
             ],
             "settings": {
-              "streamHost": {
-                "type": "host",
-                "live": false,
-                "source": "default",
-                "env": "PEARTUBE_STREAM_HOST",
-                "envSet": false,
-                "value": "127.0.0.1"
-              },
-              "streamPort": {
-                "type": "port",
-                "live": false,
-                "source": "default",
-                "env": "PEARTUBE_STREAM_PORT",
-                "envSet": false,
-                "value": 8175
-              },
               "lan": {
                 "type": "bool",
                 "live": true,
@@ -6505,11 +6196,11 @@
                 "envSet": false,
                 "value": 0
               },
-              "tracker": {
+              "channel": {
                 "type": "key",
                 "live": false,
                 "source": "default",
-                "env": "PEARTUBE_TRACKER",
+                "env": "PEARTUBE_CHANNEL",
                 "envSet": false,
                 "value": ""
               },
@@ -6696,22 +6387,6 @@
               "hiverelayApiKey"
             ],
             "settings": {
-              "streamHost": {
-                "type": "host",
-                "live": false,
-                "source": "default",
-                "env": "PEARTUBE_STREAM_HOST",
-                "envSet": false,
-                "value": "127.0.0.1"
-              },
-              "streamPort": {
-                "type": "port",
-                "live": false,
-                "source": "default",
-                "env": "PEARTUBE_STREAM_PORT",
-                "envSet": false,
-                "value": 8175
-              },
               "lan": {
                 "type": "bool",
                 "live": true,
@@ -6776,11 +6451,11 @@
                 "envSet": false,
                 "value": 0
               },
-              "tracker": {
+              "channel": {
                 "type": "key",
                 "live": false,
                 "source": "default",
-                "env": "PEARTUBE_TRACKER",
+                "env": "PEARTUBE_CHANNEL",
                 "envSet": false,
                 "value": ""
               },
@@ -6954,22 +6629,6 @@
           "op": "view",
           "ok": {
             "settings": {
-              "streamHost": {
-                "type": "host",
-                "live": false,
-                "source": "default",
-                "env": "PEARTUBE_STREAM_HOST",
-                "envSet": false,
-                "value": "127.0.0.1"
-              },
-              "streamPort": {
-                "type": "port",
-                "live": false,
-                "source": "default",
-                "env": "PEARTUBE_STREAM_PORT",
-                "envSet": false,
-                "value": 8175
-              },
               "lan": {
                 "type": "bool",
                 "live": true,
@@ -7034,11 +6693,11 @@
                 "envSet": false,
                 "value": 0
               },
-              "tracker": {
+              "channel": {
                 "type": "key",
                 "live": false,
                 "source": "default",
-                "env": "PEARTUBE_TRACKER",
+                "env": "PEARTUBE_CHANNEL",
                 "envSet": false,
                 "value": ""
               },
@@ -7212,22 +6871,6 @@
       "finalFile": "{\n  \"hiverelays\": [\n    \"https://b.example/y=SECRET\",\n    \"https://c.example/z\"\n  ],\n  \"feeds\": [\n    \"https://feed.example/f\"\n  ]\n}",
       "reloadedView": {
         "settings": {
-          "streamHost": {
-            "type": "host",
-            "live": false,
-            "source": "default",
-            "env": "PEARTUBE_STREAM_HOST",
-            "envSet": false,
-            "value": "127.0.0.1"
-          },
-          "streamPort": {
-            "type": "port",
-            "live": false,
-            "source": "default",
-            "env": "PEARTUBE_STREAM_PORT",
-            "envSet": false,
-            "value": 8175
-          },
           "lan": {
             "type": "bool",
             "live": true,
@@ -7292,11 +6935,11 @@
             "envSet": false,
             "value": 0
           },
-          "tracker": {
+          "channel": {
             "type": "key",
             "live": false,
             "source": "default",
-            "env": "PEARTUBE_TRACKER",
+            "env": "PEARTUBE_CHANNEL",
             "envSet": false,
             "value": ""
           },
@@ -7480,22 +7123,6 @@
               "feeds"
             ],
             "settings": {
-              "streamHost": {
-                "type": "host",
-                "live": false,
-                "source": "default",
-                "env": "PEARTUBE_STREAM_HOST",
-                "envSet": false,
-                "value": "127.0.0.1"
-              },
-              "streamPort": {
-                "type": "port",
-                "live": false,
-                "source": "default",
-                "env": "PEARTUBE_STREAM_PORT",
-                "envSet": false,
-                "value": 8175
-              },
               "lan": {
                 "type": "bool",
                 "live": true,
@@ -7560,11 +7187,11 @@
                 "envSet": false,
                 "value": 0
               },
-              "tracker": {
+              "channel": {
                 "type": "key",
                 "live": false,
                 "source": "default",
-                "env": "PEARTUBE_TRACKER",
+                "env": "PEARTUBE_CHANNEL",
                 "envSet": false,
                 "value": ""
               },
@@ -7721,22 +7348,6 @@
           "op": "view",
           "ok": {
             "settings": {
-              "streamHost": {
-                "type": "host",
-                "live": false,
-                "source": "default",
-                "env": "PEARTUBE_STREAM_HOST",
-                "envSet": false,
-                "value": "127.0.0.1"
-              },
-              "streamPort": {
-                "type": "port",
-                "live": false,
-                "source": "default",
-                "env": "PEARTUBE_STREAM_PORT",
-                "envSet": false,
-                "value": 8175
-              },
               "lan": {
                 "type": "bool",
                 "live": true,
@@ -7801,11 +7412,11 @@
                 "envSet": false,
                 "value": 0
               },
-              "tracker": {
+              "channel": {
                 "type": "key",
                 "live": false,
                 "source": "default",
-                "env": "PEARTUBE_TRACKER",
+                "env": "PEARTUBE_CHANNEL",
                 "envSet": false,
                 "value": ""
               },
@@ -7969,22 +7580,6 @@
           "ok": {
             "changed": [],
             "settings": {
-              "streamHost": {
-                "type": "host",
-                "live": false,
-                "source": "default",
-                "env": "PEARTUBE_STREAM_HOST",
-                "envSet": false,
-                "value": "127.0.0.1"
-              },
-              "streamPort": {
-                "type": "port",
-                "live": false,
-                "source": "default",
-                "env": "PEARTUBE_STREAM_PORT",
-                "envSet": false,
-                "value": 8175
-              },
               "lan": {
                 "type": "bool",
                 "live": true,
@@ -8049,11 +7644,11 @@
                 "envSet": false,
                 "value": 0
               },
-              "tracker": {
+              "channel": {
                 "type": "key",
                 "live": false,
                 "source": "default",
-                "env": "PEARTUBE_TRACKER",
+                "env": "PEARTUBE_CHANNEL",
                 "envSet": false,
                 "value": ""
               },
@@ -8210,22 +7805,6 @@
           "op": "view",
           "ok": {
             "settings": {
-              "streamHost": {
-                "type": "host",
-                "live": false,
-                "source": "default",
-                "env": "PEARTUBE_STREAM_HOST",
-                "envSet": false,
-                "value": "127.0.0.1"
-              },
-              "streamPort": {
-                "type": "port",
-                "live": false,
-                "source": "default",
-                "env": "PEARTUBE_STREAM_PORT",
-                "envSet": false,
-                "value": 8175
-              },
               "lan": {
                 "type": "bool",
                 "live": true,
@@ -8290,11 +7869,11 @@
                 "envSet": false,
                 "value": 0
               },
-              "tracker": {
+              "channel": {
                 "type": "key",
                 "live": false,
                 "source": "default",
-                "env": "PEARTUBE_TRACKER",
+                "env": "PEARTUBE_CHANNEL",
                 "envSet": false,
                 "value": ""
               },
@@ -8451,22 +8030,6 @@
       "finalFile": "{\n  \"feeds\": []\n}",
       "reloadedView": {
         "settings": {
-          "streamHost": {
-            "type": "host",
-            "live": false,
-            "source": "default",
-            "env": "PEARTUBE_STREAM_HOST",
-            "envSet": false,
-            "value": "127.0.0.1"
-          },
-          "streamPort": {
-            "type": "port",
-            "live": false,
-            "source": "default",
-            "env": "PEARTUBE_STREAM_PORT",
-            "envSet": false,
-            "value": 8175
-          },
           "lan": {
             "type": "bool",
             "live": true,
@@ -8531,11 +8094,11 @@
             "envSet": false,
             "value": 0
           },
-          "tracker": {
+          "channel": {
             "type": "key",
             "live": false,
             "source": "default",
-            "env": "PEARTUBE_TRACKER",
+            "env": "PEARTUBE_CHANNEL",
             "envSet": false,
             "value": ""
           },
@@ -8697,22 +8260,6 @@
           "op": "view",
           "ok": {
             "settings": {
-              "streamHost": {
-                "type": "host",
-                "live": false,
-                "source": "default",
-                "env": "PEARTUBE_STREAM_HOST",
-                "envSet": false,
-                "value": "127.0.0.1"
-              },
-              "streamPort": {
-                "type": "port",
-                "live": false,
-                "source": "default",
-                "env": "PEARTUBE_STREAM_PORT",
-                "envSet": false,
-                "value": 8175
-              },
               "lan": {
                 "type": "bool",
                 "live": true,
@@ -8777,11 +8324,11 @@
                 "envSet": false,
                 "value": 9000
               },
-              "tracker": {
+              "channel": {
                 "type": "key",
                 "live": false,
                 "source": "default",
-                "env": "PEARTUBE_TRACKER",
+                "env": "PEARTUBE_CHANNEL",
                 "envSet": false,
                 "value": ""
               },
@@ -8953,22 +8500,6 @@
               "privateGuardPort"
             ],
             "settings": {
-              "streamHost": {
-                "type": "host",
-                "live": false,
-                "source": "default",
-                "env": "PEARTUBE_STREAM_HOST",
-                "envSet": false,
-                "value": "127.0.0.1"
-              },
-              "streamPort": {
-                "type": "port",
-                "live": false,
-                "source": "default",
-                "env": "PEARTUBE_STREAM_PORT",
-                "envSet": false,
-                "value": 8175
-              },
               "lan": {
                 "type": "bool",
                 "live": true,
@@ -9033,11 +8564,11 @@
                 "envSet": false,
                 "value": 9001
               },
-              "tracker": {
+              "channel": {
                 "type": "key",
                 "live": false,
                 "source": "default",
-                "env": "PEARTUBE_TRACKER",
+                "env": "PEARTUBE_CHANNEL",
                 "envSet": false,
                 "value": ""
               },
@@ -9202,22 +8733,6 @@
               "dhtPort"
             ],
             "settings": {
-              "streamHost": {
-                "type": "host",
-                "live": false,
-                "source": "default",
-                "env": "PEARTUBE_STREAM_HOST",
-                "envSet": false,
-                "value": "127.0.0.1"
-              },
-              "streamPort": {
-                "type": "port",
-                "live": false,
-                "source": "default",
-                "env": "PEARTUBE_STREAM_PORT",
-                "envSet": false,
-                "value": 8175
-              },
               "lan": {
                 "type": "bool",
                 "live": true,
@@ -9282,11 +8797,11 @@
                 "envSet": false,
                 "value": 9001
               },
-              "tracker": {
+              "channel": {
                 "type": "key",
                 "live": false,
                 "source": "default",
-                "env": "PEARTUBE_TRACKER",
+                "env": "PEARTUBE_CHANNEL",
                 "envSet": false,
                 "value": ""
               },
@@ -9453,22 +8968,6 @@
               "dhtPort"
             ],
             "settings": {
-              "streamHost": {
-                "type": "host",
-                "live": false,
-                "source": "default",
-                "env": "PEARTUBE_STREAM_HOST",
-                "envSet": false,
-                "value": "127.0.0.1"
-              },
-              "streamPort": {
-                "type": "port",
-                "live": false,
-                "source": "default",
-                "env": "PEARTUBE_STREAM_PORT",
-                "envSet": false,
-                "value": 8175
-              },
               "lan": {
                 "type": "bool",
                 "live": true,
@@ -9533,11 +9032,11 @@
                 "envSet": false,
                 "value": 9001
               },
-              "tracker": {
+              "channel": {
                 "type": "key",
                 "live": false,
                 "source": "default",
-                "env": "PEARTUBE_TRACKER",
+                "env": "PEARTUBE_CHANNEL",
                 "envSet": false,
                 "value": ""
               },
@@ -9696,22 +9195,6 @@
           "op": "view",
           "ok": {
             "settings": {
-              "streamHost": {
-                "type": "host",
-                "live": false,
-                "source": "default",
-                "env": "PEARTUBE_STREAM_HOST",
-                "envSet": false,
-                "value": "127.0.0.1"
-              },
-              "streamPort": {
-                "type": "port",
-                "live": false,
-                "source": "default",
-                "env": "PEARTUBE_STREAM_PORT",
-                "envSet": false,
-                "value": 8175
-              },
               "lan": {
                 "type": "bool",
                 "live": true,
@@ -9776,11 +9259,11 @@
                 "envSet": false,
                 "value": 9001
               },
-              "tracker": {
+              "channel": {
                 "type": "key",
                 "live": false,
                 "source": "default",
-                "env": "PEARTUBE_TRACKER",
+                "env": "PEARTUBE_CHANNEL",
                 "envSet": false,
                 "value": ""
               },
@@ -9939,22 +9422,6 @@
       "finalFile": "{\n  \"privateGuard\": false,\n  \"privateGuardPort\": 9001,\n  \"dhtPort\": 9001\n}",
       "reloadedView": {
         "settings": {
-          "streamHost": {
-            "type": "host",
-            "live": false,
-            "source": "default",
-            "env": "PEARTUBE_STREAM_HOST",
-            "envSet": false,
-            "value": "127.0.0.1"
-          },
-          "streamPort": {
-            "type": "port",
-            "live": false,
-            "source": "default",
-            "env": "PEARTUBE_STREAM_PORT",
-            "envSet": false,
-            "value": 8175
-          },
           "lan": {
             "type": "bool",
             "live": true,
@@ -10019,11 +9486,11 @@
             "envSet": false,
             "value": 9001
           },
-          "tracker": {
+          "channel": {
             "type": "key",
             "live": false,
             "source": "default",
-            "env": "PEARTUBE_TRACKER",
+            "env": "PEARTUBE_CHANNEL",
             "envSet": false,
             "value": ""
           },
@@ -10177,13 +9644,13 @@
       }
     },
     {
-      "name": "remember tracker",
+      "name": "remember channel",
       "env": {},
       "initial": null,
       "steps": [
         {
           "op": "remember",
-          "key": "tracker",
+          "key": "channel",
           "value": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
           "ok": null
         },
@@ -10191,22 +9658,6 @@
           "op": "view",
           "ok": {
             "settings": {
-              "streamHost": {
-                "type": "host",
-                "live": false,
-                "source": "default",
-                "env": "PEARTUBE_STREAM_HOST",
-                "envSet": false,
-                "value": "127.0.0.1"
-              },
-              "streamPort": {
-                "type": "port",
-                "live": false,
-                "source": "default",
-                "env": "PEARTUBE_STREAM_PORT",
-                "envSet": false,
-                "value": 8175
-              },
               "lan": {
                 "type": "bool",
                 "live": true,
@@ -10271,11 +9722,11 @@
                 "envSet": false,
                 "value": 0
               },
-              "tracker": {
+              "channel": {
                 "type": "key",
                 "live": false,
                 "source": "file",
-                "env": "PEARTUBE_TRACKER",
+                "env": "PEARTUBE_CHANNEL",
                 "envSet": false,
                 "value": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
               },
@@ -10430,35 +9881,19 @@
         },
         {
           "op": "remember",
-          "key": "tracker",
+          "key": "channel",
           "value": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
           "ok": null
         },
         {
           "op": "get",
-          "key": "tracker",
+          "key": "channel",
           "ok": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
         }
       ],
-      "finalFile": "{\n  \"tracker\": \"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\"\n}",
+      "finalFile": "{\n  \"channel\": \"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\"\n}",
       "reloadedView": {
         "settings": {
-          "streamHost": {
-            "type": "host",
-            "live": false,
-            "source": "default",
-            "env": "PEARTUBE_STREAM_HOST",
-            "envSet": false,
-            "value": "127.0.0.1"
-          },
-          "streamPort": {
-            "type": "port",
-            "live": false,
-            "source": "default",
-            "env": "PEARTUBE_STREAM_PORT",
-            "envSet": false,
-            "value": 8175
-          },
           "lan": {
             "type": "bool",
             "live": true,
@@ -10523,13 +9958,708 @@
             "envSet": false,
             "value": 0
           },
-          "tracker": {
+          "channel": {
             "type": "key",
             "live": false,
             "source": "file",
-            "env": "PEARTUBE_TRACKER",
+            "env": "PEARTUBE_CHANNEL",
             "envSet": false,
             "value": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+          },
+          "allowedPeers": {
+            "type": "keys",
+            "live": true,
+            "source": "default",
+            "env": "PEARTUBE_ALLOWED_PEERS",
+            "envSet": false,
+            "value": []
+          },
+          "publishChannel": {
+            "type": "bool",
+            "live": false,
+            "source": "default",
+            "env": "PEARTUBE_PUBLISH_CHANNEL",
+            "envSet": false,
+            "value": true
+          },
+          "directory": {
+            "type": "bool",
+            "live": true,
+            "source": "default",
+            "env": "PEARTUBE_DIRECTORY",
+            "envSet": false,
+            "value": false
+          },
+          "acquireConcurrency": {
+            "type": "number",
+            "live": true,
+            "source": "default",
+            "env": "PEARTUBE_ACQUIRE_CONCURRENCY",
+            "envSet": false,
+            "value": 4
+          },
+          "watchDir": {
+            "type": "path",
+            "live": true,
+            "source": "default",
+            "env": "PEARTUBE_WATCH_DIR",
+            "envSet": false,
+            "value": ""
+          },
+          "feeds": {
+            "type": "urls",
+            "live": true,
+            "source": "default",
+            "env": "PEARTUBE_MIRROR_FEEDS",
+            "envSet": false,
+            "value": []
+          },
+          "replicate": {
+            "type": "bool",
+            "live": true,
+            "source": "default",
+            "env": "PEARTUBE_REPLICATE",
+            "envSet": false,
+            "value": false
+          },
+          "replicateSources": {
+            "type": "keys",
+            "live": true,
+            "source": "default",
+            "env": "PEARTUBE_REPLICATE",
+            "envSet": false,
+            "value": []
+          },
+          "replicateFreeGb": {
+            "type": "number",
+            "live": true,
+            "source": "default",
+            "env": "PEARTUBE_REPLICATE_FREE_GB",
+            "envSet": false,
+            "value": 20
+          },
+          "replicateMbps": {
+            "type": "number",
+            "live": true,
+            "source": "default",
+            "env": "PEARTUBE_REPLICATE_MBPS",
+            "envSet": false,
+            "value": 80
+          },
+          "cacheMaxGb": {
+            "type": "number",
+            "live": true,
+            "source": "default",
+            "env": "PEARTUBE_CACHE_MAX_GB",
+            "envSet": false,
+            "value": 0
+          },
+          "hiverelays": {
+            "type": "urls",
+            "live": false,
+            "source": "default",
+            "env": "PEARTUBE_HIVERELAYS",
+            "envSet": false,
+            "value": []
+          },
+          "hiverelayApiKey": {
+            "type": "secret",
+            "live": false,
+            "source": "default",
+            "env": "PEARTUBE_HIVERELAY_API_KEY",
+            "envSet": false,
+            "set": false,
+            "value": ""
+          },
+          "hiverelayDiscover": {
+            "type": "bool",
+            "live": false,
+            "source": "default",
+            "env": "PEARTUBE_HIVERELAY_DISCOVER",
+            "envSet": false,
+            "value": false
+          },
+          "hiverelayReplicas": {
+            "type": "number",
+            "live": false,
+            "source": "default",
+            "env": "PEARTUBE_HIVERELAY_REPLICAS",
+            "envSet": false,
+            "value": 3
+          },
+          "hiverelayUploadMbps": {
+            "type": "number",
+            "live": false,
+            "source": "default",
+            "env": "PEARTUBE_HIVERELAY_UPLOAD_MBPS",
+            "envSet": false,
+            "value": 50
+          },
+          "rechunk": {
+            "type": "bool",
+            "live": true,
+            "source": "default",
+            "env": "PEARTUBE_RECHUNK",
+            "envSet": false,
+            "value": false
+          },
+          "cinemetaUrl": {
+            "type": "url",
+            "live": true,
+            "source": "default",
+            "env": "PEARTUBE_CINEMETA_URL",
+            "envSet": false,
+            "value": "https://v3-cinemeta.strem.io"
+          }
+        },
+        "restartNeeded": []
+      }
+    },
+    {
+      "name": "pre-channel file migrates",
+      "env": {},
+      "initial": "{\"tracker\":\"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\",\"streamHost\":\"10.0.0.5\",\"streamPort\":8175,\"lan\":true}",
+      "steps": [
+        {
+          "op": "view",
+          "ok": {
+            "settings": {
+              "lan": {
+                "type": "bool",
+                "live": true,
+                "source": "file",
+                "env": "PEARTUBE_LAN_HOST",
+                "envSet": false,
+                "value": true
+              },
+              "lanHost": {
+                "type": "host",
+                "live": true,
+                "source": "default",
+                "env": "PEARTUBE_LAN_HOST",
+                "envSet": false,
+                "value": ""
+              },
+              "dhtPort": {
+                "type": "port",
+                "live": false,
+                "source": "default",
+                "env": "PEARTUBE_DHT_PORT",
+                "envSet": false,
+                "value": 0
+              },
+              "bootstrap": {
+                "type": "hosts",
+                "live": false,
+                "source": "default",
+                "env": "PEARTUBE_BOOTSTRAP",
+                "envSet": false,
+                "value": []
+              },
+              "relayThrough": {
+                "type": "keys",
+                "live": false,
+                "source": "default",
+                "env": "PEARTUBE_RELAY_THROUGH",
+                "envSet": false,
+                "value": []
+              },
+              "privateRouting": {
+                "type": "bool",
+                "live": false,
+                "source": "default",
+                "env": "PEARTUBE_PRIVATE_ROUTING",
+                "envSet": false,
+                "value": false
+              },
+              "privateGuard": {
+                "type": "bool",
+                "live": true,
+                "source": "default",
+                "env": "PEARTUBE_PRIVATE_GUARD",
+                "envSet": false,
+                "value": false
+              },
+              "privateGuardPort": {
+                "type": "port",
+                "live": true,
+                "source": "default",
+                "env": "PEARTUBE_PRIVATE_GUARD_PORT",
+                "envSet": false,
+                "value": 0
+              },
+              "channel": {
+                "type": "key",
+                "live": false,
+                "source": "file",
+                "env": "PEARTUBE_CHANNEL",
+                "envSet": false,
+                "value": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+              },
+              "allowedPeers": {
+                "type": "keys",
+                "live": true,
+                "source": "default",
+                "env": "PEARTUBE_ALLOWED_PEERS",
+                "envSet": false,
+                "value": []
+              },
+              "publishChannel": {
+                "type": "bool",
+                "live": false,
+                "source": "default",
+                "env": "PEARTUBE_PUBLISH_CHANNEL",
+                "envSet": false,
+                "value": true
+              },
+              "directory": {
+                "type": "bool",
+                "live": true,
+                "source": "default",
+                "env": "PEARTUBE_DIRECTORY",
+                "envSet": false,
+                "value": false
+              },
+              "acquireConcurrency": {
+                "type": "number",
+                "live": true,
+                "source": "default",
+                "env": "PEARTUBE_ACQUIRE_CONCURRENCY",
+                "envSet": false,
+                "value": 4
+              },
+              "watchDir": {
+                "type": "path",
+                "live": true,
+                "source": "default",
+                "env": "PEARTUBE_WATCH_DIR",
+                "envSet": false,
+                "value": ""
+              },
+              "feeds": {
+                "type": "urls",
+                "live": true,
+                "source": "default",
+                "env": "PEARTUBE_MIRROR_FEEDS",
+                "envSet": false,
+                "value": []
+              },
+              "replicate": {
+                "type": "bool",
+                "live": true,
+                "source": "default",
+                "env": "PEARTUBE_REPLICATE",
+                "envSet": false,
+                "value": false
+              },
+              "replicateSources": {
+                "type": "keys",
+                "live": true,
+                "source": "default",
+                "env": "PEARTUBE_REPLICATE",
+                "envSet": false,
+                "value": []
+              },
+              "replicateFreeGb": {
+                "type": "number",
+                "live": true,
+                "source": "default",
+                "env": "PEARTUBE_REPLICATE_FREE_GB",
+                "envSet": false,
+                "value": 20
+              },
+              "replicateMbps": {
+                "type": "number",
+                "live": true,
+                "source": "default",
+                "env": "PEARTUBE_REPLICATE_MBPS",
+                "envSet": false,
+                "value": 80
+              },
+              "cacheMaxGb": {
+                "type": "number",
+                "live": true,
+                "source": "default",
+                "env": "PEARTUBE_CACHE_MAX_GB",
+                "envSet": false,
+                "value": 0
+              },
+              "hiverelays": {
+                "type": "urls",
+                "live": false,
+                "source": "default",
+                "env": "PEARTUBE_HIVERELAYS",
+                "envSet": false,
+                "value": []
+              },
+              "hiverelayApiKey": {
+                "type": "secret",
+                "live": false,
+                "source": "default",
+                "env": "PEARTUBE_HIVERELAY_API_KEY",
+                "envSet": false,
+                "set": false,
+                "value": ""
+              },
+              "hiverelayDiscover": {
+                "type": "bool",
+                "live": false,
+                "source": "default",
+                "env": "PEARTUBE_HIVERELAY_DISCOVER",
+                "envSet": false,
+                "value": false
+              },
+              "hiverelayReplicas": {
+                "type": "number",
+                "live": false,
+                "source": "default",
+                "env": "PEARTUBE_HIVERELAY_REPLICAS",
+                "envSet": false,
+                "value": 3
+              },
+              "hiverelayUploadMbps": {
+                "type": "number",
+                "live": false,
+                "source": "default",
+                "env": "PEARTUBE_HIVERELAY_UPLOAD_MBPS",
+                "envSet": false,
+                "value": 50
+              },
+              "rechunk": {
+                "type": "bool",
+                "live": true,
+                "source": "default",
+                "env": "PEARTUBE_RECHUNK",
+                "envSet": false,
+                "value": false
+              },
+              "cinemetaUrl": {
+                "type": "url",
+                "live": true,
+                "source": "default",
+                "env": "PEARTUBE_CINEMETA_URL",
+                "envSet": false,
+                "value": "https://v3-cinemeta.strem.io"
+              }
+            },
+            "restartNeeded": []
+          }
+        },
+        {
+          "op": "get",
+          "key": "channel",
+          "ok": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        }
+      ],
+      "finalFile": "{\n  \"lan\": true,\n  \"channel\": \"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\"\n}",
+      "reloadedView": {
+        "settings": {
+          "lan": {
+            "type": "bool",
+            "live": true,
+            "source": "file",
+            "env": "PEARTUBE_LAN_HOST",
+            "envSet": false,
+            "value": true
+          },
+          "lanHost": {
+            "type": "host",
+            "live": true,
+            "source": "default",
+            "env": "PEARTUBE_LAN_HOST",
+            "envSet": false,
+            "value": ""
+          },
+          "dhtPort": {
+            "type": "port",
+            "live": false,
+            "source": "default",
+            "env": "PEARTUBE_DHT_PORT",
+            "envSet": false,
+            "value": 0
+          },
+          "bootstrap": {
+            "type": "hosts",
+            "live": false,
+            "source": "default",
+            "env": "PEARTUBE_BOOTSTRAP",
+            "envSet": false,
+            "value": []
+          },
+          "relayThrough": {
+            "type": "keys",
+            "live": false,
+            "source": "default",
+            "env": "PEARTUBE_RELAY_THROUGH",
+            "envSet": false,
+            "value": []
+          },
+          "privateRouting": {
+            "type": "bool",
+            "live": false,
+            "source": "default",
+            "env": "PEARTUBE_PRIVATE_ROUTING",
+            "envSet": false,
+            "value": false
+          },
+          "privateGuard": {
+            "type": "bool",
+            "live": true,
+            "source": "default",
+            "env": "PEARTUBE_PRIVATE_GUARD",
+            "envSet": false,
+            "value": false
+          },
+          "privateGuardPort": {
+            "type": "port",
+            "live": true,
+            "source": "default",
+            "env": "PEARTUBE_PRIVATE_GUARD_PORT",
+            "envSet": false,
+            "value": 0
+          },
+          "channel": {
+            "type": "key",
+            "live": false,
+            "source": "file",
+            "env": "PEARTUBE_CHANNEL",
+            "envSet": false,
+            "value": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+          },
+          "allowedPeers": {
+            "type": "keys",
+            "live": true,
+            "source": "default",
+            "env": "PEARTUBE_ALLOWED_PEERS",
+            "envSet": false,
+            "value": []
+          },
+          "publishChannel": {
+            "type": "bool",
+            "live": false,
+            "source": "default",
+            "env": "PEARTUBE_PUBLISH_CHANNEL",
+            "envSet": false,
+            "value": true
+          },
+          "directory": {
+            "type": "bool",
+            "live": true,
+            "source": "default",
+            "env": "PEARTUBE_DIRECTORY",
+            "envSet": false,
+            "value": false
+          },
+          "acquireConcurrency": {
+            "type": "number",
+            "live": true,
+            "source": "default",
+            "env": "PEARTUBE_ACQUIRE_CONCURRENCY",
+            "envSet": false,
+            "value": 4
+          },
+          "watchDir": {
+            "type": "path",
+            "live": true,
+            "source": "default",
+            "env": "PEARTUBE_WATCH_DIR",
+            "envSet": false,
+            "value": ""
+          },
+          "feeds": {
+            "type": "urls",
+            "live": true,
+            "source": "default",
+            "env": "PEARTUBE_MIRROR_FEEDS",
+            "envSet": false,
+            "value": []
+          },
+          "replicate": {
+            "type": "bool",
+            "live": true,
+            "source": "default",
+            "env": "PEARTUBE_REPLICATE",
+            "envSet": false,
+            "value": false
+          },
+          "replicateSources": {
+            "type": "keys",
+            "live": true,
+            "source": "default",
+            "env": "PEARTUBE_REPLICATE",
+            "envSet": false,
+            "value": []
+          },
+          "replicateFreeGb": {
+            "type": "number",
+            "live": true,
+            "source": "default",
+            "env": "PEARTUBE_REPLICATE_FREE_GB",
+            "envSet": false,
+            "value": 20
+          },
+          "replicateMbps": {
+            "type": "number",
+            "live": true,
+            "source": "default",
+            "env": "PEARTUBE_REPLICATE_MBPS",
+            "envSet": false,
+            "value": 80
+          },
+          "cacheMaxGb": {
+            "type": "number",
+            "live": true,
+            "source": "default",
+            "env": "PEARTUBE_CACHE_MAX_GB",
+            "envSet": false,
+            "value": 0
+          },
+          "hiverelays": {
+            "type": "urls",
+            "live": false,
+            "source": "default",
+            "env": "PEARTUBE_HIVERELAYS",
+            "envSet": false,
+            "value": []
+          },
+          "hiverelayApiKey": {
+            "type": "secret",
+            "live": false,
+            "source": "default",
+            "env": "PEARTUBE_HIVERELAY_API_KEY",
+            "envSet": false,
+            "set": false,
+            "value": ""
+          },
+          "hiverelayDiscover": {
+            "type": "bool",
+            "live": false,
+            "source": "default",
+            "env": "PEARTUBE_HIVERELAY_DISCOVER",
+            "envSet": false,
+            "value": false
+          },
+          "hiverelayReplicas": {
+            "type": "number",
+            "live": false,
+            "source": "default",
+            "env": "PEARTUBE_HIVERELAY_REPLICAS",
+            "envSet": false,
+            "value": 3
+          },
+          "hiverelayUploadMbps": {
+            "type": "number",
+            "live": false,
+            "source": "default",
+            "env": "PEARTUBE_HIVERELAY_UPLOAD_MBPS",
+            "envSet": false,
+            "value": 50
+          },
+          "rechunk": {
+            "type": "bool",
+            "live": true,
+            "source": "default",
+            "env": "PEARTUBE_RECHUNK",
+            "envSet": false,
+            "value": false
+          },
+          "cinemetaUrl": {
+            "type": "url",
+            "live": true,
+            "source": "default",
+            "env": "PEARTUBE_CINEMETA_URL",
+            "envSet": false,
+            "value": "https://v3-cinemeta.strem.io"
+          }
+        },
+        "restartNeeded": []
+      }
+    },
+    {
+      "name": "pre-channel file keeps a saved channel",
+      "env": {},
+      "initial": "{\"tracker\":\"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\",\"channel\":\"fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210\",\"streamPort\":8175}",
+      "steps": [
+        {
+          "op": "get",
+          "key": "channel",
+          "ok": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
+        }
+      ],
+      "finalFile": "{\n  \"channel\": \"fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210\"\n}",
+      "reloadedView": {
+        "settings": {
+          "lan": {
+            "type": "bool",
+            "live": true,
+            "source": "default",
+            "env": "PEARTUBE_LAN_HOST",
+            "envSet": false,
+            "value": false
+          },
+          "lanHost": {
+            "type": "host",
+            "live": true,
+            "source": "default",
+            "env": "PEARTUBE_LAN_HOST",
+            "envSet": false,
+            "value": ""
+          },
+          "dhtPort": {
+            "type": "port",
+            "live": false,
+            "source": "default",
+            "env": "PEARTUBE_DHT_PORT",
+            "envSet": false,
+            "value": 0
+          },
+          "bootstrap": {
+            "type": "hosts",
+            "live": false,
+            "source": "default",
+            "env": "PEARTUBE_BOOTSTRAP",
+            "envSet": false,
+            "value": []
+          },
+          "relayThrough": {
+            "type": "keys",
+            "live": false,
+            "source": "default",
+            "env": "PEARTUBE_RELAY_THROUGH",
+            "envSet": false,
+            "value": []
+          },
+          "privateRouting": {
+            "type": "bool",
+            "live": false,
+            "source": "default",
+            "env": "PEARTUBE_PRIVATE_ROUTING",
+            "envSet": false,
+            "value": false
+          },
+          "privateGuard": {
+            "type": "bool",
+            "live": true,
+            "source": "default",
+            "env": "PEARTUBE_PRIVATE_GUARD",
+            "envSet": false,
+            "value": false
+          },
+          "privateGuardPort": {
+            "type": "port",
+            "live": true,
+            "source": "default",
+            "env": "PEARTUBE_PRIVATE_GUARD_PORT",
+            "envSet": false,
+            "value": 0
+          },
+          "channel": {
+            "type": "key",
+            "live": false,
+            "source": "file",
+            "env": "PEARTUBE_CHANNEL",
+            "envSet": false,
+            "value": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
           },
           "allowedPeers": {
             "type": "keys",
@@ -10690,270 +10820,12 @@
           "patch": {
             "streamPort": 9000
           },
-          "ok": {
-            "changed": [
-              "streamPort"
-            ],
-            "settings": {
-              "streamHost": {
-                "type": "host",
-                "live": false,
-                "source": "default",
-                "env": "PEARTUBE_STREAM_HOST",
-                "envSet": false,
-                "value": "127.0.0.1"
-              },
-              "streamPort": {
-                "type": "port",
-                "live": false,
-                "source": "file",
-                "env": "PEARTUBE_STREAM_PORT",
-                "envSet": false,
-                "value": 9000
-              },
-              "lan": {
-                "type": "bool",
-                "live": true,
-                "source": "default",
-                "env": "PEARTUBE_LAN_HOST",
-                "envSet": false,
-                "value": false
-              },
-              "lanHost": {
-                "type": "host",
-                "live": true,
-                "source": "default",
-                "env": "PEARTUBE_LAN_HOST",
-                "envSet": false,
-                "value": ""
-              },
-              "dhtPort": {
-                "type": "port",
-                "live": false,
-                "source": "default",
-                "env": "PEARTUBE_DHT_PORT",
-                "envSet": false,
-                "value": 0
-              },
-              "bootstrap": {
-                "type": "hosts",
-                "live": false,
-                "source": "default",
-                "env": "PEARTUBE_BOOTSTRAP",
-                "envSet": false,
-                "value": []
-              },
-              "relayThrough": {
-                "type": "keys",
-                "live": false,
-                "source": "default",
-                "env": "PEARTUBE_RELAY_THROUGH",
-                "envSet": false,
-                "value": []
-              },
-              "privateRouting": {
-                "type": "bool",
-                "live": false,
-                "source": "default",
-                "env": "PEARTUBE_PRIVATE_ROUTING",
-                "envSet": false,
-                "value": false
-              },
-              "privateGuard": {
-                "type": "bool",
-                "live": true,
-                "source": "default",
-                "env": "PEARTUBE_PRIVATE_GUARD",
-                "envSet": false,
-                "value": false
-              },
-              "privateGuardPort": {
-                "type": "port",
-                "live": true,
-                "source": "default",
-                "env": "PEARTUBE_PRIVATE_GUARD_PORT",
-                "envSet": false,
-                "value": 0
-              },
-              "tracker": {
-                "type": "key",
-                "live": false,
-                "source": "default",
-                "env": "PEARTUBE_TRACKER",
-                "envSet": false,
-                "value": ""
-              },
-              "allowedPeers": {
-                "type": "keys",
-                "live": true,
-                "source": "default",
-                "env": "PEARTUBE_ALLOWED_PEERS",
-                "envSet": false,
-                "value": []
-              },
-              "publishChannel": {
-                "type": "bool",
-                "live": false,
-                "source": "default",
-                "env": "PEARTUBE_PUBLISH_CHANNEL",
-                "envSet": false,
-                "value": true
-              },
-              "directory": {
-                "type": "bool",
-                "live": true,
-                "source": "default",
-                "env": "PEARTUBE_DIRECTORY",
-                "envSet": false,
-                "value": false
-              },
-              "acquireConcurrency": {
-                "type": "number",
-                "live": true,
-                "source": "default",
-                "env": "PEARTUBE_ACQUIRE_CONCURRENCY",
-                "envSet": false,
-                "value": 4
-              },
-              "watchDir": {
-                "type": "path",
-                "live": true,
-                "source": "default",
-                "env": "PEARTUBE_WATCH_DIR",
-                "envSet": false,
-                "value": ""
-              },
-              "feeds": {
-                "type": "urls",
-                "live": true,
-                "source": "default",
-                "env": "PEARTUBE_MIRROR_FEEDS",
-                "envSet": false,
-                "value": []
-              },
-              "replicate": {
-                "type": "bool",
-                "live": true,
-                "source": "default",
-                "env": "PEARTUBE_REPLICATE",
-                "envSet": false,
-                "value": false
-              },
-              "replicateSources": {
-                "type": "keys",
-                "live": true,
-                "source": "default",
-                "env": "PEARTUBE_REPLICATE",
-                "envSet": false,
-                "value": []
-              },
-              "replicateFreeGb": {
-                "type": "number",
-                "live": true,
-                "source": "default",
-                "env": "PEARTUBE_REPLICATE_FREE_GB",
-                "envSet": false,
-                "value": 20
-              },
-              "replicateMbps": {
-                "type": "number",
-                "live": true,
-                "source": "default",
-                "env": "PEARTUBE_REPLICATE_MBPS",
-                "envSet": false,
-                "value": 80
-              },
-              "cacheMaxGb": {
-                "type": "number",
-                "live": true,
-                "source": "default",
-                "env": "PEARTUBE_CACHE_MAX_GB",
-                "envSet": false,
-                "value": 0
-              },
-              "hiverelays": {
-                "type": "urls",
-                "live": false,
-                "source": "default",
-                "env": "PEARTUBE_HIVERELAYS",
-                "envSet": false,
-                "value": []
-              },
-              "hiverelayApiKey": {
-                "type": "secret",
-                "live": false,
-                "source": "default",
-                "env": "PEARTUBE_HIVERELAY_API_KEY",
-                "envSet": false,
-                "set": false,
-                "value": ""
-              },
-              "hiverelayDiscover": {
-                "type": "bool",
-                "live": false,
-                "source": "default",
-                "env": "PEARTUBE_HIVERELAY_DISCOVER",
-                "envSet": false,
-                "value": false
-              },
-              "hiverelayReplicas": {
-                "type": "number",
-                "live": false,
-                "source": "default",
-                "env": "PEARTUBE_HIVERELAY_REPLICAS",
-                "envSet": false,
-                "value": 3
-              },
-              "hiverelayUploadMbps": {
-                "type": "number",
-                "live": false,
-                "source": "default",
-                "env": "PEARTUBE_HIVERELAY_UPLOAD_MBPS",
-                "envSet": false,
-                "value": 50
-              },
-              "rechunk": {
-                "type": "bool",
-                "live": true,
-                "source": "default",
-                "env": "PEARTUBE_RECHUNK",
-                "envSet": false,
-                "value": false
-              },
-              "cinemetaUrl": {
-                "type": "url",
-                "live": true,
-                "source": "default",
-                "env": "PEARTUBE_CINEMETA_URL",
-                "envSet": false,
-                "value": "https://v3-cinemeta.strem.io"
-              }
-            },
-            "restartNeeded": [
-              "streamPort"
-            ]
-          }
+          "err": "streamPort: unknown setting"
         },
         {
           "op": "view",
           "ok": {
             "settings": {
-              "streamHost": {
-                "type": "host",
-                "live": false,
-                "source": "default",
-                "env": "PEARTUBE_STREAM_HOST",
-                "envSet": false,
-                "value": "127.0.0.1"
-              },
-              "streamPort": {
-                "type": "port",
-                "live": false,
-                "source": "file",
-                "env": "PEARTUBE_STREAM_PORT",
-                "envSet": false,
-                "value": 9000
-              },
               "lan": {
                 "type": "bool",
                 "live": true,
@@ -11018,11 +10890,11 @@
                 "envSet": false,
                 "value": 0
               },
-              "tracker": {
+              "channel": {
                 "type": "key",
                 "live": false,
                 "source": "default",
-                "env": "PEARTUBE_TRACKER",
+                "env": "PEARTUBE_CHANNEL",
                 "envSet": false,
                 "value": ""
               },
@@ -11172,16 +11044,12 @@
                 "value": "https://v3-cinemeta.strem.io"
               }
             },
-            "restartNeeded": [
-              "streamPort"
-            ]
+            "restartNeeded": []
           }
         },
         {
           "op": "snapshot",
           "ok": {
-            "streamHost": "\"127.0.0.1\"",
-            "streamPort": "9000",
             "lan": "false",
             "lanHost": "\"\"",
             "dhtPort": "0",
@@ -11190,7 +11058,7 @@
             "privateRouting": "false",
             "privateGuard": "false",
             "privateGuardPort": "0",
-            "tracker": "\"\"",
+            "channel": "\"\"",
             "allowedPeers": "[]",
             "publishChannel": "true",
             "directory": "false",
@@ -11220,22 +11088,6 @@
           "op": "view",
           "ok": {
             "settings": {
-              "streamHost": {
-                "type": "host",
-                "live": false,
-                "source": "default",
-                "env": "PEARTUBE_STREAM_HOST",
-                "envSet": false,
-                "value": "127.0.0.1"
-              },
-              "streamPort": {
-                "type": "port",
-                "live": false,
-                "source": "file",
-                "env": "PEARTUBE_STREAM_PORT",
-                "envSet": false,
-                "value": 9000
-              },
               "lan": {
                 "type": "bool",
                 "live": true,
@@ -11300,11 +11152,11 @@
                 "envSet": false,
                 "value": 0
               },
-              "tracker": {
+              "channel": {
                 "type": "key",
                 "live": false,
                 "source": "default",
-                "env": "PEARTUBE_TRACKER",
+                "env": "PEARTUBE_CHANNEL",
                 "envSet": false,
                 "value": ""
               },
@@ -11455,13 +11307,11 @@
               }
             },
             "restartNeeded": [
-              "streamHost",
-              "streamPort",
               "dhtPort",
               "bootstrap",
               "relayThrough",
               "privateRouting",
-              "tracker",
+              "channel",
               "publishChannel",
               "hiverelays",
               "hiverelayApiKey",
@@ -11482,22 +11332,6 @@
               "replicateFreeGb"
             ],
             "settings": {
-              "streamHost": {
-                "type": "host",
-                "live": false,
-                "source": "default",
-                "env": "PEARTUBE_STREAM_HOST",
-                "envSet": false,
-                "value": "127.0.0.1"
-              },
-              "streamPort": {
-                "type": "port",
-                "live": false,
-                "source": "file",
-                "env": "PEARTUBE_STREAM_PORT",
-                "envSet": false,
-                "value": 9000
-              },
               "lan": {
                 "type": "bool",
                 "live": true,
@@ -11562,11 +11396,11 @@
                 "envSet": false,
                 "value": 0
               },
-              "tracker": {
+              "channel": {
                 "type": "key",
                 "live": false,
                 "source": "default",
-                "env": "PEARTUBE_TRACKER",
+                "env": "PEARTUBE_CHANNEL",
                 "envSet": false,
                 "value": ""
               },
@@ -11717,13 +11551,11 @@
               }
             },
             "restartNeeded": [
-              "streamHost",
-              "streamPort",
               "dhtPort",
               "bootstrap",
               "relayThrough",
               "privateRouting",
-              "tracker",
+              "channel",
               "publishChannel",
               "hiverelays",
               "hiverelayApiKey",
@@ -11737,22 +11569,6 @@
           "op": "view",
           "ok": {
             "settings": {
-              "streamHost": {
-                "type": "host",
-                "live": false,
-                "source": "default",
-                "env": "PEARTUBE_STREAM_HOST",
-                "envSet": false,
-                "value": "127.0.0.1"
-              },
-              "streamPort": {
-                "type": "port",
-                "live": false,
-                "source": "file",
-                "env": "PEARTUBE_STREAM_PORT",
-                "envSet": false,
-                "value": 9000
-              },
               "lan": {
                 "type": "bool",
                 "live": true,
@@ -11817,11 +11633,11 @@
                 "envSet": false,
                 "value": 0
               },
-              "tracker": {
+              "channel": {
                 "type": "key",
                 "live": false,
                 "source": "default",
-                "env": "PEARTUBE_TRACKER",
+                "env": "PEARTUBE_CHANNEL",
                 "envSet": false,
                 "value": ""
               },
@@ -11972,13 +11788,11 @@
               }
             },
             "restartNeeded": [
-              "streamHost",
-              "streamPort",
               "dhtPort",
               "bootstrap",
               "relayThrough",
               "privateRouting",
-              "tracker",
+              "channel",
               "publishChannel",
               "hiverelays",
               "hiverelayApiKey",
@@ -11989,25 +11803,9 @@
           }
         }
       ],
-      "finalFile": "{\n  \"streamPort\": 9000,\n  \"lan\": false,\n  \"replicateFreeGb\": 30\n}",
+      "finalFile": "{\n  \"lan\": false,\n  \"replicateFreeGb\": 30\n}",
       "reloadedView": {
         "settings": {
-          "streamHost": {
-            "type": "host",
-            "live": false,
-            "source": "default",
-            "env": "PEARTUBE_STREAM_HOST",
-            "envSet": false,
-            "value": "127.0.0.1"
-          },
-          "streamPort": {
-            "type": "port",
-            "live": false,
-            "source": "file",
-            "env": "PEARTUBE_STREAM_PORT",
-            "envSet": false,
-            "value": 9000
-          },
           "lan": {
             "type": "bool",
             "live": true,
@@ -12072,11 +11870,11 @@
             "envSet": false,
             "value": 0
           },
-          "tracker": {
+          "channel": {
             "type": "key",
             "live": false,
             "source": "default",
-            "env": "PEARTUBE_TRACKER",
+            "env": "PEARTUBE_CHANNEL",
             "envSet": false,
             "value": ""
           },
@@ -12237,29 +12035,13 @@
         {
           "op": "update",
           "patch": {
-            "streamPort": 9000
+            "dhtPort": 9000
           },
           "ok": {
             "changed": [
-              "streamPort"
+              "dhtPort"
             ],
             "settings": {
-              "streamHost": {
-                "type": "host",
-                "live": false,
-                "source": "default",
-                "env": "PEARTUBE_STREAM_HOST",
-                "envSet": false,
-                "value": "127.0.0.1"
-              },
-              "streamPort": {
-                "type": "port",
-                "live": false,
-                "source": "file",
-                "env": "PEARTUBE_STREAM_PORT",
-                "envSet": false,
-                "value": 9000
-              },
               "lan": {
                 "type": "bool",
                 "live": true,
@@ -12279,10 +12061,10 @@
               "dhtPort": {
                 "type": "port",
                 "live": false,
-                "source": "default",
+                "source": "file",
                 "env": "PEARTUBE_DHT_PORT",
                 "envSet": false,
-                "value": 0
+                "value": 9000
               },
               "bootstrap": {
                 "type": "hosts",
@@ -12324,11 +12106,11 @@
                 "envSet": false,
                 "value": 0
               },
-              "tracker": {
+              "channel": {
                 "type": "key",
                 "live": false,
                 "source": "default",
-                "env": "PEARTUBE_TRACKER",
+                "env": "PEARTUBE_CHANNEL",
                 "envSet": false,
                 "value": ""
               },
@@ -12479,24 +12261,22 @@
               }
             },
             "restartNeeded": [
-              "streamPort"
+              "dhtPort"
             ]
           }
         },
         {
           "op": "snapshot",
           "ok": {
-            "streamHost": "\"127.0.0.1\"",
-            "streamPort": "9000",
             "lan": "false",
             "lanHost": "\"\"",
-            "dhtPort": "0",
+            "dhtPort": "9000",
             "bootstrap": "[]",
             "relayThrough": "[]",
             "privateRouting": "false",
             "privateGuard": "false",
             "privateGuardPort": "0",
-            "tracker": "\"\"",
+            "channel": "\"\"",
             "allowedPeers": "[]",
             "publishChannel": "true",
             "directory": "false",
@@ -12520,7 +12300,7 @@
         {
           "op": "markApplied",
           "snapshot": {
-            "streamPort": "\"9000\""
+            "dhtPort": "\"9000\""
           },
           "ok": null
         },
@@ -12528,22 +12308,6 @@
           "op": "view",
           "ok": {
             "settings": {
-              "streamHost": {
-                "type": "host",
-                "live": false,
-                "source": "default",
-                "env": "PEARTUBE_STREAM_HOST",
-                "envSet": false,
-                "value": "127.0.0.1"
-              },
-              "streamPort": {
-                "type": "port",
-                "live": false,
-                "source": "file",
-                "env": "PEARTUBE_STREAM_PORT",
-                "envSet": false,
-                "value": 9000
-              },
               "lan": {
                 "type": "bool",
                 "live": true,
@@ -12563,10 +12327,10 @@
               "dhtPort": {
                 "type": "port",
                 "live": false,
-                "source": "default",
+                "source": "file",
                 "env": "PEARTUBE_DHT_PORT",
                 "envSet": false,
-                "value": 0
+                "value": 9000
               },
               "bootstrap": {
                 "type": "hosts",
@@ -12608,11 +12372,11 @@
                 "envSet": false,
                 "value": 0
               },
-              "tracker": {
+              "channel": {
                 "type": "key",
                 "live": false,
                 "source": "default",
-                "env": "PEARTUBE_TRACKER",
+                "env": "PEARTUBE_CHANNEL",
                 "envSet": false,
                 "value": ""
               },
@@ -12763,13 +12527,11 @@
               }
             },
             "restartNeeded": [
-              "streamHost",
-              "streamPort",
               "dhtPort",
               "bootstrap",
               "relayThrough",
               "privateRouting",
-              "tracker",
+              "channel",
               "publishChannel",
               "hiverelays",
               "hiverelayApiKey",
@@ -12780,25 +12542,9 @@
           }
         }
       ],
-      "finalFile": "{\n  \"streamPort\": 9000\n}",
+      "finalFile": "{\n  \"dhtPort\": 9000\n}",
       "reloadedView": {
         "settings": {
-          "streamHost": {
-            "type": "host",
-            "live": false,
-            "source": "default",
-            "env": "PEARTUBE_STREAM_HOST",
-            "envSet": false,
-            "value": "127.0.0.1"
-          },
-          "streamPort": {
-            "type": "port",
-            "live": false,
-            "source": "file",
-            "env": "PEARTUBE_STREAM_PORT",
-            "envSet": false,
-            "value": 9000
-          },
           "lan": {
             "type": "bool",
             "live": true,
@@ -12818,10 +12564,10 @@
           "dhtPort": {
             "type": "port",
             "live": false,
-            "source": "default",
+            "source": "file",
             "env": "PEARTUBE_DHT_PORT",
             "envSet": false,
-            "value": 0
+            "value": 9000
           },
           "bootstrap": {
             "type": "hosts",
@@ -12863,11 +12609,11 @@
             "envSet": false,
             "value": 0
           },
-          "tracker": {
+          "channel": {
             "type": "key",
             "live": false,
             "source": "default",
-            "env": "PEARTUBE_TRACKER",
+            "env": "PEARTUBE_CHANNEL",
             "envSet": false,
             "value": ""
           },
@@ -13035,22 +12781,6 @@
               "feeds"
             ],
             "settings": {
-              "streamHost": {
-                "type": "host",
-                "live": false,
-                "source": "default",
-                "env": "PEARTUBE_STREAM_HOST",
-                "envSet": false,
-                "value": "127.0.0.1"
-              },
-              "streamPort": {
-                "type": "port",
-                "live": false,
-                "source": "default",
-                "env": "PEARTUBE_STREAM_PORT",
-                "envSet": false,
-                "value": 8175
-              },
               "lan": {
                 "type": "bool",
                 "live": true,
@@ -13115,11 +12845,11 @@
                 "envSet": false,
                 "value": 0
               },
-              "tracker": {
+              "channel": {
                 "type": "key",
                 "live": false,
                 "source": "default",
-                "env": "PEARTUBE_TRACKER",
+                "env": "PEARTUBE_CHANNEL",
                 "envSet": false,
                 "value": ""
               },
@@ -13276,22 +13006,6 @@
           "op": "view",
           "ok": {
             "settings": {
-              "streamHost": {
-                "type": "host",
-                "live": false,
-                "source": "default",
-                "env": "PEARTUBE_STREAM_HOST",
-                "envSet": false,
-                "value": "127.0.0.1"
-              },
-              "streamPort": {
-                "type": "port",
-                "live": false,
-                "source": "default",
-                "env": "PEARTUBE_STREAM_PORT",
-                "envSet": false,
-                "value": 8175
-              },
               "lan": {
                 "type": "bool",
                 "live": true,
@@ -13356,11 +13070,11 @@
                 "envSet": false,
                 "value": 0
               },
-              "tracker": {
+              "channel": {
                 "type": "key",
                 "live": false,
                 "source": "default",
-                "env": "PEARTUBE_TRACKER",
+                "env": "PEARTUBE_CHANNEL",
                 "envSet": false,
                 "value": ""
               },
@@ -13517,22 +13231,6 @@
       "finalFile": "{}",
       "reloadedView": {
         "settings": {
-          "streamHost": {
-            "type": "host",
-            "live": false,
-            "source": "default",
-            "env": "PEARTUBE_STREAM_HOST",
-            "envSet": false,
-            "value": "127.0.0.1"
-          },
-          "streamPort": {
-            "type": "port",
-            "live": false,
-            "source": "default",
-            "env": "PEARTUBE_STREAM_PORT",
-            "envSet": false,
-            "value": 8175
-          },
           "lan": {
             "type": "bool",
             "live": true,
@@ -13597,11 +13295,11 @@
             "envSet": false,
             "value": 0
           },
-          "tracker": {
+          "channel": {
             "type": "key",
             "live": false,
             "source": "default",
-            "env": "PEARTUBE_TRACKER",
+            "env": "PEARTUBE_CHANNEL",
             "envSet": false,
             "value": ""
           },
@@ -13774,22 +13472,6 @@
               "acquireConcurrency"
             ],
             "settings": {
-              "streamHost": {
-                "type": "host",
-                "live": false,
-                "source": "default",
-                "env": "PEARTUBE_STREAM_HOST",
-                "envSet": false,
-                "value": "127.0.0.1"
-              },
-              "streamPort": {
-                "type": "port",
-                "live": false,
-                "source": "default",
-                "env": "PEARTUBE_STREAM_PORT",
-                "envSet": false,
-                "value": 8175
-              },
               "lan": {
                 "type": "bool",
                 "live": true,
@@ -13854,11 +13536,11 @@
                 "envSet": false,
                 "value": 0
               },
-              "tracker": {
+              "channel": {
                 "type": "key",
                 "live": false,
                 "source": "default",
-                "env": "PEARTUBE_TRACKER",
+                "env": "PEARTUBE_CHANNEL",
                 "envSet": false,
                 "value": ""
               },
@@ -14015,22 +13697,6 @@
           "op": "view",
           "ok": {
             "settings": {
-              "streamHost": {
-                "type": "host",
-                "live": false,
-                "source": "default",
-                "env": "PEARTUBE_STREAM_HOST",
-                "envSet": false,
-                "value": "127.0.0.1"
-              },
-              "streamPort": {
-                "type": "port",
-                "live": false,
-                "source": "default",
-                "env": "PEARTUBE_STREAM_PORT",
-                "envSet": false,
-                "value": 8175
-              },
               "lan": {
                 "type": "bool",
                 "live": true,
@@ -14095,11 +13761,11 @@
                 "envSet": false,
                 "value": 0
               },
-              "tracker": {
+              "channel": {
                 "type": "key",
                 "live": false,
                 "source": "default",
-                "env": "PEARTUBE_TRACKER",
+                "env": "PEARTUBE_CHANNEL",
                 "envSet": false,
                 "value": ""
               },
@@ -14256,22 +13922,6 @@
       "finalFile": "{\n  \"replicateMbps\": 9000.5,\n  \"cacheMaxGb\": 12,\n  \"hiverelayReplicas\": 3,\n  \"acquireConcurrency\": 8\n}",
       "reloadedView": {
         "settings": {
-          "streamHost": {
-            "type": "host",
-            "live": false,
-            "source": "default",
-            "env": "PEARTUBE_STREAM_HOST",
-            "envSet": false,
-            "value": "127.0.0.1"
-          },
-          "streamPort": {
-            "type": "port",
-            "live": false,
-            "source": "default",
-            "env": "PEARTUBE_STREAM_PORT",
-            "envSet": false,
-            "value": 8175
-          },
           "lan": {
             "type": "bool",
             "live": true,
@@ -14336,11 +13986,11 @@
             "envSet": false,
             "value": 0
           },
-          "tracker": {
+          "channel": {
             "type": "key",
             "live": false,
             "source": "default",
-            "env": "PEARTUBE_TRACKER",
+            "env": "PEARTUBE_CHANNEL",
             "envSet": false,
             "value": ""
           },
@@ -14501,8 +14151,6 @@
         {
           "op": "update",
           "patch": {
-            "streamHost": "10.0.0.5",
-            "streamPort": 9000,
             "lan": true,
             "lanHost": "peer.local",
             "dhtPort": 49737,
@@ -14516,7 +14164,7 @@
             "privateRouting": true,
             "privateGuard": true,
             "privateGuardPort": 49738,
-            "tracker": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
+            "channel": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
             "allowedPeers": [
               "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
               "0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF"
@@ -14547,8 +14195,6 @@
           },
           "ok": {
             "changed": [
-              "streamHost",
-              "streamPort",
               "lan",
               "lanHost",
               "dhtPort",
@@ -14557,7 +14203,7 @@
               "privateRouting",
               "privateGuard",
               "privateGuardPort",
-              "tracker",
+              "channel",
               "allowedPeers",
               "publishChannel",
               "directory",
@@ -14578,22 +14224,6 @@
               "cinemetaUrl"
             ],
             "settings": {
-              "streamHost": {
-                "type": "host",
-                "live": false,
-                "source": "file",
-                "env": "PEARTUBE_STREAM_HOST",
-                "envSet": false,
-                "value": "10.0.0.5"
-              },
-              "streamPort": {
-                "type": "port",
-                "live": false,
-                "source": "file",
-                "env": "PEARTUBE_STREAM_PORT",
-                "envSet": false,
-                "value": 9000
-              },
               "lan": {
                 "type": "bool",
                 "live": true,
@@ -14663,11 +14293,11 @@
                 "envSet": false,
                 "value": 49738
               },
-              "tracker": {
+              "channel": {
                 "type": "key",
                 "live": false,
                 "source": "file",
-                "env": "PEARTUBE_TRACKER",
+                "env": "PEARTUBE_CHANNEL",
                 "envSet": false,
                 "value": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
               },
@@ -14833,13 +14463,11 @@
               }
             },
             "restartNeeded": [
-              "streamHost",
-              "streamPort",
               "dhtPort",
               "bootstrap",
               "relayThrough",
               "privateRouting",
-              "tracker",
+              "channel",
               "publishChannel",
               "hiverelays",
               "hiverelayApiKey",
@@ -14853,22 +14481,6 @@
           "op": "view",
           "ok": {
             "settings": {
-              "streamHost": {
-                "type": "host",
-                "live": false,
-                "source": "file",
-                "env": "PEARTUBE_STREAM_HOST",
-                "envSet": false,
-                "value": "10.0.0.5"
-              },
-              "streamPort": {
-                "type": "port",
-                "live": false,
-                "source": "file",
-                "env": "PEARTUBE_STREAM_PORT",
-                "envSet": false,
-                "value": 9000
-              },
               "lan": {
                 "type": "bool",
                 "live": true,
@@ -14938,11 +14550,11 @@
                 "envSet": false,
                 "value": 49738
               },
-              "tracker": {
+              "channel": {
                 "type": "key",
                 "live": false,
                 "source": "file",
-                "env": "PEARTUBE_TRACKER",
+                "env": "PEARTUBE_CHANNEL",
                 "envSet": false,
                 "value": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
               },
@@ -15108,13 +14720,11 @@
               }
             },
             "restartNeeded": [
-              "streamHost",
-              "streamPort",
               "dhtPort",
               "bootstrap",
               "relayThrough",
               "privateRouting",
-              "tracker",
+              "channel",
               "publishChannel",
               "hiverelays",
               "hiverelayApiKey",
@@ -15127,8 +14737,6 @@
         {
           "op": "snapshot",
           "ok": {
-            "streamHost": "\"10.0.0.5\"",
-            "streamPort": "9000",
             "lan": "true",
             "lanHost": "\"peer.local\"",
             "dhtPort": "49737",
@@ -15137,7 +14745,7 @@
             "privateRouting": "true",
             "privateGuard": "true",
             "privateGuardPort": "49738",
-            "tracker": "\"fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210\"",
+            "channel": "\"fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210\"",
             "allowedPeers": "[\"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\",\"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\"]",
             "publishChannel": "false",
             "directory": "true",
@@ -15159,25 +14767,9 @@
           }
         }
       ],
-      "finalFile": "{\n  \"streamHost\": \"10.0.0.5\",\n  \"streamPort\": 9000,\n  \"lan\": true,\n  \"lanHost\": \"peer.local\",\n  \"dhtPort\": 49737,\n  \"bootstrap\": [\n    \"127.0.0.1:49737\",\n    \"[::1]:8080\"\n  ],\n  \"relayThrough\": [\n    \"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\"\n  ],\n  \"privateRouting\": true,\n  \"privateGuard\": true,\n  \"privateGuardPort\": 49738,\n  \"tracker\": \"fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210\",\n  \"allowedPeers\": [\n    \"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\",\n    \"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\"\n  ],\n  \"publishChannel\": false,\n  \"directory\": true,\n  \"acquireConcurrency\": 16,\n  \"watchDir\": \"/imports/watched\",\n  \"feeds\": [\n    \"https://feed.example/api?x=1\"\n  ],\n  \"replicate\": true,\n  \"replicateSources\": [\n    \"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\"\n  ],\n  \"replicateFreeGb\": 50.5,\n  \"replicateMbps\": 120,\n  \"cacheMaxGb\": 200,\n  \"hiverelays\": [\n    \"https://relay.example/v1=SECRET\"\n  ],\n  \"hiverelayApiKey\": \"abc\",\n  \"hiverelayDiscover\": true,\n  \"hiverelayReplicas\": 5,\n  \"hiverelayUploadMbps\": 100,\n  \"rechunk\": true,\n  \"cinemetaUrl\": \"https://meta.example\"\n}",
+      "finalFile": "{\n  \"lan\": true,\n  \"lanHost\": \"peer.local\",\n  \"dhtPort\": 49737,\n  \"bootstrap\": [\n    \"127.0.0.1:49737\",\n    \"[::1]:8080\"\n  ],\n  \"relayThrough\": [\n    \"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\"\n  ],\n  \"privateRouting\": true,\n  \"privateGuard\": true,\n  \"privateGuardPort\": 49738,\n  \"channel\": \"fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210\",\n  \"allowedPeers\": [\n    \"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\",\n    \"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\"\n  ],\n  \"publishChannel\": false,\n  \"directory\": true,\n  \"acquireConcurrency\": 16,\n  \"watchDir\": \"/imports/watched\",\n  \"feeds\": [\n    \"https://feed.example/api?x=1\"\n  ],\n  \"replicate\": true,\n  \"replicateSources\": [\n    \"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\"\n  ],\n  \"replicateFreeGb\": 50.5,\n  \"replicateMbps\": 120,\n  \"cacheMaxGb\": 200,\n  \"hiverelays\": [\n    \"https://relay.example/v1=SECRET\"\n  ],\n  \"hiverelayApiKey\": \"abc\",\n  \"hiverelayDiscover\": true,\n  \"hiverelayReplicas\": 5,\n  \"hiverelayUploadMbps\": 100,\n  \"rechunk\": true,\n  \"cinemetaUrl\": \"https://meta.example\"\n}",
       "reloadedView": {
         "settings": {
-          "streamHost": {
-            "type": "host",
-            "live": false,
-            "source": "file",
-            "env": "PEARTUBE_STREAM_HOST",
-            "envSet": false,
-            "value": "10.0.0.5"
-          },
-          "streamPort": {
-            "type": "port",
-            "live": false,
-            "source": "file",
-            "env": "PEARTUBE_STREAM_PORT",
-            "envSet": false,
-            "value": 9000
-          },
           "lan": {
             "type": "bool",
             "live": true,
@@ -15247,11 +14839,11 @@
             "envSet": false,
             "value": 49738
           },
-          "tracker": {
+          "channel": {
             "type": "key",
             "live": false,
             "source": "file",
-            "env": "PEARTUBE_TRACKER",
+            "env": "PEARTUBE_CHANNEL",
             "envSet": false,
             "value": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
           },
@@ -15427,35 +15019,19 @@
         {
           "op": "update",
           "patch": {
-            "streamPort": 9010,
-            "tracker": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "dhtPort": 9010,
+            "channel": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
             "feeds": [
               "https://feed.example/a"
             ]
           },
           "ok": {
             "changed": [
-              "streamPort",
-              "tracker",
+              "dhtPort",
+              "channel",
               "feeds"
             ],
             "settings": {
-              "streamHost": {
-                "type": "host",
-                "live": false,
-                "source": "default",
-                "env": "PEARTUBE_STREAM_HOST",
-                "envSet": false,
-                "value": "127.0.0.1"
-              },
-              "streamPort": {
-                "type": "port",
-                "live": false,
-                "source": "file",
-                "env": "PEARTUBE_STREAM_PORT",
-                "envSet": false,
-                "value": 9010
-              },
               "lan": {
                 "type": "bool",
                 "live": true,
@@ -15475,10 +15051,10 @@
               "dhtPort": {
                 "type": "port",
                 "live": false,
-                "source": "default",
+                "source": "file",
                 "env": "PEARTUBE_DHT_PORT",
                 "envSet": false,
-                "value": 0
+                "value": 9010
               },
               "bootstrap": {
                 "type": "hosts",
@@ -15520,11 +15096,11 @@
                 "envSet": false,
                 "value": 0
               },
-              "tracker": {
+              "channel": {
                 "type": "key",
                 "live": false,
                 "source": "file",
-                "env": "PEARTUBE_TRACKER",
+                "env": "PEARTUBE_CHANNEL",
                 "envSet": false,
                 "value": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
               },
@@ -15680,8 +15256,8 @@
               }
             },
             "restartNeeded": [
-              "streamPort",
-              "tracker"
+              "dhtPort",
+              "channel"
             ]
           }
         },
@@ -15689,22 +15265,6 @@
           "op": "view",
           "ok": {
             "settings": {
-              "streamHost": {
-                "type": "host",
-                "live": false,
-                "source": "default",
-                "env": "PEARTUBE_STREAM_HOST",
-                "envSet": false,
-                "value": "127.0.0.1"
-              },
-              "streamPort": {
-                "type": "port",
-                "live": false,
-                "source": "file",
-                "env": "PEARTUBE_STREAM_PORT",
-                "envSet": false,
-                "value": 9010
-              },
               "lan": {
                 "type": "bool",
                 "live": true,
@@ -15724,10 +15284,10 @@
               "dhtPort": {
                 "type": "port",
                 "live": false,
-                "source": "default",
+                "source": "file",
                 "env": "PEARTUBE_DHT_PORT",
                 "envSet": false,
-                "value": 0
+                "value": 9010
               },
               "bootstrap": {
                 "type": "hosts",
@@ -15769,11 +15329,11 @@
                 "envSet": false,
                 "value": 0
               },
-              "tracker": {
+              "channel": {
                 "type": "key",
                 "live": false,
                 "source": "file",
-                "env": "PEARTUBE_TRACKER",
+                "env": "PEARTUBE_CHANNEL",
                 "envSet": false,
                 "value": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
               },
@@ -15929,31 +15489,15 @@
               }
             },
             "restartNeeded": [
-              "streamPort",
-              "tracker"
+              "dhtPort",
+              "channel"
             ]
           }
         }
       ],
-      "finalFile": "{\n  \"streamPort\": 9010,\n  \"tracker\": \"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\",\n  \"feeds\": [\n    \"https://feed.example/a\"\n  ]\n}",
+      "finalFile": "{\n  \"dhtPort\": 9010,\n  \"channel\": \"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\",\n  \"feeds\": [\n    \"https://feed.example/a\"\n  ]\n}",
       "reloadedView": {
         "settings": {
-          "streamHost": {
-            "type": "host",
-            "live": false,
-            "source": "default",
-            "env": "PEARTUBE_STREAM_HOST",
-            "envSet": false,
-            "value": "127.0.0.1"
-          },
-          "streamPort": {
-            "type": "port",
-            "live": false,
-            "source": "file",
-            "env": "PEARTUBE_STREAM_PORT",
-            "envSet": false,
-            "value": 9010
-          },
           "lan": {
             "type": "bool",
             "live": true,
@@ -15973,10 +15517,10 @@
           "dhtPort": {
             "type": "port",
             "live": false,
-            "source": "default",
+            "source": "file",
             "env": "PEARTUBE_DHT_PORT",
             "envSet": false,
-            "value": 0
+            "value": 9010
           },
           "bootstrap": {
             "type": "hosts",
@@ -16018,11 +15562,11 @@
             "envSet": false,
             "value": 0
           },
-          "tracker": {
+          "channel": {
             "type": "key",
             "live": false,
             "source": "file",
-            "env": "PEARTUBE_TRACKER",
+            "env": "PEARTUBE_CHANNEL",
             "envSet": false,
             "value": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
           },

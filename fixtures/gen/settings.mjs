@@ -202,17 +202,16 @@ fileCase('fresh defaults', {
   steps: [
     { op: 'file' },
     { op: 'view' },
-    { op: 'get', key: 'streamPort' },
+    { op: 'get', key: 'dhtPort' },
     { op: 'get', key: 'lan' },
     { op: 'isLive', key: 'lan' },
-    { op: 'isLive', key: 'streamPort' },
+    { op: 'isLive', key: 'dhtPort' },
     { op: 'snapshot' }
   ]
 })
 
 fileCase('env fallbacks', {
   env: {
-    PEARTUBE_STREAM_PORT: '9100',
     PEARTUBE_LAN_HOST: '0',
     PEARTUBE_PRIVATE_ROUTING: '1',
     PEARTUBE_HIVERELAYS: 'https://relay.example/api,https://other.example/v1=TOKEN',
@@ -243,35 +242,35 @@ fileCase('bad env numbers read as null', {
 
 fileCase('update basics', {
   steps: [
-    { op: 'update', patch: { streamPort: 9100 } },
-    { op: 'update', patch: { lan: true, tracker: K } },
+    { op: 'update', patch: { dhtPort: 9100 } },
+    { op: 'update', patch: { lan: true, channel: K } },
     { op: 'view' },
-    { op: 'get', key: 'tracker' }
+    { op: 'get', key: 'channel' }
   ]
 })
 
 fileCase('clear falls back to env', {
-  initial: seedFile({ streamPort: 9000 }),
-  env: { PEARTUBE_STREAM_PORT: '9100' },
+  initial: seedFile({ dhtPort: 9000 }),
+  env: { PEARTUBE_DHT_PORT: '9100' },
   steps: [
-    { op: 'get', key: 'streamPort' },
-    { op: 'update', patch: { streamPort: null } },
+    { op: 'get', key: 'dhtPort' },
+    { op: 'update', patch: { dhtPort: null } },
     { op: 'view' }
   ]
 })
 
 fileCase('invalid patches', {
-  initial: seedFile({ streamPort: 9000 }),
+  initial: seedFile({ dhtPort: 9000 }),
   steps: [
     { op: 'update', patch: null },
     { op: 'update', patch: [] },
     { op: 'update', patch: { nope: 1 } },
-    { op: 'update', patch: { streamPort: 70000 } },
-    { op: 'update', patch: { streamPort: '9000' } },
+    { op: 'update', patch: { dhtPort: 70000 } },
+    { op: 'update', patch: { dhtPort: '9000' } },
     { op: 'update', patch: { dhtPort: 1.5 } },
     { op: 'update', patch: { privateGuard: 'yes' } },
-    { op: 'update', patch: { streamHost: 'bad host' } },
-    { op: 'update', patch: { tracker: 'zz' } },
+    { op: 'update', patch: { lanHost: 'bad host' } },
+    { op: 'update', patch: { channel: 'zz' } },
     { op: 'update', patch: { watchDir: 'relative/dir' } },
     { op: 'update', patch: { hiverelayApiKey: 'x'.repeat(513) } },
     { op: 'update', patch: { feeds: 'not a list' } },
@@ -282,7 +281,7 @@ fileCase('invalid patches', {
     { op: 'update', patch: { cinemetaUrl: 'ftp://meta.example' } },
     { op: 'update', patch: { acquireConcurrency: 0 } },
     { op: 'update', patch: { relayThrough: [KUP] } },
-    { op: 'update', patch: { streamPort: 9100 } },
+    { op: 'update', patch: { dhtPort: 9100 } },
     { op: 'view' }
   ]
 })
@@ -324,13 +323,24 @@ fileCase('guard port conflict', {
   ]
 })
 
-fileCase('remember tracker', {
+fileCase('remember channel', {
   steps: [
-    { op: 'remember', key: 'tracker', value: K },
+    { op: 'remember', key: 'channel', value: K },
     { op: 'view' },
-    { op: 'remember', key: 'tracker', value: K2 },
-    { op: 'get', key: 'tracker' }
+    { op: 'remember', key: 'channel', value: K2 },
+    { op: 'get', key: 'channel' }
   ]
+})
+
+// A file from before channels: `tracker` moves to `channel`; the stream address keys go.
+fileCase('pre-channel file migrates', {
+  initial: JSON.stringify({ tracker: K, streamHost: '10.0.0.5', streamPort: 8175, lan: true }),
+  steps: [{ op: 'view' }, { op: 'get', key: 'channel' }]
+})
+
+fileCase('pre-channel file keeps a saved channel', {
+  initial: JSON.stringify({ tracker: K, channel: K2, streamPort: 8175 }),
+  steps: [{ op: 'get', key: 'channel' }]
 })
 
 fileCase('snapshot and mark applied', {
@@ -347,9 +357,9 @@ fileCase('snapshot and mark applied', {
 
 fileCase('mark applied with snapshot', {
   steps: [
-    { op: 'update', patch: { streamPort: 9000 } },
+    { op: 'update', patch: { dhtPort: 9000 } },
     { op: 'snapshot' },
-    { op: 'markApplied', snapshot: { streamPort: '"9000"' } },
+    { op: 'markApplied', snapshot: { dhtPort: '"9000"' } },
     { op: 'view' }
   ]
 })
@@ -374,8 +384,6 @@ fileCase('every field', {
     {
       op: 'update',
       patch: {
-        streamHost: '10.0.0.5',
-        streamPort: 9000,
         lan: true,
         lanHost: 'peer.local',
         dhtPort: 49737,
@@ -384,7 +392,7 @@ fileCase('every field', {
         privateRouting: true,
         privateGuard: true,
         privateGuardPort: 49738,
-        tracker: K2,
+        channel: K2,
         allowedPeers: [K, KUP],
         publishChannel: false,
         directory: true,
@@ -412,7 +420,7 @@ fileCase('every field', {
 
 fileCase('reload written file', {
   steps: [
-    { op: 'update', patch: { streamPort: 9010, tracker: K, feeds: ['https://feed.example/a'] } },
+    { op: 'update', patch: { dhtPort: 9010, channel: K, feeds: ['https://feed.example/a'] } },
     { op: 'view' }
   ]
 })
