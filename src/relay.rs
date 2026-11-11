@@ -18,6 +18,9 @@ use crate::acquire::{
     AcquireOptions, Acquirer, AddJob, HyperHttp, LocalJobFiles, OsRandom, SourceSpec, UbitPages,
 };
 use crate::app_settings::{js_string, js_truthy};
+use crate::cast::adapters::NodePeer;
+use crate::cast::traits::CastPeer;
+use crate::cast::{CastController, ControllerOptions};
 use crate::http::{self, Api, ApiServer, BlobAddr, HttpError, Options};
 use crate::mirror::{ArtFeed, LocalMirrorFiles, MirrorHost, MirrorOptions};
 use crate::node::Node;
@@ -61,6 +64,10 @@ struct Inner {
     open: tokio::sync::Mutex<Option<Open>>,
     acquirer: Shared<Acquirer<CoreNode>>,
     mirror: Shared<Arc<MirrorHost<CoreNode>>>,
+    /// `state.cast`: the cast stack, open with the node (`null` between opens).
+    cast: Shared<Arc<CastController>>,
+    /// `lanHost()` as the cast stack reads it: the setting, else the detected LAN address.
+    cast_host: Arc<Mutex<Option<String>>>,
     /// `state.extraStatus`'s LAN endpoint and private-routing flag, refreshed on each open.
     extra: Arc<Mutex<Value>>,
     /// `privateGuard`: the forwarder for other peers' private routing, with the settings it runs.
@@ -105,6 +112,7 @@ impl Relay {
         let tls = read_tls(&env, &storage);
         let extra = Arc::new(Mutex::new(json!({ "lan": null, "privateRouting": false })));
         let guard: Arc<Mutex<Option<(String, PrivateGuard)>>> = Arc::new(Mutex::new(None));
+        let cast_host: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
 
         let relay = Arc::new_cyclic(|weak: &std::sync::Weak<Inner>| {
             let weak = weak.clone();
@@ -218,6 +226,8 @@ impl Relay {
                 open: tokio::sync::Mutex::new(None),
                 acquirer: Arc::new(Mutex::new(None)),
                 mirror: Arc::new(Mutex::new(None)),
+                cast: Arc::new(Mutex::new(None)),
+                cast_host: cast_host.clone(),
                 extra: extra.clone(),
                 guard: guard.clone(),
                 shutting_down: AtomicBool::new(false),
@@ -445,6 +455,38 @@ impl Relay {
             log("directory sync failed", json!({ "error": error }));
         }
 
+        // `createCastController({ storage, getNode, getLanHost, onchange })`: the sender side of a
+        // cast. It opens with the node and browses the LAN for receivers.
+        let lan_host = self.lan_host(&cfg("lanHost")).map(|host| host.to_string());
+        *self.0.cast_host.lock().unwrap() = lan_host.clone();
+        let cast = {
+            let cast = Arc::downgrade(&self.0);
+            let host = Arc::downgrade(&self.0);
+            let change = Arc::downgrade(&self.0);
+            CastController::start(ControllerOptions {
+                storage: self.0.storage.clone(),
+                get_node: Arc::new(move || {
+                    let node = cast.upgrade()?.api.node()?;
+                    Some(Arc::new(NodePeer::new(node)) as Arc<dyn CastPeer>)
+                }),
+                get_lan_host: Arc::new(move || {
+                    host.upgrade()?.cast_host.lock().unwrap().clone()
+                }),
+                mdns: true,
+                on_change: Some(Arc::new(move || {
+                    if let Some(inner) = change.upgrade() {
+                        Relay(inner).notify("cast");
+                    }
+                })),
+            })
+            .await
+            .map_err(|error| error.message)?
+        };
+        cast.set_lan_host(lan_host).await;
+        let cast = Arc::new(cast);
+        *self.0.cast.lock().unwrap() = Some(cast.clone());
+        self.0.api.set_cast(Some(Arc::new(CastRoutes(cast))));
+
         let relay = self.clone();
         let acquirer = Acquirer::new(
             node.clone(),
@@ -618,6 +660,12 @@ impl Relay {
             return;
         };
         mirror.close().await;
+        // The cast stack closes before the node it drives, as `stop()` does.
+        self.0.api.set_cast(None);
+        let cast = self.0.cast.lock().unwrap().take();
+        if let Some(cast) = cast {
+            cast.close().await;
+        }
         replication.kicker.abort();
         (replication.detach_traffic)();
         replication.traffic.stop();
@@ -709,6 +757,7 @@ impl Relay {
             kick.notify_one();
         }
         if has(&["lan", "lanHost"]) {
+            self.refresh_cast_lan().await;
             let lan = match js_truthy(&self.cfg("lan").await) {
                 true => match self.lan_host(&self.cfg("lanHost").await) {
                     Some(host) => Some(
@@ -864,23 +913,24 @@ impl Relay {
         Ok(())
     }
 
+    /// `state.cast.setLanHost(lanHost())`: the controller browses from the address LAN
+    /// receivers answer on, and a local receiver advertises it.
+    async fn refresh_cast_lan(&self) {
+        let host = self
+            .lan_host(&self.cfg("lanHost").await)
+            .map(|host| host.to_string());
+        *self.0.cast_host.lock().unwrap() = host.clone();
+        let cast = self.0.cast.lock().unwrap().clone();
+        if let Some(cast) = cast {
+            cast.set_lan_host(host).await;
+        }
+    }
+
     fn lan_host(&self, setting: &Value) -> Option<Ipv4Addr> {
         if let Some(host) = non_empty(text(setting)) {
             return host.parse().ok();
         }
-        let interfaces = if_addrs::get_if_addrs().ok()?;
-        let addresses: Vec<crate::lan::IfaceAddress<'_>> = interfaces
-            .iter()
-            .filter_map(|iface| match iface.ip() {
-                std::net::IpAddr::V4(address) => Some(crate::lan::IfaceAddress {
-                    name: iface.name.as_str(),
-                    address: std::net::IpAddr::V4(address),
-                    internal: iface.is_loopback(),
-                }),
-                std::net::IpAddr::V6(_) => None,
-            })
-            .collect();
-        crate::lan::lan_address(&addresses)
+        detect_lan_host()
     }
 
     fn ubit_config(&self) -> String {
@@ -890,6 +940,23 @@ impl Relay {
             .cloned()
             .unwrap_or_else(|| self.0.storage.join("ubit").display().to_string())
     }
+}
+
+/// `lanAddress(os.networkInterfaces())`: Wi-Fi or Ethernet, never loopback.
+fn detect_lan_host() -> Option<Ipv4Addr> {
+    let interfaces = if_addrs::get_if_addrs().ok()?;
+    let addresses: Vec<crate::lan::IfaceAddress<'_>> = interfaces
+        .iter()
+        .filter_map(|iface| match iface.ip() {
+            std::net::IpAddr::V4(address) => Some(crate::lan::IfaceAddress {
+                name: iface.name.as_str(),
+                address: std::net::IpAddr::V4(address),
+                internal: iface.is_loopback(),
+            }),
+            std::net::IpAddr::V6(_) => None,
+        })
+        .collect();
+    crate::lan::lan_address(&addresses)
 }
 
 /// `status.privateGuard`: `{ publicKey, port, ...guard.stats() }`, as the JS relay reports it.
@@ -912,6 +979,48 @@ async fn lan_status(node: &CoreNode) -> Value {
         Some(lan) => json!({ "host": lan.host, "port": lan.port }),
         None => Value::Null,
     }
+}
+
+/// `state.cast` on the API: the relay's cast controller answers every `/v1/cast/*` route while
+/// the node (and so the controller) is open.
+struct CastRoutes(Arc<CastController>);
+
+impl http::CastBridge for CastRoutes {
+    fn status(&self) -> Value {
+        self.0.status()
+    }
+
+    fn pair_receiver<'a>(&'a self, params: &'a Value) -> BoxFuture<'a, Result<Value, HttpError>> {
+        Box::pin(async move { self.0.pair_receiver(params).await.map_err(cast_http) })
+    }
+
+    fn remove_receiver(&self, id: &str) -> Value {
+        self.0.remove_receiver(id)
+    }
+
+    fn cast_play<'a>(&'a self, params: &'a Value) -> BoxFuture<'a, Result<Value, HttpError>> {
+        Box::pin(async move { self.0.cast_play(params).await.map_err(cast_http) })
+    }
+
+    fn cast_control<'a>(&'a self, params: &'a Value) -> BoxFuture<'a, Result<Value, HttpError>> {
+        Box::pin(async move { self.0.cast_control(params).await.map_err(cast_http) })
+    }
+
+    fn cast_stop<'a>(&'a self, params: &'a Value) -> BoxFuture<'a, Result<Value, HttpError>> {
+        Box::pin(async move {
+            // `castStop({ stopPlayback = true } = {})`
+            let stop = params.get("stopPlayback").map(js_truthy).unwrap_or(true);
+            self.0.cast_stop(stop).await.map_err(cast_http)
+        })
+    }
+}
+
+/// A cast failure with the status the app's handler answers with; a channel error is a 400.
+fn cast_http(error: crate::cast::CastError) -> HttpError {
+    HttpError::new(
+        if error.status == 0 { 400 } else { error.status },
+        error.message,
+    )
 }
 
 /// `state.acquirer` behind the API; 404 while the node reopens, as on a read-only peer.
@@ -1069,13 +1178,11 @@ impl StandaloneGuard {
 pub async fn start_standalone_guard(
     env: &HashMap<String, String>,
 ) -> Result<StandaloneGuard, String> {
-    if let Some(flag) = CONTENT_FLAGS
-        .iter()
-        .find(|flag| present(env, flag))
-    {
-        return Err(format!(
-            "PEARTUBE_PRIVATE_RELAY runs a standalone Corestore-free guard forwarder and cannot be combined with channel or content flags; run peartube-private-relay separately ({flag})"
-        ));
+    if CONTENT_FLAGS.iter().any(|flag| present(env, flag)) {
+        return Err(
+            "PEARTUBE_PRIVATE_RELAY runs a standalone Corestore-free guard forwarder and cannot be combined with channel or content flags; run peartube-private-relay separately"
+                .to_owned(),
+        );
     }
     let bootstrap = env
         .get("PEARTUBE_BOOTSTRAP")
@@ -1142,40 +1249,54 @@ pub async fn start_standalone_guard(
 
 /// `bin/relay.js`'s guard-only branch: run the forwarder until a signal or the parent leaves.
 pub async fn guard_only(env: HashMap<String, String>) -> Result<(), String> {
+    // Read before the first await: a relay that dies while the guard is still opening would
+    // otherwise be recorded as the pid the guard was reparented to, and the watch never fires.
+    let follow = present(&env, "PEARTUBE_GUARD_FOLLOW_PARENT");
+    let pid = if follow { parent_pid() } else { None };
     let guard = start_standalone_guard(&env).await?;
     log("private-guard ready", guard.ready());
     let every = guard.heartbeat_interval();
-    let follow = guard.follow_parent;
     let heartbeat = {
         let guard = guard.guard.clone();
-        let pid = if follow { parent_pid() } else { None };
         tokio::spawn(async move {
             let mut ticker = tokio::time::interval(every);
             ticker.tick().await;
             loop {
-                tokio::select! {
-                    _ = ticker.tick() => {
-                        log("private-guard heartbeat", heartbeat_line(&guard));
-                    }
-                    // Leave with the relay that started us, even if it died without saying so.
-                    _ = parent_gone(pid), if follow => return,
-                }
+                ticker.tick().await;
+                log("private-guard heartbeat", heartbeat_line(&guard));
             }
         })
     };
-    wait_for_signal().await;
+    // `private-relay.js`'s parent watch: leave with the relay that started us, even if it died
+    // without saying so. Its `shutdown()` closes the guard, so the wait ends here, not only the
+    // heartbeat above.
+    tokio::select! {
+        _ = wait_for_signal() => {}
+        _ = parent_gone(pid), if follow => {}
+    }
     heartbeat.abort();
-    guard.close().await;
+    // JS clears the heartbeat and starts a 2 s kill timer before awaiting `guard.close()`: a close
+    // that waits on the network must not keep a guard whose relay is gone.
+    if tokio::time::timeout(std::time::Duration::from_secs(2), guard.close())
+        .await
+        .is_err()
+    {
+        log("private-guard close timed out", json!({}));
+    }
     Ok(())
 }
 
-/// `{"publicKey", ...guard.stats()}`.
+/// `{"publicKey", ...guard.stats()}`, the whole heartbeat line `private-relay.js` prints.
 fn heartbeat_line(guard: &PrivateGuard) -> Value {
-    let mut line = json!({ "publicKey": to_hex(&guard.public_key()) });
-    if let (Some(fields), Value::Object(stats)) = (line.as_object_mut(), guard_status(guard)) {
-        fields.extend(stats);
-    }
-    line
+    let stats = guard.stats();
+    json!({
+        "publicKey": to_hex(&guard.public_key()),
+        "registeredRoutes": stats.registered_routes,
+        "activeCircuits": stats.active_circuits,
+        "rendezvousTopics": stats.rendezvous_topics,
+        "putMutableCount": stats.put_mutable_count,
+        "rvRegisterCount": stats.rv_register_count,
+    })
 }
 
 /// `process.ppid`, as `private-relay.js` captures it at start.

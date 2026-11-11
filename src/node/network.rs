@@ -685,6 +685,8 @@ pub struct Network {
     /// A relay's job: announce the complete copies this node caches, not only what it published.
     announce_cache: bool,
     overlay_topics: Mutex<HashMap<String, [u8; 32]>>,
+    /// LAN-only topics (`joinLanTopic`): never announced on the DHT, joined by mDNS peers.
+    lan_topics: Mutex<HashMap<String, [u8; 32]>>,
     allowed: Mutex<Option<HashSet<String>>>,
     lan: Mutex<Option<LanState>>,
     traffic: Mutex<[Bucket; 3]>,
@@ -719,6 +721,36 @@ impl Network {
         announce_cache: bool,
         closing: Arc<AtomicBool>,
     ) -> Result<Arc<Self>, std::io::Error> {
+        Self::open_with_key(
+            store,
+            bootstrap,
+            base,
+            port,
+            relay_through,
+            allowed_peers,
+            private_routing,
+            announce_cache,
+            closing,
+            None,
+        )
+        .await
+    }
+
+    /// `createNode({ keyPair })`: the swarm runs under a saved key, so a TV receiver keeps the key
+    /// senders paired with. `keyPair` is `{ publicKey, secretKey }` as hex, or the 64-hex seed.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn open_with_key(
+        store: Corestore,
+        bootstrap: Vec<String>,
+        base: Option<String>,
+        port: u16,
+        relay_through: Option<[u8; 32]>,
+        allowed_peers: Option<Vec<String>>,
+        private_routing: bool,
+        announce_cache: bool,
+        closing: Arc<AtomicBool>,
+        key_pair: Option<peeroxide::KeyPair>,
+    ) -> Result<Arc<Self>, std::io::Error> {
         // Resolve before choosing the bind: wildcard Noise addresses omit loopback interfaces.
         let bootstrap = resolve_bind_bootstrap(resolve_bootstrap(bootstrap)).await;
         let host = base.unwrap_or_else(|| {
@@ -735,6 +767,9 @@ impl Network {
         config.eager = true;
         config.relay_through = relay_through;
         config.dht = HyperDhtConfig::default();
+        if let Some(key_pair) = key_pair {
+            config.key_pair = Some(key_pair);
+        }
         let mut rpc = DhtConfig::default();
         rpc.bootstrap = bootstrap;
         rpc.port = port;
@@ -774,6 +809,7 @@ impl Network {
             content_index: Mutex::new(None),
             announce_cache,
             overlay_topics: Mutex::new(HashMap::new()),
+            lan_topics: Mutex::new(HashMap::new()),
             allowed: Mutex::new(allowed),
             lan: Mutex::new(None),
             traffic: Mutex::new([Bucket::default(); 3]),
@@ -1104,6 +1140,20 @@ impl Network {
         });
     }
 
+    /// `joinLanTopic(id, topic)`: a topic only this LAN hears. The peers on it connect to each
+    /// other here, and it is never announced on the DHT.
+    pub fn join_lan_topic(&self, id: &str, topic: [u8; 32]) {
+        if lock(&self.lan_topics)
+            .insert(id.to_owned(), topic)
+            .is_some()
+        {
+            return;
+        }
+        if let Some(lan) = lock(&self.lan).as_ref().map(|state| state.binding.clone()) {
+            lan.join(topic);
+        }
+    }
+
     pub async fn leave_overlay_topic(&self, id: &str) {
         let key = lock(&self.overlay_topics).remove(id);
         if !self.can_announce() {
@@ -1364,6 +1414,9 @@ impl Network {
         }
         for key in lock(&self.overlay_topics).values() {
             binding.join(hypercore::crypto::discovery_key(key));
+        }
+        for topic in lock(&self.lan_topics).values() {
+            binding.join(*topic);
         }
         let weak = self.weak.clone();
         let closer = binding.on_connection(Arc::new(move |connection| {

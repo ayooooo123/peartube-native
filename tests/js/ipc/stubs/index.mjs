@@ -23,6 +23,8 @@ const node = {
     async suspend () {},
     async resume () {}
   },
+  suspend: async () => {},
+  resume: async () => {},
   status: () => clone(fixtures.status),
   privateRouting: false,
   setCacheMaxBytes: bytes => bytes,

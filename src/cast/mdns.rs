@@ -1,9 +1,9 @@
 //! mDNS advertising and discovery for `peartube-cast`, ported from `refreshMdns` and
 //! `refreshBrowse` in `src/cast.js`.
 //!
-//! The app reaches mDNS through the platform's bonjour adapter; the port binds one `mdns-sd`
-//! daemon per role, which is enough for a LAN TV (see `docs/port-notes-lan.md` for the LAN
-//! HyperDHT half, whose records this module does not touch).
+//! A receiver advertises the node's LAN endpoint: `v=2` marks a build that answers the cast
+//! channel, and `lp` is the LAN DHT port a sender dials or joins. The port in the service record
+//! is that same LAN DHT port; there is no receiver HTTP port on the LAN any more.
 
 use mdns_sd::RecvTimeoutError;
 use std::net::IpAddr;
@@ -14,6 +14,7 @@ use mdns_sd::{ServiceDaemon, ServiceEvent, ServiceInfo};
 
 use super::CAST_SERVICE_TYPE;
 use super::records::DiscoveredReceiver;
+use super::traits::LanAddress;
 
 /// `_peartube-cast._tcp.local.`
 pub fn service_type() -> String {
@@ -60,12 +61,12 @@ pub fn advertisement_txt(
     name: &str,
     host: Option<&str>,
     public_key: &str,
-    p2p: bool,
+    lan_port: u16,
     open_auth: bool,
 ) -> Vec<(String, String)> {
     vec![
         ("proto".to_owned(), CAST_SERVICE_TYPE.to_owned()),
-        ("v".to_owned(), "1".to_owned()),
+        ("v".to_owned(), "2".to_owned()),
         ("id".to_owned(), device_id.to_owned()),
         ("name".to_owned(), name.to_owned()),
         (
@@ -75,7 +76,7 @@ pub fn advertisement_txt(
                 .to_owned(),
         ),
         ("pk".to_owned(), public_key.to_owned()),
-        ("p2p".to_owned(), if p2p { "1" } else { "0" }.to_owned()),
+        ("lp".to_owned(), lan_port.to_string()),
         (
             "auth".to_owned(),
             if open_auth { "open" } else { "code" }.to_owned(),
@@ -123,7 +124,7 @@ pub fn advertise(info: AdvertiseInfo) -> Result<AdvertiseHandle, String> {
 /// One resolved service, as the browse sink sees it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BrowsedService {
-    /// Instance name as advertised.
+    /// Instance name as advertised (`<name> (<deviceId[0..6]>)`).
     pub name: String,
     /// Full mDNS name, the only key `ServiceRemoved` carries.
     pub fullname: String,
@@ -158,7 +159,7 @@ impl BrowsedService {
             }
         };
         let id = id.trim().to_owned();
-        if id.is_empty() || self.port == 0 {
+        if id.is_empty() {
             return None;
         }
         let txt_host = txt("h");
@@ -169,24 +170,44 @@ impl BrowsedService {
             })
         })?;
         let public_key = txt("pk").to_lowercase();
+        let lan_port: u16 = txt("lp").parse().unwrap_or(0);
+        let host = addr.to_string();
+        let lan_host = host.clone();
+        let name = txt("name");
+        let instance = self
+            .fullname
+            .split('.')
+            .next()
+            .unwrap_or(self.name.as_str())
+            .to_owned();
         Some(DiscoveredReceiver {
             id,
-            name: crate::protocol::clean_name(Some(&txt("name")), "PearTube TV"),
-            host: addr.to_string(),
-            port: u64::from(self.port),
+            name: crate::protocol::clean_name(
+                Some(if name.is_empty() { &instance } else { &name }),
+                "PearTube TV",
+            ),
+            lan: if lan_port > 0 {
+                Some(LanAddress {
+                    host: lan_host,
+                    port: lan_port,
+                })
+            } else {
+                None
+            },
+            host,
             public_key: if crate::protocol::is_hex64(&public_key) {
                 public_key
             } else {
                 String::new()
             },
-            p2p: txt("p2p") == "1",
             auth: if txt("auth") == "open" {
                 "open"
             } else {
                 "code"
             }
             .to_owned(),
-            seen_at: 0,
+            // Receivers from before the cast channel advertise v1 and cannot be reached.
+            current: txt("v") == "2",
         })
     }
 }
@@ -229,7 +250,12 @@ pub fn browse(on_up: ServiceSink, on_down: Option<NameSink>) -> Result<BrowseHan
                 Ok(event) => match event {
                     ServiceEvent::ServiceResolved(info) => {
                         let service = BrowsedService {
-                            name: info.get_fullname().to_owned(),
+                            name: info
+                                .get_fullname()
+                                .split('.')
+                                .next()
+                                .unwrap_or_default()
+                                .to_owned(),
                             fullname: info.get_fullname().to_owned(),
                             port: info.get_port(),
                             addresses: info
@@ -270,8 +296,8 @@ mod tests {
 
     fn service(txt: &[(&str, &str)], port: u16, addresses: Vec<IpAddr>) -> BrowsedService {
         BrowsedService {
-            name: "tv".into(),
-            fullname: "tv._peartube-cast._tcp.local.".into(),
+            name: "TV (dev123)".into(),
+            fullname: "TV (dev123)._peartube-cast._tcp.local.".into(),
             port,
             addresses,
             txt: txt
@@ -282,28 +308,54 @@ mod tests {
     }
 
     #[test]
-    fn records_follow_the_advertised_txt() {
+    fn a_v2_advert_names_the_lan_port() {
         let txt = advertisement_txt(
             "dev1",
             "TV",
             Some("192.168.1.5"),
             "a".repeat(64).as_str(),
-            true,
+            40123,
             false,
+        );
+        let keys: Vec<&str> = txt.iter().map(|(k, _)| k.as_str()).collect();
+        assert!(keys.contains(&"lp"));
+        assert!(!keys.contains(&"p2p"));
+        assert_eq!(
+            txt.iter().find(|(k, _)| k == "v").map(|(_, v)| v.as_str()),
+            Some("2")
         );
         let discovered = service(
             &txt.iter()
                 .map(|(k, v)| (k.as_str(), v.as_str()))
                 .collect::<Vec<_>>(),
-            8176,
+            40123,
             vec![],
         )
         .to_discovered()
         .expect("record");
         assert_eq!(discovered.id, "dev1");
         assert_eq!(discovered.host, "192.168.1.5");
-        assert!(discovered.p2p);
+        assert!(discovered.current);
+        assert_eq!(
+            discovered.lan,
+            Some(LanAddress {
+                host: "192.168.1.5".to_owned(),
+                port: 40123
+            })
+        );
         assert_eq!(discovered.auth, "code");
+    }
+
+    #[test]
+    fn a_v1_receiver_is_discovered_but_not_current() {
+        let s = service(
+            &[("proto", "peartube-cast"), ("id", "old"), ("v", "1")],
+            8176,
+            vec![IpAddr::V4(std::net::Ipv4Addr::new(10, 0, 0, 9))],
+        );
+        let discovered = s.to_discovered().expect("record");
+        assert!(!discovered.current);
+        assert_eq!(discovered.lan, None, "v1 has no LAN DHT port to dial");
     }
 
     #[test]
@@ -315,10 +367,20 @@ mod tests {
     #[test]
     fn the_host_falls_back_to_a_resolved_ipv4() {
         let s = service(
-            &[("proto", "peartube-cast"), ("id", "x")],
+            &[("proto", "peartube-cast"), ("id", "x"), ("v", "2")],
             8176,
             vec!["fe80::1".parse().unwrap(), "10.0.0.4".parse().unwrap()],
         );
         assert_eq!(s.to_discovered().unwrap().host, "10.0.0.4");
+    }
+
+    #[test]
+    fn the_name_falls_back_to_the_instance_label() {
+        let s = service(
+            &[("proto", "peartube-cast"), ("id", "x")],
+            1,
+            vec!["10.0.0.4".parse().unwrap()],
+        );
+        assert_eq!(s.to_discovered().unwrap().name, "TV (dev123)");
     }
 }

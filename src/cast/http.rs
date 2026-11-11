@@ -1,35 +1,32 @@
-//! HTTP plumbing shared by both roles: Range parsing, media MIME guessing, CORS, the server loop
-//! and the JSON client, ported from `parseHttpRange`, `guessMediaMime`, `CORS`, `listenHttp`,
-//! `attachSocketTracker` and `httpJson` in `src/cast.js`.
+//! The receiver's loopback HTTP: Range parsing, media MIME guessing, CORS and the server loop,
+//! ported from `parseHttpRange`, `guessMediaMime`, `CORS`, `listenHttp` and
+//! `attachSocketTracker` in `src/cast.js`. The receiver's player reads its film here; nothing on
+//! the LAN answers on this port.
 
 use std::convert::Infallible;
 use std::io;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::time::Duration;
 
 use bytes::Bytes;
-use futures_util::future::BoxFuture;
 use http_body_util::{BodyExt, Empty, Full, StreamBody, combinators::UnsyncBoxBody};
 use hyper::body::{Frame, Incoming};
-use hyper::header::{self, HeaderMap, HeaderName, HeaderValue};
-use hyper::{Method, Request, Response, StatusCode};
-use hyper_util::client::legacy::Client;
-use hyper_util::client::legacy::connect::HttpConnector;
-use hyper_util::rt::{TokioExecutor, TokioIo};
-use serde_json::{Map, Value, json};
-use tokio::io::AsyncReadExt;
+use hyper::header::{self, HeaderMap, HeaderValue};
+use hyper::{Request, Response, StatusCode};
+use hyper_util::rt::TokioIo;
+use serde_json::Value;
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
 
 use super::state::{is_safe_integer, js_number, text_value};
-use super::{CastError, MAX_JSON_BODY};
 
 /// Every receiver response body.
 pub type Body = UnsyncBoxBody<Bytes, io::Error>;
-/// The shared request handler; the peer address feeds `web-info`'s local check.
+/// The shared request handler; the peer address feeds `/cast/v1/info`'s local check.
 pub type Handler =
     Arc<dyn Fn(Request<Incoming>, SocketAddr) -> BoxFuture<'static, Response<Body>> + Send + Sync>;
+
+use futures_util::future::BoxFuture;
 
 /// `CORS`: every route answers preflights and exposes the Range headers a browser player reads.
 pub fn cors_headers(headers: &mut HeaderMap) {
@@ -58,7 +55,7 @@ pub fn empty_body() -> Body {
 
 /// An empty response with the CORS headers attached.
 pub fn empty(status: StatusCode) -> Response<Body> {
-    let mut res = Response::new(Empty::new().map_err(|e| match e {}).boxed_unsync());
+    let mut res = Response::new(empty_body());
     *res.status_mut() = status;
     cors_headers(res.headers_mut());
     res
@@ -81,27 +78,7 @@ pub fn json_response(status: u16, value: &Value) -> Response<Body> {
     res
 }
 
-/// A UTF-8 HTML response with the CORS headers.
-pub fn html_response(html: String) -> Response<Body> {
-    let mut res = Response::new(
-        Full::new(Bytes::from(html))
-            .map_err(|e| match e {})
-            .boxed_unsync(),
-    );
-    cors_headers(res.headers_mut());
-    res.headers_mut().insert(
-        header::CONTENT_TYPE,
-        HeaderValue::from_static("text/html; charset=utf-8"),
-    );
-    res
-}
-
-/// A 204 preflight answer.
-pub fn preflight() -> Response<Body> {
-    empty(StatusCode::NO_CONTENT)
-}
-
-/// A body fed from a channel, used for SSE streams and Range responses.
+/// A body fed from a channel, used for Range responses.
 pub fn channel_body(rx: mpsc::Receiver<Result<Frame<Bytes>, io::Error>>) -> Body {
     let stream = futures_util::stream::unfold(rx, |mut rx| async move {
         rx.recv().await.map(|item| (item, rx))
@@ -183,27 +160,14 @@ pub fn guess_media_mime(entry: &Value) -> String {
     }
 }
 
-/// `readJsonBody` over an already-collected body: empty is `{}`, malformed is a 400.
-pub fn read_json_body(bytes: &[u8]) -> Result<Value, CastError> {
-    if bytes.is_empty() {
-        return Ok(json!({}));
-    }
-    serde_json::from_slice(bytes).map_err(|_| CastError::bad_request("Body must be JSON"))
-}
-
-/// Frames an already-validated `data: …\n\n` SSE payload.
-pub fn sse_frame(event: &Value) -> Bytes {
-    Bytes::from(format!("data: {event}\n\n"))
-}
-
-/// `attachSocketTracker`: a server whose close aborts every open connection (SSE included).
+/// `attachSocketTracker`: a server whose close aborts every open connection.
 pub struct HttpServer {
     addr: SocketAddr,
     accept: tokio::task::JoinHandle<()>,
 }
 
 impl HttpServer {
-    /// `listenHttp(port, host, anyPort)`: a taken port falls back to an ephemeral one.
+    /// `listenHttp(port, '127.0.0.1', anyPort)`: a taken port falls back to an ephemeral one.
     pub async fn bind(port: u16, host: &str, any_port: bool, handler: Handler) -> io::Result<Self> {
         let mut chosen = TcpListener::bind((host, port)).await;
         if chosen.is_err() && any_port && port != 0 {
@@ -254,286 +218,36 @@ async fn accept_loop(listener: TcpListener, handler: Handler) {
     }
 }
 
-/// Reads a request body, refusing anything past [`MAX_JSON_BODY`].
-pub async fn collect_body(req: Request<Incoming>) -> Result<Bytes, CastError> {
-    let (_, body) = req.into_parts();
-    let collected = body
-        .collect()
-        .await
-        .map_err(|err| CastError::new(err.to_string(), 400))?
-        .to_bytes();
-    if collected.len() > MAX_JSON_BODY {
-        return Err(CastError::new("Body too large", 413));
-    }
-    Ok(collected)
-}
-
-/// The app's HTTP client (`httpJson`), plus the streaming request the controller's SSE needs.
-pub struct HttpClient {
-    client: Client<HttpConnector, Full<Bytes>>,
-}
-
-impl Default for HttpClient {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl HttpClient {
-    pub fn new() -> Self {
-        Self {
-            client: Client::builder(TokioExecutor::new()).build(HttpConnector::new()),
-        }
-    }
-
-    /// A plain request; the caller streams `Incoming` frames itself.
-    pub async fn request(
-        &self,
-        method: Method,
-        url: &str,
-        headers: Vec<(HeaderName, String)>,
-        body: Option<&Value>,
-        timeout: Duration,
-    ) -> Result<Response<Incoming>, CastError> {
-        let payload: Bytes = body
-            .map(|value| {
-                Bytes::from(serde_json::to_vec(value).unwrap_or_else(|_| b"null".to_vec()))
-            })
-            .unwrap_or_default();
-        let mut builder = Request::builder().method(method).uri(url);
-        for (name, value) in headers {
-            builder = builder.header(name, value);
-        }
-        if body.is_some() {
-            builder = builder
-                .header(header::CONTENT_TYPE, "application/json")
-                .header(header::CONTENT_LENGTH, payload.len().to_string());
-        }
-        let request = builder
-            .body(Full::new(payload))
-            .map_err(|err| CastError::new(err.to_string(), 400))?;
-        match tokio::time::timeout(timeout, self.client.request(request)).await {
-            Err(_) => Err(CastError::new("Receiver HTTP request timed out", 504)),
-            Ok(Err(err)) => Err(CastError::new(err.to_string(), 502)),
-            Ok(Ok(response)) => Ok(response),
-        }
-    }
-
-    /// `httpJson`: JSON body, `{}` for an empty one, `error` on a non-2xx answer.
-    pub async fn json(
-        &self,
-        method: Method,
-        url: &str,
-        headers: Vec<(HeaderName, String)>,
-        body: Option<&Value>,
-        timeout: Duration,
-    ) -> Result<Value, CastError> {
-        let response = self.request(method, url, headers, body, timeout).await?;
-        let status = response.status();
-        let bytes = response
-            .into_body()
-            .collect()
-            .await
-            .map_err(|err| CastError::new(err.to_string(), 502))?
-            .to_bytes();
-        let text = String::from_utf8_lossy(&bytes).to_string();
-        let parsed: Value = if text.is_empty() {
-            json!({})
-        } else {
-            match serde_json::from_str(&text) {
-                Ok(value) => value,
-                Err(_) => json!({
-                    "error": if text.is_empty() {
-                        format!("HTTP {}", status.as_u16())
-                    } else {
-                        text
-                    }
-                }),
-            }
-        };
-        if status.is_success() {
-            Ok(parsed)
-        } else {
-            let message = parsed
-                .get("error")
-                .and_then(Value::as_str)
-                .map(str::to_owned)
-                .unwrap_or_else(|| format!("Receiver answered {}", status.as_u16()));
-            Err(CastError::new(message, status.as_u16()))
-        }
-    }
-
-    /// One upstream Range slice, for the hybrid splice.
-    pub async fn range_slice(
-        &self,
-        url: &str,
-        start: u64,
-        end: u64,
-        timeout: Option<Duration>,
-    ) -> Result<Response<Incoming>, CastError> {
-        let request = Request::builder()
-            .method(Method::GET)
-            .uri(url)
-            .header(header::RANGE, format!("bytes={start}-{end}"))
-            .body(Full::new(Bytes::new()))
-            .map_err(|err| CastError::new(err.to_string(), 400))?;
-        let future = self.client.request(request);
-        match timeout {
-            Some(limit) => match tokio::time::timeout(limit, future).await {
-                Err(_) => Err(CastError::new("Upstream slice stalled", 504)),
-                Ok(Err(err)) => Err(CastError::new(err.to_string(), 502)),
-                Ok(Ok(response)) => Ok(response),
-            },
-            None => future
-                .await
-                .map_err(|err| CastError::new(err.to_string(), 502)),
-        }
-    }
-}
-
-/// Key/value pairs as the receiver's `/cast/v1/info` orders them.
-pub fn json_object(pairs: Vec<(&str, Value)>) -> Value {
-    let mut out = Map::with_capacity(pairs.len());
-    for (key, value) in pairs {
-        out.insert(key.to_owned(), value);
-    }
-    Value::Object(out)
-}
-
-/// The bearer token (or query token) a request carries.
-pub fn bearer_token(headers: &HeaderMap, query: Option<&str>) -> String {
-    let header = headers
-        .get(header::AUTHORIZATION)
-        .and_then(|value| value.to_str().ok())
-        .unwrap_or_default();
-    let bearer = header
-        .strip_prefix("Bearer ")
-        .map(str::trim)
-        .unwrap_or_default();
-    if !bearer.is_empty() {
-        bearer.to_owned()
-    } else {
-        query.unwrap_or_default().to_owned()
-    }
-}
-
-/// Reads `token` out of a raw query string.
-pub fn query_param(query: Option<&str>, name: &str) -> Option<String> {
-    for part in query?.split('&') {
-        if let Some((key, value)) = part.split_once('=')
-            && key == name
-        {
-            return Some(percent_decode(value));
-        }
-    }
-    None
-}
-
-/// `decodeURIComponent`, returning the raw text when it is not valid percent-encoding.
-pub fn percent_decode(text: &str) -> String {
-    let bytes = text.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b'%' && i + 2 < bytes.len() {
-            let hex = std::str::from_utf8(&bytes[i + 1..i + 3]).ok();
-            if let Some(byte) = hex.and_then(|h| u8::from_str_radix(h, 16).ok()) {
-                out.push(byte);
-                i += 3;
-                continue;
-            }
-        }
-        out.push(bytes[i]);
-        i += 1;
-    }
-    String::from_utf8_lossy(&out).into_owned()
-}
-
-/// Reads one media chunk's bytes without buffering the whole body.
-pub async fn read_frame(frame: Frame<Bytes>) -> Option<Bytes> {
-    frame.into_data().ok()
-}
-
-/// Reads a whole small body (used by tests and the hub's registration route).
-pub async fn read_all<R>(reader: &mut R) -> io::Result<Vec<u8>>
-where
-    R: tokio::io::AsyncRead + Unpin,
-{
-    let mut buf = Vec::new();
-    reader.read_to_end(&mut buf).await?;
-    Ok(buf)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn range(header: Option<&str>, total: u64) -> RangeSpec {
-        parse_http_range(header, total)
-    }
-
     #[test]
-    fn missing_or_foreign_headers_mean_the_whole_object() {
-        assert_eq!(range(None, 10), RangeSpec::Full { start: 0, end: 9 });
+    fn ranges_match_the_app() {
         assert_eq!(
-            range(Some("items=0-1"), 10),
-            RangeSpec::Full { start: 0, end: 9 }
-        );
-        assert_eq!(range(None, 0), RangeSpec::Full { start: 0, end: 0 });
-        assert_eq!(
-            range(Some("bytes=0-1"), 0),
-            RangeSpec::Full { start: 0, end: 0 }
-        );
-    }
-
-    #[test]
-    fn explicit_and_open_ranges_clamp_to_the_total() {
-        assert_eq!(
-            range(Some("bytes=2-5"), 10),
-            RangeSpec::Partial { start: 2, end: 5 }
+            parse_http_range(None, 100),
+            RangeSpec::Full { start: 0, end: 99 }
         );
         assert_eq!(
-            range(Some("bytes=7-"), 10),
-            RangeSpec::Partial { start: 7, end: 9 }
+            parse_http_range(Some("bytes=10-19"), 100),
+            RangeSpec::Partial { start: 10, end: 19 }
         );
         assert_eq!(
-            range(Some("bytes=7-99"), 10),
-            RangeSpec::Partial { start: 7, end: 9 }
+            parse_http_range(Some("bytes=-20"), 100),
+            RangeSpec::Partial { start: 80, end: 99 }
         );
         assert_eq!(
-            range(Some("bytes=-3"), 10),
-            RangeSpec::Partial { start: 7, end: 9 }
+            parse_http_range(Some("bytes=90-"), 100),
+            RangeSpec::Partial { start: 90, end: 99 }
         );
         assert_eq!(
-            range(Some("bytes=1-2,5-6"), 10),
-            RangeSpec::Partial { start: 1, end: 2 },
-            "only the first range is served"
+            parse_http_range(Some("bytes=200-"), 100),
+            RangeSpec::Invalid
         );
-    }
-
-    #[test]
-    fn unsatisfiable_and_malformed_ranges_are_invalid() {
-        assert_eq!(range(Some("bytes=10-"), 10), RangeSpec::Invalid);
-        assert_eq!(range(Some("bytes=5-4"), 10), RangeSpec::Invalid);
-        assert_eq!(range(Some("bytes=-0"), 10), RangeSpec::Invalid);
-        assert_eq!(range(Some("bytes=abc"), 10), RangeSpec::Invalid);
-        assert_eq!(range(Some("bytes="), 10), RangeSpec::Invalid);
-    }
-
-    #[test]
-    fn mime_follows_the_entry_name() {
+        assert_eq!(parse_http_range(Some("bytes=x-2"), 100), RangeSpec::Invalid);
         assert_eq!(
-            guess_media_mime(&json!({"title": "Film.WEBM"})),
-            "video/webm"
+            parse_http_range(Some("items=0-1"), 100),
+            RangeSpec::Full { start: 0, end: 99 }
         );
-        assert_eq!(
-            guess_media_mime(&json!({"title": "Film", "id": "x.mkv"})),
-            "video/x-matroska"
-        );
-        assert_eq!(
-            guess_media_mime(&json!({"id": "show.avi"})),
-            "video/x-msvideo"
-        );
-        assert_eq!(guess_media_mime(&json!({"title": "Film"})), "video/mp4");
     }
 }

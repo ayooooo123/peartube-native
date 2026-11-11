@@ -34,9 +34,12 @@ The `privateGuard` setting runs the guard forwarder in-process on its own HyperD
 (JS spawns `bin/private-relay.js`); `PEARTUBE_PRIVATE_RELAY` (or
 `PEARTUBE_PRIVATE_RELAY_PORT`) makes the same binary the standalone Corestore-free guard
 of `bin/private-relay.js`: no storage folder, no Corestore, and channel or content flags
-are refused. `status.lan` reports `{host, port}`, as JS does. The UI and web player
-come from `PEARTUBE_WEB_DIR` (default: `web/` beside the binary). `relay.Dockerfile`
-builds the image from this stack and the app's `src/ui.js` and `web/assets`.
+are refused. The cast stack (the app's `createCastController`) opens with the node and
+answers `/v1/cast/*` from it, closing with a stop or reopen. `status.lan` reports
+`{host, port}`, as JS does. Not yet ported: JS plugins from `<storage>/plugins`.
+The UI and web player come from `PEARTUBE_WEB_DIR` (default: `web/` beside the binary).
+`relay.Dockerfile` builds the image from this stack and the app's `src/ui.js` and
+`web/assets`.
 
 ## Module map
 
@@ -47,7 +50,7 @@ Paths on the right are in the PearTube app unless otherwise stated.
 | `app`, `lifecycle`, `backend`, `ipc` | `worklet/worker.js`: typed worker methods and events, JSON framing, serialized lifecycle and backend thread |
 | `http` | `src/http.js`: loopback API, media and event endpoints |
 | `acquire`, `mirror` | `src/acquire.js`, `src/mirror.js`: acquisition jobs and mirror plugins |
-| `cast` | `src/cast.js`, `src/cast-ui.js`: controller, receiver, pairing and media serving |
+| `cast` | `src/cast.js`, `src/cast-control.js`: controller, receiver, the cast channel on the peer connection, pairing and media serving |
 | `lan` | `src/lan.js`: mDNS and isolated LAN DHT; worker host Bonjour events and interface selection |
 | `hiverelay`, `hiverelay::seeder`, `traffic`, `private_overlay` | `src/hiverelay.js`, `src/traffic.js`, `src/private-overlay.js`: relay protocol and the `hiverelay-seed` seeder, traffic gate and private routing (the standalone guard is `bin/private-relay.js`) |
 | `node/storage`, `network`, `channel`, `apply`, `sources`, `catalog`, `blobs` | Corresponding `src/node/*.js`: storage, replication, channel operations, source and catalog management, blob storage and streaming. `node/hash_state` is the libsodium-layout SHA-256 state `blobs` checkpoints a resumed ingest with |
@@ -82,7 +85,7 @@ peer that served this node blocks (`isSourcePeer`, fed by each download event's
 `pause`/`resume` stop and restart the mux reading that connection's inbound
 stream, so a held bulk HiveRelay connection is capped on the wire and still
 times out, resumes and closes normally.
-Loopback `/v1/status` and receiver `/cast/v1/info` include `connectedPeers`:
+Loopback `/v1/status` includes `connectedPeers`:
 16-hex public-key prefixes, the discovery route (`public`, `lan`, `private`),
 and the live transport address (null if unavailable). A public-DHT connection
 can use a private address; its discovery route remains public. Cast counts
@@ -107,7 +110,7 @@ identified below rather than presented as live network parity.
 - `tests/acquire_mirror.rs`: JS acquisition and mirror call and JSON traces against scripted dependencies.
 - `tests/apply.rs`: JS apply operations, host calls and view bytes on a real Hyperbee.
 - `tests/blobs.rs`: JS blob operations, core keys, announce fields, encrypted and plain block bytes, cache decisions, and ingested SHA-256 checkpoint/resume in both directions with `sodium-native` (`tests/js/sha256-state.mjs`).
-- `tests/cast.rs`: JS cast fixtures and receiver/controller interop over HTTP and a TCP secret-stream stand-in. `tests/cast_default.rs` exercises the real default adapters and a JS receiver on a local testnet.
+- `tests/cast.rs`: JS cast fixtures, the `peartube-cast/v1` control channel over in-memory Protomux connections (pairing rules, state pushes, session control, a non-paired peer refused), and live JS↔Rust interop on a local testnet in both directions. `tests/cast_default.rs` casts between two default backends over the LAN, from pairing through exact bytes on the receiver's player port.
 - `tests/hiverelay.rs`: JS relay wire vectors, secret-stream interop, and the app's own `createHiverelaySeeder` beside this crate's seeder against one HiveRelay stand-in: identical `/seed-core` bodies and identical `hiverelay-seed` request bytes.
 - `tests/traffic.rs`: JS traffic-gate decisions, npm Protomux busy-channel interop, and a real hypercore transfer through a paused connection: no block arrives until it is resumed, and a held bulk connection serves nothing under its cap. `tests/blobs.rs` proves a claim counts only from a peer whose real download event named it.
 - `tests/replicate.rs`: `p2p-replicate` pulls a followed channel's title on a local testnet and skips it under an unmet disk reserve. `tests/relay.rs`: the relay founds its channel and keeps it across restarts; `PEARTUBE_PRIVATE_RELAY` starts a guard with no storage folder and refuses channel flags.
@@ -304,7 +307,8 @@ tested and rejected for lack of repeatable wins. No ACK, pacing or wire changes.
 
 - JS plugins from `<storage>/plugins` (`PEARTUBE_PLUGINS_DIR`, `*.mjs`) are a permanent difference: this crate cannot load JavaScript. Its built-in plugins register through `MirrorHost::register`; `p2p-replicate` (`replicate`) and `hiverelay-seed` are built on `CoreNode` and registered by the relay.
 - `hiverelay-seed` marks HiveRelay connections bulk on the shared traffic gate, which buckets them and reports `peersBusy`; the gate's `pause`/`resume` hold and release that connection's inbound reads (`ReadGate` in `src/node/network.rs`), so `hiverelayUploadMbps` caps what the peer can draw from it.
-- The default cast adapter has no `PeerFactory`: a load targeting a different network reuses the current node. Continuous read-ahead retargeting and `holdIfThin` are not wired; retry window timing differs. See [cast notes](docs/port-notes-cast.md).
+- The default cast adapter has no `PeerFactory`: a load targeting a different network reuses the current node. Retry window timing differs. See [cast notes](docs/port-notes-cast.md).
+- Cast: the receiver's read-ahead is one retargeted `core.download` window per stream, sized like the app's (`holdIfThin` and watched-block trimming included), with the TV build's memory-cache permits capping it. A v1 receiver is listed but not castable. See [cast notes](docs/port-notes-cast.md).
 - LAN mDNS and the isolated DHT are implemented, but the real-interface interoperability matrix remains environment-blocked on this Mac. A standalone raw UDP probe also receives no LAN multicast; an ALF “permitted” query alone does not establish delivery. See [LAN notes](docs/port-notes-lan.md).
 - Corestore storage tuning uses engine defaults; free disk space is unknown. Status reports live blob-peer in-flight requests and UDX RTT/retransmitted packets; see [node notes](docs/node-api.md).
 - Rust cannot represent already-lone JS surrogates; exponent-form receiver ports can format differently. Artwork HTTP timeout covers the whole exchange, unlike the JS socket inactivity timeout. See [identify/art notes](docs/port-notes-identify-art.md).

@@ -82,18 +82,12 @@ const mirror = {
 }
 
 const cast = {
-  status: () => ({ webReceiverUrl: 'http://127.0.0.1:8177/tv', receivers: [], session: null, receiverMode: null }),
-  webSetupQrSvg: url => `<svg data-url="${url}"/>`,
-  registerWebReceiver: params => ({ registered: true, id: params?.id ?? 'w1' }),
-  updateWebReceiverState: () => ({ ok: true }),
+  status: () => ({ receivers: [], session: null, receiverMode: null }),
   pairReceiver: async () => ({ deviceId: 'd1', name: 'TV' }),
   removeReceiver: id => ({ removed: true, id }),
   castPlay: async () => ({ ok: true, action: 'play' }),
   castControl: async () => ({ ok: true, action: 'control' }),
-  castStop: async () => ({ ok: true, action: 'stop' }),
-  handleHubCastJson: (req, url) => (url.pathname === '/cast/v1/info' ? { protocol: 'peartube-cast/v1' } : undefined),
-  handleWebEvents: () => {},
-  handleHubSenderEvents: () => {}
+  castStop: async () => ({ ok: true, action: 'stop' })
 }
 
 const artPoster = async imdb => (imdb === 'tt1234567' ? 'https://img.test/poster.jpg' : null)
@@ -180,7 +174,6 @@ const scenarios = {
     json('GET', '/v1/identity', undefined, { origin: 'http://evil.test' }),
     json('GET', '/v1/settings'),
     json('POST', '/v1/cast/pair', {}),
-    json('GET', '/tv'),
     json('GET', '/v1/blob?key=a&blob=b')
   ],
   token: [
@@ -212,12 +205,7 @@ const scenarios = {
     json('DELETE', '/v1/cast/receivers/abc'),
     json('POST', '/v1/cast/play', {}),
     json('POST', '/v1/cast/control', {}),
-    json('POST', '/v1/cast/stop', {}),
-    json('POST', '/v1/cast/web-register', { id: 'w9' }),
-    json('POST', '/v1/cast/web-state', { id: 'w9' }),
-    json('GET', '/cast/v1/info'),
-    json('GET', '/cast/v1/missing'),
-    json('GET', '/tv')
+    json('POST', '/v1/cast/stop', {})
   ]
 }
 

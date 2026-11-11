@@ -649,6 +649,9 @@ impl<N: crate::node::Node> crate::node::api::CastFactory<N> for Unconfigured {
         candidate.unwrap_or(fallback).to_owned()
     }
     fn reclaim(&self, _storage: &str) {}
+    fn receiver_key_pair(&self, _storage: &str) -> Option<Value> {
+        None
+    }
 }
 
 #[cfg(all(test, unix))]

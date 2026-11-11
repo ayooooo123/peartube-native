@@ -1,74 +1,53 @@
-//! The narrow seams the app integration fills: the P2P node, the DHT, the LAN blob server and
-//! the mDNS adapter. Nothing in the cast port opens sockets for P2P itself.
+//! The narrow seams the host fills: the P2P node a receiver or controller drives, one peer
+//! connection (the Protomux mux the cast channel opens on), and mDNS. Nothing in the cast port
+//! opens a socket of its own besides the receiver's loopback player port.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use futures_util::future::BoxFuture;
 use hyperblobs::BlobId;
 use hypercore::Core;
-use serde::Deserialize;
+use protomux::Mux;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tokio::io::{AsyncRead, AsyncWrite};
 
 use super::CastError;
 use super::state::CastState;
 
-/// A bidirectional byte pipe with the DHT handshake already done (a secret stream).
-pub trait Duplex: AsyncRead + AsyncWrite + Send + Unpin {}
-impl<T: AsyncRead + AsyncWrite + Send + Unpin> Duplex for T {}
-
-/// Why a P2P dial failed; `code` is matched against the app's retryable set.
-#[derive(Debug, Clone)]
-pub struct DhtError {
-    pub code: Option<String>,
-    pub message: String,
+/// One connection to a peer, as `node.peerConnections()` / `node.onConnection()` hand it out:
+/// its Protomux mux (the cast channel opens on it), whether it came over the LAN, and its close.
+pub trait PeerConnection: Send + Sync {
+    /// Unique among live connections; the receiver keys its per-connection state on it.
+    fn id(&self) -> u64;
+    /// 64-hex Noise public key of the peer.
+    fn remote_public_key(&self) -> String;
+    /// `node.isLanConnection(conn)`.
+    fn is_lan(&self) -> bool;
+    fn destroyed(&self) -> bool;
+    /// `Protomux.from(conn)`.
+    fn mux(&self) -> Mux;
+    /// `conn.once('close')`.
+    fn closed(&self) -> BoxFuture<'static, ()>;
+    fn close(&self);
 }
 
-impl DhtError {
-    pub fn new(code: impl Into<String>, message: impl Into<String>) -> Self {
-        Self {
-            code: Some(code.into()),
-            message: message.into(),
-        }
-    }
+/// A connection the cast can open its channel on.
+pub type PeerConn = Arc<dyn PeerConnection>;
 
-    pub fn other(message: impl Into<String>) -> Self {
-        Self {
-            code: None,
-            message: message.into(),
-        }
-    }
+/// Where a receiver's node answers on this LAN, mDNS `h` + `lp`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LanAddress {
+    pub host: String,
+    pub port: u16,
 }
 
-impl std::fmt::Display for DhtError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.message)
-    }
-}
-
-impl std::error::Error for DhtError {}
-
-/// `dht.connect(publicKey, { relayThrough })`.
-pub trait DhtConnect: Send + Sync {
-    fn connect(
-        &self,
-        public_key: [u8; 32],
-        relay_through: Option<Vec<String>>,
-    ) -> BoxFuture<'_, Result<Box<dyn Duplex>, DhtError>>;
-}
-
-/// One accepted Noise connection.
-pub type NoiseHandler = Arc<dyn Fn(Box<dyn Duplex>) + Send + Sync>;
-
-/// `dht.createServer(onConnection)` plus `server.listen(keyPair)`.
-pub trait DhtServer: Send + Sync {
-    fn serve(
-        &self,
-        public_key: [u8; 32],
-        handler: NoiseHandler,
-    ) -> BoxFuture<'_, Result<(), DhtError>>;
-    /// Stops accepting dials (the receiver's `noiseServer.close()`).
-    fn close(&self) -> BoxFuture<'_, ()>;
+/// A node's LAN endpoint, as `node.lanEndpoint()` answers.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct LanEndpoint {
+    pub host: String,
+    pub port: u16,
+    pub public_key: String,
 }
 
 /// `peerNode.status()`.
@@ -81,8 +60,6 @@ pub struct PeerStatus {
     /// `status().routes`, echoed in `/cast/v1/info` when present.
     #[serde(skip)]
     pub routes: Option<Value>,
-    #[serde(skip)]
-    pub connected_peers: Vec<Value>,
 }
 
 impl PeerStatus {
@@ -91,53 +68,19 @@ impl PeerStatus {
             peers: routes.public.peers + routes.private.peers,
             lan_peers: routes.lan.peers,
             routes: serde_json::to_value(routes).ok(),
-            connected_peers: Vec::new(),
         }
-    }
-}
-
-#[cfg(test)]
-mod peer_status_tests {
-    use super::*;
-
-    #[test]
-    fn lan_peers_are_counted_once() {
-        let route = |peers| crate::node::api::Route {
-            peers,
-            rx_bytes: 0,
-            tx_bytes: 0,
-            down_bps: 0.into(),
-            up_bps: 0.into(),
-        };
-        let status = PeerStatus::from_routes(crate::node::api::Routes {
-            public: route(2),
-            private: route(1),
-            lan: route(3),
-        });
-        assert_eq!(status.peers, 3);
-        assert_eq!(status.lan_peers, 3);
-        assert_eq!(status.peers + status.lan_peers, 6);
     }
 }
 
 /// What `openUri` answers with.
 #[derive(Debug, Clone, Default)]
 pub struct OpenedMedia {
+    /// `source`, `access` or `watch`, as `parseUri` classifies the link.
+    pub action: String,
     /// The node's own blob-server link for the video.
     pub stream_url: Option<String>,
     pub entry: Value,
     pub blob: Option<BlobId>,
-}
-
-/// `network` in a load command, defaults resolved.
-#[derive(Debug, Clone, Default)]
-pub struct NetworkConfig {
-    pub private_routing: bool,
-    pub bootstrap: Option<Value>,
-    pub relay_through: Option<Value>,
-    pub lan: bool,
-    pub source_key: String,
-    pub source_kind: String,
 }
 
 /// Per-load cache trimming, as the receiver's read-ahead asks for it.
@@ -167,12 +110,24 @@ pub trait CastPeer: Send + Sync {
     fn peer_key(&self) -> String;
     fn private_routing(&self) -> bool;
     fn has_lan(&self) -> bool;
-    fn lan_endpoint(&self) -> Option<Value>;
-    fn bootstrap(&self) -> Option<Value>;
-    fn relay_through(&self) -> Option<Value>;
+    fn lan_endpoint(&self) -> Option<LanEndpoint>;
     fn status(&self) -> PeerStatus;
-    fn join_peer(&self, key: &str, lan_first: bool);
-    fn dial_lan_peer(&self, endpoint: &Value);
+    /// `node.joinLanTopic('cast', hash('peartube-cast/v1'))`: peers on this LAN connect here.
+    fn join_lan_topic(&self, id: &str, topic: [u8; 32]);
+    /// Every live connection, now.
+    fn peer_connections(&self) -> Vec<PeerConn>;
+    /// `node.onConnection(serve)`; the returned closure unregisters it.
+    fn on_connection(
+        &self,
+        callback: Arc<dyn Fn(PeerConn) + Send + Sync>,
+    ) -> Box<dyn Fn() + Send + Sync>;
+    /// `node.connectPeer(key, { lan })`: the open connection to that peer, else a LAN dial and a DHT join.
+    fn connect_peer(
+        &self,
+        key: &str,
+        lan: Option<LanAddress>,
+        timeout: Duration,
+    ) -> BoxFuture<'_, Result<PeerConn, CastError>>;
     fn open_uri(
         &self,
         uri: &str,
@@ -196,34 +151,32 @@ pub trait CastPeer: Send + Sync {
     fn close(&self) -> BoxFuture<'_, ()>;
 }
 
-/// A LAN blob server, as `createBlobRangeServer` hands back.
-pub trait LanBlobServer: Send + Sync {
-    /// Allow (or keep allowing) one key through the resolver.
-    fn allow(&self, blobs_hex: &str);
-    /// `getLink(key, { host, blob, type })`.
-    fn get_link(&self, blobs_hex: &str, host: &str, blob: &BlobId, mime: &str) -> String;
-    fn close(&self) -> BoxFuture<'_, ()>;
-}
-
-/// Binds the sender's token-gated LAN Range server on first use.
-pub trait BlobServerFactory: Send + Sync {
-    fn ensure(
-        &self,
-        lan_host: Option<&str>,
-    ) -> BoxFuture<'_, Result<Arc<dyn LanBlobServer>, CastError>>;
-}
-
-/// Opens (or reuses) the receiver's own P2P node for a load's network configuration.
-pub trait PeerFactory: Send + Sync {
-    fn ensure(
-        &self,
-        network: NetworkConfig,
-        lan_host: Option<&str>,
-    ) -> BoxFuture<'_, Result<Option<Arc<dyn CastPeer>>, CastError>>;
-}
-
 /// Called by a receiver for every command it accepts; `update_state` is the state the player
 /// should report back through `reportState`.
 pub type CommandSink = Arc<dyn Fn(Value) + Send + Sync>;
 /// Called whenever the receiver's visible status changed.
 pub type ChangeSink = Arc<dyn Fn(&CastState) + Send + Sync>;
+
+#[cfg(test)]
+mod peer_status_tests {
+    use super::*;
+
+    #[test]
+    fn lan_peers_are_counted_once() {
+        let route = |peers| crate::node::api::Route {
+            peers,
+            rx_bytes: 0,
+            tx_bytes: 0,
+            down_bps: 0.into(),
+            up_bps: 0.into(),
+        };
+        let status = PeerStatus::from_routes(crate::node::api::Routes {
+            public: route(2),
+            private: route(1),
+            lan: route(3),
+        });
+        assert_eq!(status.peers, 3);
+        assert_eq!(status.lan_peers, 3);
+        assert_eq!(status.peers + status.lan_peers, 6);
+    }
+}

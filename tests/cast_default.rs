@@ -1,13 +1,16 @@
 //! The default cast adapters end to end: two `Backend::spawn` instances on one local HyperDHT
-//! testnet act as the controller and the TV receiver, pair over LAN with a code, cast a locally
-//! published blob, and the receiver's player-facing URL serves the source's exact bytes (full and
-//! ranged). One interop run drives the app's own `src/cast.js` receiver through the same backend.
+//! testnet act as the controller and the TV receiver. The receiver is opened by `receiverStart`
+//! under its saved key, advertises itself on the LAN, and the controller finds it by mDNS, pairs
+//! with its 6-character code, casts a locally published blob, and the receiver's own player URL
+//! serves the source's exact bytes (full and ranged).
+//!
+//! The cross-implementation run lives in `tests/cast.rs` (Rust controller ↔ the app's receiver
+//! fixture) and below (the app's controller ↔ this backend's receiver).
 
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
@@ -159,12 +162,12 @@ impl Harness {
         }
     }
 
-    fn start(&self, trackers: &Path, cast_storage: &Path, bootstrap: &Value) -> String {
+    fn start(&self, trackers: &Path, cast_storage: &Path, bootstrap: &Value) {
         self.ok(
             "init",
             json!({ "castStorage": cast_storage.to_string_lossy() }),
         );
-        let started = self.ok(
+        self.ok(
             "start",
             json!({
                 "trackersDir": trackers.to_string_lossy(),
@@ -181,10 +184,6 @@ impl Harness {
                 },
             }),
         );
-        started["apiUrl"]
-            .as_str()
-            .unwrap_or_else(|| panic!("start answers: {started}"))
-            .to_owned()
     }
 }
 
@@ -240,8 +239,6 @@ struct HttpResponse {
     body: Vec<u8>,
 }
 
-/// Connects with a bound timeout: a LAN address the host cannot reach (its own interface, or a
-/// dropped SYN) must fail the probe instead of blocking the test forever.
 fn try_http_get(url: &str, range: Option<&str>) -> Option<HttpResponse> {
     let rest = url.strip_prefix("http://").expect("an http url");
     let (authority, path) = match rest.find('/') {
@@ -307,36 +304,36 @@ fn http_get(url: &str, range: Option<&str>) -> HttpResponse {
     try_http_get(url, range).unwrap_or_else(|| panic!("{url} answers"))
 }
 
-/// The same port on loopback: on a single machine the host's own LAN interface can be
-/// unreachable (firewall), while the one listener still serves the request.
-fn loopback_url(url: &str) -> String {
-    let rest = url.strip_prefix("http://").expect("an http url");
-    let (authority, path) = rest.split_once('/').unwrap_or((rest, ""));
-    let port = authority.rsplit_once(':').map_or("", |(_, port)| port);
-    format!("http://127.0.0.1:{port}/{path}")
-}
-
-/// The node status the loopback API reports.
-fn node_status(api: &str) -> Value {
-    let response = http_get(&format!("{api}/v1/status"), None);
-    serde_json::from_slice(&response.body).unwrap_or(Value::Null)
+/// The receiver's player port answers only on loopback; the URL already says 127.0.0.1.
+fn assert_loopback(url: &str) {
+    assert!(url.starts_with("http://127.0.0.1:"), "{url}");
 }
 
 // ---------------------------------------------------------------------------------------------
 // The controller and the receiver.
 
+fn wait_for<T>(label: &str, until: Duration, mut probe: impl FnMut() -> Option<T>) -> T {
+    let deadline = Instant::now() + until;
+    loop {
+        if let Some(value) = probe() {
+            return value;
+        }
+        assert!(Instant::now() < deadline, "timed out waiting for {label}");
+        std::thread::sleep(Duration::from_millis(250));
+    }
+}
+
 #[test]
-fn default_backends_cast_a_local_blob_over_lan() {
+fn default_backends_cast_over_the_lan() {
     let testnet = testnet();
     let bootstrap = testnet.bootstrap.clone();
     let bytes = data((BLOCK * 3 + 777) as usize);
     let digest = sha256_hex(&bytes);
+    let tv_name = format!("Kitchen TV {}", std::process::id());
 
     let root = temp_dir("lan");
     let controller_trackers = root.join("controller");
-    let receiver_trackers = root.join("receiver");
     std::fs::create_dir_all(&controller_trackers).expect("controller dir");
-    std::fs::create_dir_all(&receiver_trackers).expect("receiver dir");
     let (key, _blobs) = publish_fixture(&controller_trackers, &bootstrap, &bytes);
 
     let controller = Harness::spawn();
@@ -345,73 +342,75 @@ fn default_backends_cast_a_local_blob_over_lan() {
         &root.join("controller-cast"),
         &bootstrap,
     );
+    // The TV's node is opened by `receiverStart` under its saved receiver key.
     let receiver = Harness::spawn();
-    let receiver_api = receiver.start(&receiver_trackers, &root.join("receiver-cast"), &bootstrap);
-
+    receiver.ok(
+        "init",
+        json!({ "castStorage": root.join("receiver-cast").to_string_lossy() }),
+    );
     let info = receiver.ok(
         "receiverStart",
-        json!({ "name": "Kitchen TV", "openAuth": false }),
+        json!({ "name": tv_name, "openAuth": false }),
     );
-    let port = info["port"].as_u64().expect("receiver port");
     let code = info["pairCode"]
         .as_str()
         .expect("receiver pair code")
         .to_owned();
-    assert_eq!(info["name"], json!("Kitchen TV"));
+    assert_eq!(info["name"], json!(tv_name));
+    assert_eq!(info["protocol"], json!("peartube-cast/v1"));
+    assert_eq!(info["authRequired"], json!(true));
+    let public_key = info["publicKey"].as_str().expect("receiver key").to_owned();
+    assert_eq!(public_key.len(), 64);
 
-    let paired = controller.ok(
-        "castPair",
-        json!({ "host": "127.0.0.1", "port": port, "code": code }),
+    // mDNS finds the TV; the pair happens on the LAN link to it.
+    let discovered = wait_for("the TV on the LAN", Duration::from_secs(60), || {
+        let status = controller.ok("castStatus", json!({}));
+        status["receivers"]
+            .as_array()?
+            .iter()
+            .find(|row| row["name"] == json!(tv_name))
+            .cloned()
+    });
+    assert_eq!(discovered["current"], json!(true), "{discovered}");
+    let receiver_id = discovered["id"].as_str().expect("discovered id").to_owned();
+    let paired = controller
+        .call("castPair", json!({ "id": receiver_id, "code": code }))
+        .unwrap_or_else(|error| {
+            let status = controller.ok("castStatus", json!({}));
+            let receiver_status = receiver.ok("castStatus", json!({}));
+            panic!(
+                "castPair: {error}\ninfo: {info}\ndiscovered: {discovered}\ncontroller: {status}\nreceiver: {receiver_status}"
+            )
+        });
+    let paired_id = paired["pairedId"].as_str().expect("paired id").to_owned();
+    assert!(!paired_id.is_empty(), "{paired}");
+
+    let played = controller.ok(
+        "castPlay",
+        json!({ "receiverId": paired_id, "key": key, "startPositionMs": 0 }),
     );
-    let receiver_id = paired["pairedId"].as_str().expect("paired id").to_owned();
-    assert!(!receiver_id.is_empty(), "{paired}");
-
-    let played = controller.ok("castPlay", json!({ "receiverId": receiver_id, "key": key }));
     let session = &played["session"];
     assert_eq!(session["transport"], json!("lan"), "{played}");
-    assert_eq!(session["state"]["playing"], json!(true), "{played}");
+    assert_eq!(session["receiverName"], json!(tv_name), "{played}");
     assert_eq!(session["state"]["mode"], json!("p2p"), "{played}");
 
-    // The receiver's player got its own blob URL; it serves the source's exact bytes.
-    let command = receiver.event("receiverCommand", Duration::from_secs(30));
+    let command = receiver.event("receiverCommand", Duration::from_secs(60));
     assert_eq!(command["command"]["action"], json!("load"));
     let stream_url = command["command"]["streamUrl"]
         .as_str()
         .expect("the player's stream url")
         .to_owned();
-    assert!(stream_url.starts_with("http://"), "{stream_url}");
+    assert_loopback(&stream_url);
+    assert!(stream_url.contains("/cast/v1/p2p/"), "{stream_url}");
 
-    let fallback = command["command"]["httpStreamUrl"]
-        .as_str()
-        .unwrap_or("")
-        .to_owned();
-    assert!(!fallback.is_empty(), "the sender offers a LAN blob URL");
-    let direct = try_http_get(&fallback, None)
-        .or_else(|| try_http_get(&loopback_url(&fallback), None))
-        .expect("the sender's LAN Range server answers on its port");
-    assert_eq!(direct.status, 200);
-    assert_eq!(
-        sha256_hex(&direct.body),
-        digest,
-        "the token-gated LAN Range server serves the source"
-    );
-
-    // The receiver starts replicating the film as soon as the load hands it the watch link; wait
-    // until the blocks are local so the Range reads below exercise its own player URL.
-    let deadline = Instant::now() + Duration::from_secs(120);
-    loop {
-        let status = node_status(&receiver_api);
-        let cached = status["cachedBytes"].as_u64().unwrap_or(0);
-        if cached >= bytes.len() as u64 {
-            break;
-        }
-        assert!(
-            Instant::now() < deadline,
-            "the receiver pulled {cached} of {} bytes: {status}",
-            bytes.len()
-        );
-        std::thread::sleep(Duration::from_millis(500));
-    }
+    // The TV pulls the film over the connection it shares with the sender; its own player URL
+    // serves the exact bytes once the blocks are local.
+    let cached = wait_for("the TV to cache the film", Duration::from_secs(120), || {
+        let status = receiver.ok("castStatus", json!({}));
+        let cached = status["receiverMode"]["state"]["cachedBytes"].as_u64()?;
+        (cached >= bytes.len() as u64).then_some(cached)
+    });
+    assert!(cached >= bytes.len() as u64);
 
     let full = http_get(&stream_url, None);
     assert_eq!(full.status, 200);
@@ -428,8 +427,8 @@ fn default_backends_cast_a_local_blob_over_lan() {
     );
     assert_eq!(ranged.body, bytes[start..=end]);
 
-    let playing = controller.ok("castControl", json!({ "action": "play" }));
-    assert_eq!(playing["session"]["state"]["status"], json!("playing"));
+    let played = controller.ok("castControl", json!({ "action": "play" }));
+    assert_eq!(played["session"]["state"]["status"], json!("playing"));
     let sought = controller.ok(
         "castControl",
         json!({ "action": "seek", "positionMs": 2500 }),
@@ -449,96 +448,5 @@ fn default_backends_cast_a_local_blob_over_lan() {
 
     drop(controller);
     drop(receiver);
-    let _ = std::fs::remove_dir_all(&root);
-}
-
-// ---------------------------------------------------------------------------------------------
-// Interop: the app's own `src/cast.js` receiver, driven by a default-spawned backend.
-
-fn app_dir() -> PathBuf {
-    std::env::var("PEARTUBE_APP")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../peartube"))
-}
-
-fn has_app() -> bool {
-    let app = app_dir();
-    std::path::Path::new(&app).join("src/cast.js").exists()
-}
-
-fn js_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/js")
-}
-
-struct JsProcess {
-    child: Child,
-}
-
-impl Drop for JsProcess {
-    fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-    }
-}
-
-fn spawn_js(args: &[&str]) -> JsProcess {
-    let mut command = Command::new("node");
-    command
-        .arg(js_dir().join("cast-interop.mjs"))
-        .args(args)
-        .current_dir(js_dir())
-        .env("PEARTUBE_APP", app_dir())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::inherit());
-    JsProcess {
-        child: command.spawn().expect("node must be installed"),
-    }
-}
-
-#[test]
-#[ignore = "needs node and the app checkout (PEARTUBE_APP)"]
-fn js_cast_receiver_is_driven_by_the_default_backend() {
-    if !has_app() {
-        eprintln!("skipped: set PEARTUBE_APP to the app checkout");
-        return;
-    }
-    let mut process = spawn_js(&["receiver-http"]);
-    let ready = {
-        let child = &mut process.child;
-        let stdout = child.stdout.take().expect("stdout");
-        let mut lines = BufReader::new(stdout).lines();
-        let line = lines.next().expect("ready line").expect("read");
-        serde_json::from_str::<Value>(line.trim_start_matches("READY ")).expect("ready json")
-    };
-    let port = ready["httpPort"].as_u64().expect("http port");
-    let code = ready["pairCode"].as_str().expect("pair code").to_owned();
-
-    let root = temp_dir("interop");
-    let trackers = root.join("trackers");
-    std::fs::create_dir_all(&trackers).expect("trackers");
-    let controller = Harness::spawn();
-    controller.start(&trackers, &root.join("cast"), &json!([]));
-
-    let paired = controller.ok(
-        "castPair",
-        json!({ "host": "127.0.0.1", "port": port, "code": code }),
-    );
-    let receiver_id = paired["pairedId"].as_str().expect("paired id").to_owned();
-    let attached = controller.ok("castAttach", json!({ "receiverId": receiver_id }));
-    assert_eq!(attached["session"]["transport"], json!("lan"), "{attached}");
-    let played = controller.ok("castControl", json!({ "action": "play" }));
-    assert_eq!(played["session"]["state"]["playing"], json!(true));
-    let sought = controller.ok(
-        "castControl",
-        json!({ "action": "seek", "positionMs": 2500 }),
-    );
-    assert_eq!(sought["session"]["state"]["positionMs"], json!(2500));
-    let paused = controller.ok("castControl", json!({ "action": "pause" }));
-    assert_eq!(paused["session"]["state"]["playing"], json!(false));
-    let stopped = controller.ok("castStop", json!({ "stopPlayback": true }));
-    assert_eq!(stopped["session"], Value::Null);
-
-    drop(process);
-    drop(controller);
     let _ = std::fs::remove_dir_all(&root);
 }

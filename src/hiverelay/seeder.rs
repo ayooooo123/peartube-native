@@ -7,7 +7,7 @@
 //! channel. A HiveRelay connection is bulk: it goes through the relay's traffic gate, so it stays
 //! off viewers' upload and connected relays hear that this one is busy.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -98,14 +98,11 @@ fn parse_config(
             }
             let (url, api_key) = match text.find('=') {
                 Some(eq) if eq > 0 => {
+                    // `apiKey || null`: `url=` names no key, and the default does not apply to it.
                     let key = text[eq + 1..].trim();
                     (
                         &text[..eq],
-                        if key.is_empty() {
-                            default_api_key.map(str::to_owned)
-                        } else {
-                            Some(key.to_owned())
-                        },
+                        (!key.is_empty()).then(|| key.to_owned()),
                     )
                 }
                 _ => (text, default_api_key.map(str::to_owned)),
@@ -199,12 +196,23 @@ async fn request_json(
         Ok(Ok(response)) => response,
     };
     let status = response.status().as_u16();
-    let collected = match http_body_util::BodyExt::collect(response.into_body()).await {
-        Ok(body) => body.to_bytes(),
-        Err(error) => return JsonReply::failed(error.to_string()),
-    };
-    if collected.len() > 1024 * 1024 {
-        return JsonReply::failed("HiveRelay response exceeded 1 MiB");
+    // `requestJson` destroys the request as soon as the chunks pass 1 MiB, so a relay that never
+    // ends its answer cannot hold this one open either.
+    let mut body = response.into_body();
+    let mut collected: Vec<u8> = Vec::new();
+    loop {
+        match http_body_util::BodyExt::frame(&mut body).await {
+            None => break,
+            Some(Err(error)) => return JsonReply::failed(error.to_string()),
+            Some(Ok(frame)) => {
+                let Ok(data) = frame.into_data() else { continue };
+                if collected.len() + data.len() > 1024 * 1024 {
+                    drop(body);
+                    return JsonReply::failed("HiveRelay response exceeded 1 MiB");
+                }
+                collected.extend_from_slice(&data);
+            }
+        }
     }
     let data = if collected.is_empty() {
         Value::Object(Map::new())
@@ -225,11 +233,15 @@ struct AcceptedRelay {
     pub available_storage_bytes: u64,
     pub accepted_at: u64,
     pub cores: HashSet<String>,
+    /// When this pubkey first accepted, so the status lists relays in `Map` insertion order.
+    pub seq: u64,
 }
 
 /// A relay's signed deny over `hiverelay-seed`, as the plugin reports it.
 #[derive(Clone, Debug)]
 struct DeniedRelay {
+    /// First denial for this `pubkey|core`, kept across a repeat: `Map.set` position.
+    pub seq: u64,
     pub pubkey: String,
     pub reason_code: String,
     pub detail: String,
@@ -281,6 +293,8 @@ struct Inner {
     publisher: hypercore::crypto::KeyPair,
     accepted: Mutex<HashMap<String, AcceptedRelay>>,
     denied: Mutex<HashMap<String, DeniedRelay>>,
+    /// The status lists keep their `Map` insertion order, so each first insertion is numbered.
+    relay_seq: AtomicU64,
     http_pinned: Mutex<HashMap<String, Pinned>>,
     url_pubkeys: Mutex<HashMap<String, String>>,
     joined_peers: Mutex<HashSet<String>>,
@@ -355,6 +369,48 @@ fn seed_material(node: &CoreNode) -> Vec<u8> {
     node.store().primary_key().to_vec()
 }
 
+/// `p2pAcceptedRelays`: every accepting relay in the order it first accepted.
+fn accepted_list(accepted: &HashMap<String, AcceptedRelay>) -> Vec<Value> {
+    let mut relays: Vec<(&String, &AcceptedRelay)> = accepted.iter().collect();
+    relays.sort_by_key(|(_, relay)| relay.seq);
+    relays
+        .into_iter()
+        .map(|(pubkey, relay)| {
+            json!({
+                "pubkey": pubkey,
+                "region": relay.region,
+                "availableStorageBytes": relay.available_storage_bytes,
+                "acceptedAt": relay.accepted_at,
+            })
+        })
+        .collect()
+}
+
+/// `p2pDeniedRelays`: one row per pubkey, in the position of its first denial, holding the last
+/// denial (`new Map(values.map(...)).values()` in the app).
+fn denied_list(denied: &HashMap<String, DeniedRelay>) -> Vec<Value> {
+    let mut relays: Vec<&DeniedRelay> = denied.values().collect();
+    relays.sort_by_key(|relay| relay.seq);
+    let mut rows: Vec<Value> = Vec::new();
+    let mut at: HashMap<&str, usize> = HashMap::new();
+    for relay in relays {
+        let row = json!({
+            "pubkey": relay.pubkey,
+            "reasonCode": relay.reason_code,
+            "detail": relay.detail,
+            "at": relay.at,
+        });
+        match at.get(relay.pubkey.as_str()) {
+            Some(&index) => rows[index] = row,
+            None => {
+                at.insert(relay.pubkey.as_str(), rows.len());
+                rows.push(row);
+            }
+        }
+    }
+    rows
+}
+
 impl HiverelaySeeder {
     pub fn new(
         node: Arc<CoreNode>,
@@ -380,6 +436,7 @@ impl HiverelaySeeder {
             publisher,
             accepted: Mutex::new(HashMap::new()),
             denied: Mutex::new(HashMap::new()),
+            relay_seq: AtomicU64::new(0),
             http_pinned: Mutex::new(HashMap::new()),
             url_pubkeys: Mutex::new(HashMap::new()),
             joined_peers: Mutex::new(HashSet::new()),
@@ -922,6 +979,11 @@ impl HiverelaySeeder {
                     .remove(&format!("{remote_hex}|{core_key}"));
                 {
                     let mut accepted = self.0.accepted.lock().expect("accepted");
+                    // A first accept takes the next position; a repeat keeps the one it had.
+                    let seq = match accepted.get(remote_hex) {
+                        Some(previous) => previous.seq,
+                        None => self.0.relay_seq.fetch_add(1, Ordering::SeqCst),
+                    };
                     let entry =
                         accepted
                             .entry(remote_hex.to_owned())
@@ -930,6 +992,7 @@ impl HiverelaySeeder {
                                 available_storage_bytes: 0,
                                 accepted_at: now,
                                 cores: HashSet::new(),
+                                seq,
                             });
                     entry.region = if accept.region.is_empty() {
                         "unknown".into()
@@ -956,9 +1019,18 @@ impl HiverelaySeeder {
                     beacon.app_to_core.get(&app_hex).cloned()
                 }
                 .unwrap_or(app_hex);
+                let denial_key = format!("{remote_hex}|{core_key}");
+                let seq = {
+                    let denied = self.0.denied.lock().expect("denied");
+                    match denied.get(&denial_key) {
+                        Some(previous) => previous.seq,
+                        None => self.0.relay_seq.fetch_add(1, Ordering::SeqCst),
+                    }
+                };
                 self.0.denied.lock().expect("denied").insert(
-                    format!("{remote_hex}|{core_key}"),
+                    denial_key,
                     DeniedRelay {
+                        seq,
                         pubkey: remote_hex.to_owned(),
                         reason_code: if deny.reason_code.is_empty() {
                             "denied".into()
@@ -1195,34 +1267,8 @@ impl HiverelaySeeder {
                 .map(|entry| hex(&entry.key)),
             Err(_) => None,
         };
-        let mut accepted: Vec<Value> = self
-            .0
-            .accepted
-            .lock()
-            .expect("accepted")
-            .iter()
-            .map(|(pubkey, relay)| {
-                json!({
-                    "pubkey": pubkey,
-                    "region": relay.region,
-                    "availableStorageBytes": relay.available_storage_bytes,
-                    "acceptedAt": relay.accepted_at,
-                })
-            })
-            .collect();
-        accepted.sort_by(|a, b| a["pubkey"].as_str().cmp(&b["pubkey"].as_str()));
-        let mut denied: BTreeMap<String, Value> = BTreeMap::new();
-        for relay in self.0.denied.lock().expect("denied").values() {
-            denied.insert(
-                relay.pubkey.clone(),
-                json!({
-                    "pubkey": relay.pubkey,
-                    "reasonCode": relay.reason_code,
-                    "detail": relay.detail,
-                    "at": relay.at,
-                }),
-            );
-        }
+        let accepted = accepted_list(&self.0.accepted.lock().expect("accepted").clone());
+        let denied = denied_list(&self.0.denied.lock().expect("denied").clone());
         let mut out = Map::new();
         out.insert("enabled".into(), json!(enabled));
         out.insert(
@@ -1243,10 +1289,7 @@ impl HiverelaySeeder {
             }
         }
         out.insert("p2pAcceptedRelays".into(), Value::Array(accepted));
-        out.insert(
-            "p2pDeniedRelays".into(),
-            Value::Array(denied.into_values().collect()),
-        );
+        out.insert("p2pDeniedRelays".into(), Value::Array(denied));
         Value::Object(out)
     }
 
@@ -1411,4 +1454,157 @@ pub fn plugin(
     onchange: Option<Arc<dyn Fn() + Send + Sync>>,
 ) -> Arc<dyn MirrorPlugin<CoreNode>> {
     Arc::new(HiverelaySeeder::new(node, traffic, config, onchange))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn target(url: &str, api_key: Option<&str>) -> HttpTarget {
+        HttpTarget {
+            url: url.to_owned(),
+            api_key: api_key.map(str::to_owned),
+        }
+    }
+
+    /// `parseHiverelayConfig`: `url=` names no key, and the default applies only to an entry
+    /// written without `=`.
+    #[test]
+    fn an_empty_relay_key_means_no_authorization_header() {
+        let parsed = parse_config(&["http://one:1=".to_owned()], Some("default"), false);
+        assert_eq!(parsed.targets, vec![target("http://one:1", None)]);
+        let parsed = parse_config(&["http://one:1".to_owned()], Some("default"), false);
+        assert_eq!(parsed.targets, vec![target("http://one:1", Some("default"))]);
+        let parsed = parse_config(&["http://one:1 =  ".to_owned()], Some("default"), false);
+        assert_eq!(
+            parsed.targets,
+            vec![target("http://one:1", None)],
+            "a blank key is no key"
+        );
+        let parsed = parse_config(&["http://one:1=own".to_owned()], Some("default"), false);
+        assert_eq!(parsed.targets, vec![target("http://one:1", Some("own"))]);
+    }
+
+    fn accepted(seq: u64) -> AcceptedRelay {
+        AcceptedRelay {
+            region: "eu".into(),
+            available_storage_bytes: 1,
+            accepted_at: 10 + seq,
+            cores: HashSet::new(),
+            seq,
+        }
+    }
+
+    fn denial(pubkey: &str, core: &str, seq: u64, at: u64) -> (String, DeniedRelay) {
+        (
+            format!("{pubkey}|{core}"),
+            DeniedRelay {
+                seq,
+                pubkey: pubkey.to_owned(),
+                reason_code: "denied".into(),
+                detail: String::new(),
+                at,
+            },
+        )
+    }
+
+    /// Both status lists keep the app's `Map` insertion order, not a hash or key order.
+    #[test]
+    fn relay_lists_keep_their_insertion_order() {
+        // Insertion order is deliberately not key order: `bb` first, `aa` second.
+        let mut accepted_map: HashMap<String, AcceptedRelay> = HashMap::new();
+        accepted_map.insert("bb".repeat(32), accepted(0));
+        accepted_map.insert("aa".repeat(32), accepted(1));
+        let rows = accepted_list(&accepted_map);
+        let order: Vec<&str> = rows.iter().map(|row| row["pubkey"].as_str().unwrap()).collect();
+        assert_eq!(order, vec!["bb".repeat(32), "aa".repeat(32)]);
+        assert!(rows[0].get("cores").is_none(), "cores stay private: {rows:?}");
+
+        // A denial for another core of the same relay takes the first row's place, with the last
+        // denial's fields (`new Map(values.map(...)).values()`).
+        let mut denied_map: HashMap<String, DeniedRelay> = HashMap::new();
+        // `ff` is denied first, then `ee`; a second denial for `ff` keeps the first row.
+        for (key, relay) in [
+            denial(&"ff".repeat(32), "core1", 0, 100),
+            denial(&"ee".repeat(32), "core1", 1, 101),
+            denial(&"ff".repeat(32), "core2", 2, 200),
+        ] {
+            denied_map.insert(key, relay);
+        }
+        let rows = denied_list(&denied_map);
+        assert_eq!(rows.len(), 2, "one row per relay: {rows:?}");
+        assert_eq!(rows[0]["pubkey"], "ff".repeat(32));
+        assert_eq!(rows[0]["at"].as_u64(), Some(200), "the last denial wins");
+        assert_eq!(rows[1]["pubkey"], "ee".repeat(32));
+    }
+
+    /// A body that starts arriving and never ends: `requestJson` must give up at 1 MiB rather
+    /// than wait for an answer that may never finish.
+    #[test]
+    fn a_response_past_one_megabyte_is_dropped_while_it_streams() {
+        use hyper::body::{Body, Frame};
+        use std::pin::Pin;
+        use std::task::{Context, Poll};
+
+        struct Endless {
+            first: Option<bytes::Bytes>,
+        }
+
+        impl Body for Endless {
+            type Data = bytes::Bytes;
+            type Error = std::io::Error;
+
+            fn poll_frame(
+                mut self: Pin<&mut Self>,
+                _cx: &mut Context<'_>,
+            ) -> Poll<Option<Result<Frame<Self::Data>, Self::Error>>> {
+                match self.first.take() {
+                    Some(data) => Poll::Ready(Some(Ok(Frame::data(data)))),
+                    None => Poll::Pending,
+                }
+            }
+        }
+
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .expect("runtime");
+        let (addr, _server) = runtime.block_on(async {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+                .await
+                .expect("listener");
+            let addr = listener.local_addr().expect("addr");
+            let server = tokio::spawn(async move {
+                let (stream, _) = listener.accept().await.expect("connection");
+                let _ = hyper::server::conn::http1::Builder::new()
+                    .serve_connection(
+                        hyper_util::rt::TokioIo::new(stream),
+                        hyper::service::service_fn(|_request| async {
+                            Ok::<_, std::convert::Infallible>(hyper::Response::new(Endless {
+                                first: Some(bytes::Bytes::from(vec![b'x'; 1024 * 1024 + 1])),
+                            }))
+                        }),
+                    )
+                    .await;
+            });
+            (addr, server)
+        });
+        let reply = runtime.block_on(async {
+            tokio::time::timeout(
+                Duration::from_secs(10),
+                request_json(
+                    "GET",
+                    &format!("http://{addr}/status"),
+                    &[],
+                    None,
+                    Duration::from_secs(30),
+                ),
+            )
+            .await
+            .expect("requestJson stops reading at the cap")
+        });
+        assert_eq!(reply.error.as_deref(), Some("HiveRelay response exceeded 1 MiB"));
+        assert_eq!(reply.status, 0);
+    }
 }

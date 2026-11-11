@@ -469,9 +469,6 @@ mod fake {
     }
 
     impl Cast for FakeCast {
-        fn init_hub(&self) -> BoxFuture<'_, ()> {
-            Box::pin(async {})
-        }
         fn set_lan_host(&self, _host: Option<String>) -> BoxFuture<'_, ()> {
             Box::pin(async {})
         }
@@ -538,6 +535,9 @@ mod fake {
                 .unwrap_or_else(|| format!("{fallback}/peer"))
         }
         fn reclaim(&self, _storage: &str) {}
+        fn receiver_key_pair(&self, _storage: &str) -> Option<Value> {
+            None
+        }
     }
 
     /// A clock the test advances, and a park counter so an advance returns only after the worker

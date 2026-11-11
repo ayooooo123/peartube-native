@@ -81,7 +81,7 @@ The worker's integration contracts are `NodeFactory`, `Swarm`, `LanFactory<N>`, 
 
 ## Worker events
 
-The worker emits `{event:"update"}` (`worklet/worker.js:51`), `{event:"sources",sources:[{key,kind,alias}]}` (line 260), `{event:"cast",cast:<cast.status()>}` (line 56), `{event:"receiverCommand",command:<command>}` (line 349), and `{event:"fatal",error:string}` (lines 357,385). Cast status has `{webReceiverUrl:string|null,receivers:array,session:object|null,receiverMode:object|null}` (`src/cast.js:2198-2210`); command is the command object plus `seq`, `action`, and sometimes `positionMs` (`src/cast.js:1137`). These are worker/cast events, not all node-originated; do not conflate their transport with `onchange`.
+The worker emits `{event:"update"}` (`worklet/worker.js:51`), `{event:"sources",sources:[{key,kind,alias}]}` (line 260), `{event:"cast",cast:<cast.status()>}` (line 56), `{event:"receiverCommand",command:<command>}` (line 349), and `{event:"fatal",error:string}` (lines 357,385). Cast status has `{receivers:array,session:object|null,receiverMode:object|null}`, a list row carrying `current` so a pre-channel receiver shows as needing an update (`src/cast.js`); command is the command object plus `seq`, `action`, and sometimes `positionMs` (`src/cast.js:1137`). These are worker/cast events, not all node-originated; do not conflate their transport with `onchange`.
 
 ## Worker adapters
 
@@ -96,7 +96,7 @@ A host that links the backend in-process (`app::AppHost`, over `app::NativeApp`)
 | `Swarm::on_update` | `swarm.on('update', …)`; the returned closure removes the listener. Also used for the `update` coalescing tests. |
 | `LanFactory` | `os.networkInterfaces()` (name, address, internal), `createLan`, and the host's Bonjour events (`Bare.emit('appEvent', …)`). |
 | `ApiServer` | `createApi` plus `listenLoopback`: `start` binds the loopback port (preferring `protocol::API_PORT`, then an ephemeral one) and answers with the URL, or `null`; `notify` forwards the `update` and `cast` notifications. |
-| `CastFactory` / `Cast` | `createCastController` and the receiver it drives, plus `resolvePeerStorage` and `reclaimLowDiskReceiverStorage`. `CastOptions` carries the `getNode` and `getLanHost` closures and the `onchange` sink. |
+| `CastFactory` / `Cast` | `createCastController` and the receiver it drives, plus `resolvePeerStorage`, `reclaimLowDiskReceiverStorage` and `receiverKeyPair` (fed to `createNode({ keyPair })`, so a receiver keeps the key senders paired with). `CastOptions` carries the `getNode` and `getLanHost` closures and the `onchange` sink. |
 
 Every asynchronous member of `Node`, `PutSource`, `NodeFactory`, `Swarm`, `LanFactory`, `ApiServer` and `CastFactory` is declared as `fn name(...) -> impl Future<Output = T> + Send`, not `async fn`, so a caller can `tokio::spawn` a node call on the backend's runtime. Implementations may still write `async fn`; rustc then requires that future to be `Send`. `Node` is `Send + Sync + 'static` and `Node::Swarm: api::Swarm`. `Cast` is the one exception — it is used behind `Arc<dyn Cast>`, so its asynchronous members return `BoxFuture` instead. `ApiServer::notify` is synchronous: it only queues an event for the API's stream.
 
