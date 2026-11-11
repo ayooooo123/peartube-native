@@ -567,3 +567,203 @@ async fn a_busy_claim_counts_only_from_a_source_peer() {
         gate.stop();
     }
 }
+
+/// The writer side of one real replication connection: its frames are counted, so the gate's
+/// measured upload is what the peer actually sent, and each write waits a little so the transfer
+/// is still running when the connection is held.
+struct CountingWrite<W>(W, Arc<AtomicU64>);
+
+impl<W: protomux::FrameWrite> protomux::FrameWrite for CountingWrite<W> {
+    async fn write(&mut self, frame: bytes::Bytes) -> std::io::Result<()> {
+        self.1.fetch_add(frame.len() as u64, Ordering::Relaxed);
+        tokio::time::sleep(Duration::from_millis(4)).await;
+        self.0.write(frame).await
+    }
+
+    async fn close(&mut self) -> std::io::Result<()> {
+        self.0.close().await
+    }
+}
+
+/// One real connection as the gate sees it: its upload is the peer's frame bytes, and its pause
+/// and resume move the read gate the mux reads through.
+struct RealConn {
+    id: u64,
+    key: [u8; 32],
+    written: Arc<AtomicU64>,
+    gate: peartube_native::node::network::ReadGate,
+    mux: Mux,
+}
+
+impl Connection for RealConn {
+    fn id(&self) -> u64 {
+        self.id
+    }
+    fn raw_bytes_written(&self) -> u64 {
+        self.written.load(Ordering::Relaxed)
+    }
+    fn pause(&self) {
+        self.gate.pause();
+    }
+    fn resume(&self) {
+        self.gate.resume();
+    }
+    fn destroyed(&self) -> bool {
+        false
+    }
+    fn mux(&self) -> Mux {
+        self.mux.clone()
+    }
+    fn remote_public_key(&self) -> Option<[u8; 32]> {
+        Some(self.key)
+    }
+}
+
+/// `conn.pause()` stops the mux polling this connection's inbound stream: the peer's blocks stop
+/// arriving until it is resumed, and the gate's measured upload to a held bulk peer stays inside
+/// its cap.
+#[tokio::test]
+async fn a_paused_connection_receives_no_new_blocks_until_resumed() {
+    use peartube_native::node::network::{GatedRead, ReadGate};
+    use protomux::StreamInfo;
+
+    let dir_writer = tempfile::tempdir().unwrap();
+    let dir_reader = tempfile::tempdir().unwrap();
+    let writer_store = corestore::Corestore::open(dir_writer.path()).unwrap();
+    let reader_store = corestore::Corestore::open(dir_reader.path()).unwrap();
+    let writer = writer_store
+        .get(corestore::GetOptions {
+            key_pair: Some(hypercore::crypto::KeyPair::from_seed(&[9; 32])),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let blocks: Vec<Vec<u8>> = (0..64u8).map(|i| vec![i; 64 * 1024]).collect();
+    let blocks_len = blocks.len() as u64;
+    writer.append(&blocks).await.unwrap();
+    let reader = reader_store
+        .get(corestore::GetOptions::key(*writer.key()))
+        .await
+        .unwrap();
+    let _active = reader.core().session(true);
+
+    let writer_key = *writer.core().key();
+    let reader_key = reader_store.create_key_pair("reader").public_key;
+    let ((writer_read, writer_write), (reader_read, reader_write)) = protomux::memory::duplex(64);
+    let written = Arc::new(AtomicU64::new(0));
+    let handshake = Some([9u8; 64]);
+    let peer_info = |initiator: bool, remote: [u8; 32]| StreamInfo {
+        is_initiator: initiator,
+        handshake_hash: handshake,
+        remote_public_key: Some(remote),
+    };
+    let writer_mux = Mux::new(
+        writer_read,
+        CountingWrite(writer_write, written.clone()),
+        peer_info(true, reader_key),
+    );
+    let gate = ReadGate::new();
+    let reader_mux = Mux::new(
+        GatedRead::new(reader_read, gate.clone()),
+        reader_write,
+        peer_info(false, writer_key),
+    );
+    writer.core().replicate(&writer_mux);
+    reader.core().replicate(&reader_mux);
+
+    let conn = Arc::new(RealConn {
+        id: 1,
+        key: writer_key,
+        written: written.clone(),
+        gate: gate.clone(),
+        mux: reader_mux.clone(),
+    });
+    // The gate sees the peer as bulk before any of its bytes arrive, and a viewer is streaming, so
+    // the tick that counts those bytes has to hold it.
+    let clock = Arc::new(FakeClock::default());
+    let gate_ctl = TrafficGate::new(Options {
+        upload_mbps: 0.5,
+        auto_tick: false,
+        clock: clock.clone(),
+        http_viewing: Some(Arc::new(|| true)),
+        ..Options::default()
+    });
+    let conn: Arc<dyn Connection> = conn.clone();
+    gate_ctl.attach(conn.clone());
+    gate_ctl.mark_bulk(conn.clone());
+
+    let download = tokio::spawn({
+        let reader = reader.core().clone();
+        async move { reader.download(0, Some(blocks_len), true).await }
+    });
+    // Let the transfer get going: its bytes are what the gate measures.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    while reader.core().count_local(0, blocks_len) < 8 {
+        assert!(tokio::time::Instant::now() < deadline, "the transfer starts");
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    clock.advance(250);
+    gate_ctl.tick();
+    assert!(
+        gate_ctl.info().bulk_paused,
+        "a viewer's presence pauses the bulk peer"
+    );
+    // Whatever the mux had already read when the pause landed still lands (the actor may hold a
+    // couple of frames); after that nothing more arrives, because blocks need reads.
+    let mut last = (
+        reader.core().count_local(0, blocks_len),
+        written.load(Ordering::Relaxed),
+    );
+    let settle_deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        let now = (
+            reader.core().count_local(0, blocks_len),
+            written.load(Ordering::Relaxed),
+        );
+        if now == last {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < settle_deadline,
+            "the pause settles"
+        );
+        last = now;
+    }
+    assert!(
+        last.0 < blocks_len,
+        "a paused connection stops the transfer ({} of {blocks_len} blocks)",
+        last.0
+    );
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(
+        (
+            reader.core().count_local(0, blocks_len),
+            written.load(Ordering::Relaxed)
+        ),
+        last,
+        "a paused connection takes no new blocks and the peer sends nothing"
+    );
+
+    // Held bulk connections stay inside the cap: turns are on a 6 s schedule, not inside this
+    // second, so nothing more is served.
+    let before = written.load(Ordering::Relaxed);
+    for _ in 0..4 {
+        clock.advance(250);
+        gate_ctl.tick();
+    }
+    let growth = written.load(Ordering::Relaxed).saturating_sub(before);
+    assert_eq!(growth, 0, "a held bulk connection serves nothing");
+
+    // Resuming lets the transfer finish.
+    gate.resume();
+    gate_ctl.stop();
+    tokio::time::timeout(Duration::from_secs(20), download)
+        .await
+        .expect("the transfer resumes")
+        .expect("download task")
+        .expect("download result");
+    assert_eq!(reader.core().count_local(0, blocks_len), blocks_len);
+    writer_mux.destroy();
+    reader_mux.destroy();
+}

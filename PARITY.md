@@ -33,7 +33,7 @@ this port was written against before the alignment, and `73d2dfa47` is the relay
 | `bin/relay.js` | `relay`, `src/bin/peartube-relay.rs` | `pending: align-relay` (standalone guard, `status.lan` shape) | `73d2dfa47` |
 | `src/acquire.js` | `acquire` | `pending: align-acquire` | `2b88b0281` |
 | `src/app-settings.js` | `app_settings` | `match` | `2b88b0281` |
-| `src/apply.js` | `node/apply` | `pending: align-node` (the `makeApply` writer hook was removed in `fe2897172`) | `2b88b0281` |
+| `src/apply.js` | `node/apply` | `match` (the `makeApply` writer hook is gone from both sides) | `501d17ace` |
 | `src/art.js` | `art` | `debt:` artwork HTTP timeout covers the whole exchange, unlike the app's socket inactivity timeout — see README "Known gaps" | `2b88b0281` |
 | `src/blob-server.js` | `node/blobs`, `http` (Range streaming) | `match` | `2b88b0281` |
 | `src/cast-control.js` | `cast/rpc` | `pending: align-cast` | `2b88b0281` |
@@ -58,7 +58,7 @@ this port was written against before the alignment, and `73d2dfa47` is the relay
 | `src/rebuild-view.js` | — | `JS-only:` the library behind `bin/rebuild-view.js`; an operator repair tool, not a runtime path | — |
 | `src/resolution.js` | `resolution` | `match` | `2b88b0281` |
 | `src/settings.js` | `settings` | `match` | `73d2dfa47` |
-| `src/traffic.js` | `traffic` | `pending: align-node` (bulk-busy only from source peers) | `2b88b0281` |
+| `src/traffic.js` | `traffic` | `match` (a busy claim counts only from a source peer, and `pause`/`resume` hold the connection's inbound reads) | `501d17ace` |
 | `src/ui.js` | — | `JS-only:` shared asset; `relay.Dockerfile` copies the app's own file to `web/index.html` at image build and the relay serves it | `3f3c9f840` |
 | `worklet/worker.js` | `app`, `lifecycle`, `ipc`, `backend` | `pending: align-cast` (cast method and event shapes) | `2b88b0281` |
 | `<storage>/plugins/*.mjs` (user plugins) | — | `JS-only:` Rust cannot execute JS plugins; the built-in plugins are ports of the app's own (`http-acquire`, `channel-backfill`, `blob-rechunk`, `watch-dir`, `feed-mirror`, `p2p-replicate`) | — |
@@ -73,8 +73,6 @@ The generators read only what the app exports at `JS_REF`. At `3f3c9f840` these 
 `check.mjs` reports an `ERROR` for the matching references until the app exports them:
 
 - `src/mnemonic.js`: `entropyToMnemonic` (`gen.mjs`, `apply.mjs`).
-- `src/apply.js`: `makeApply(getChannelHex, onWriterChange)` — the optional callback was removed in
-  `fe2897172`; `apply-reference.json` records the calls it makes.
 - `src/art.js`: `metaFor`. `src/identify.js`: `fileName`, `probe`, `ubitInfo`, `norm`, `strong`.
 - `src/hiverelay.js`: `SEED_HANDSHAKE`, `seedRequestEncoding`, `seedAcceptEncoding`, `unseedRequestEncoding`,
   `seedDenyEncoding`, `signSeedRequest`, `computeBoundBytes`, `blake2bTopic`, `encodeHyperdriveHeader`,

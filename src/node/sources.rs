@@ -411,11 +411,15 @@ impl Sources {
         lock(&record.cache).cached_rev = -1;
         (self.deps.join_topic)(&format!("channel:{}", record.key));
         (self.deps.attach_wakeup)(bee.clone());
-        // The topic lookups must answer before this bee's first `update()` concludes against
-        // whatever peer spoke last; the flush is bounded so an unanswerable topic costs nothing.
+        // `sources.js`: hold this namespace's `findingPeers` while the topic lookups answer, so
+        // the bee's first `update()` waits for a peer instead of concluding against whatever
+        // spoke last. The flush is bounded so an unanswerable topic costs nothing, and private
+        // routing's flush returns at once, releasing the guard with it.
+        let done = namespace.finding_peers();
         let flush = (self.deps.flush)();
         tokio::spawn(async move {
             let _ = tokio::time::timeout(FLUSH_TIMEOUT, flush).await;
+            done.release();
         });
         Some(bee)
     }

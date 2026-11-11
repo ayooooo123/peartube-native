@@ -557,6 +557,9 @@ impl crate::node::Node for MissingNode {
     async fn mark_bulk_peer(&self, _key: &str, _on: bool) {
         match *self {}
     }
+    async fn is_source_peer(&self, _key: &str) -> bool {
+        match *self {}
+    }
     async fn set_lan(&self, _lan: Option<Self::Lan>) -> Result<(), Self::Error> {
         match *self {}
     }

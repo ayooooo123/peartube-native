@@ -1,5 +1,5 @@
 // Generates apply-reference.json from the app's own src/apply.js, driven through a stub
-// view/host that records put/del/flush, addWriter/removeWriter and onWriterChange. `node apply.mjs` writes the
+// view/host that records put/del/flush and addWriter/removeWriter. `node apply.mjs` writes the
 // reference; tests/apply.rs replays every case against the Rust handler and compares the two call sequences.
 import { createHash } from 'node:crypto'
 import { writeFileSync } from 'node:fs'
@@ -90,10 +90,7 @@ async function runApply (scenario) {
       calls.push({ t: 'removeWriter', key: hex(key) })
     }
   }
-  const apply = makeApply(
-    () => CHANNEL,
-    (writer, added) => calls.push({ t: 'writerChange', writer, added })
-  )
+  const apply = makeApply(() => CHANNEL)
   const nodes = scenario.nodes.map(n => ({ key: b4a.from(n.key, 'hex'), value: b4a.from(n.value, 'hex') }))
   await apply(nodes, view, host)
   const out = [...view.map]

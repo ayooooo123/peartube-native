@@ -424,6 +424,12 @@ impl Channel {
         }))
     }
 
+    /// `ctx.channel.findingPeers`: the primary tracker's namespace holds its cores' update
+    /// until the swarm flush answers (`network.js`).
+    pub fn finding_peers(&self) -> corestore::FindingPeers {
+        self.tracker.finding_peers()
+    }
+
     /// `ctx.channel.landings`: `mirrorLanding`/`releaseLanding`, shared with every followed
     /// channel's apply hook.
     pub fn landings(&self) -> Arc<Landings> {

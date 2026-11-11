@@ -75,9 +75,11 @@ sets), complete cached copies under the same 48-topic cap and 20-second rotation
 The title being read is looked up as a client (at most four at once) and never
 announced, so watching a film does not tell the DHT this address holds it.
 `peersBusy` in the traffic gate counts a `peartube/bulk-busy` claim only from a
-peer that served this node blocks; the node cannot yet answer that, because
-hypercore-rs reports a download without the peer that served the block, so the
-gate runs without the predicate and every claim counts as before.
+peer that served this node blocks (`isSourcePeer`, fed by each download event's
+`from`); a peer's record is dropped with its last connection. The gate's
+`pause`/`resume` stop and restart the mux reading that connection's inbound
+stream, so a held bulk HiveRelay connection is capped on the wire and still
+times out, resumes and closes normally.
 Loopback `/v1/status` and receiver `/cast/v1/info` include `connectedPeers`:
 16-hex public-key prefixes, the discovery route (`public`, `lan`, `private`),
 and the live transport address (null if unavailable). A public-DHT connection
@@ -105,7 +107,7 @@ identified below rather than presented as live network parity.
 - `tests/blobs.rs`: JS blob operations, core keys, announce fields, encrypted and plain block bytes, cache decisions, and ingested SHA-256 checkpoint/resume in both directions with `sodium-native` (`tests/js/sha256-state.mjs`).
 - `tests/cast.rs`: JS cast fixtures and receiver/controller interop over HTTP and a TCP secret-stream stand-in. `tests/cast_default.rs` exercises the real default adapters and a JS receiver on a local testnet.
 - `tests/hiverelay.rs`: JS relay wire vectors, secret-stream interop, and the app's own `createHiverelaySeeder` beside this crate's seeder against one HiveRelay stand-in: identical `/seed-core` bodies and identical `hiverelay-seed` request bytes.
-- `tests/traffic.rs`: JS traffic-gate decisions and npm Protomux busy-channel interop; a `peartube/bulk-busy` claim over the wire counts only from a peer the gate was told is a source peer.
+- `tests/traffic.rs`: JS traffic-gate decisions, npm Protomux busy-channel interop, and a real hypercore transfer through a paused connection: no block arrives until it is resumed, and a held bulk connection serves nothing under its cap. `tests/blobs.rs` proves a claim counts only from a peer whose real download event named it.
 - `tests/replicate.rs`: `p2p-replicate` pulls a followed channel's title on a local testnet and skips it under an unmet disk reserve. `tests/relay.rs`: the relay founds its channel and keeps it across restarts; `PEARTUBE_PRIVATE_RELAY` starts a guard with no storage folder and refuses channel flags.
 - `tests/private_overlay.rs`: JS overlay vectors and behavior with a fake DHT, plus JS interop. `tests/network_private.rs` checks private routing fails closed and public routing joins topics; it is not a JS comparison.
 - `tests/lan_mdns.rs`: JS TXT records and parsing plus live Bonjour interop. `tests/lan_interop.rs`: JS/Rust and Rust/Rust isolated LAN discovery, streaming and connection rules.
@@ -299,7 +301,7 @@ tested and rejected for lack of repeatable wins. No ACK, pacing or wire changes.
 ## Known gaps and differences
 
 - JS plugins from `<storage>/plugins` (`PEARTUBE_PLUGINS_DIR`, `*.mjs`) are a permanent difference: this crate cannot load JavaScript. Its built-in plugins register through `MirrorHost::register`; `p2p-replicate` (`replicate`) and `hiverelay-seed` are built on `CoreNode` and registered by the relay.
-- `hiverelay-seed` marks HiveRelay connections bulk on the shared traffic gate, which buckets them and reports `peersBusy`; the gate's `pause`/`resume` are still no-ops at the transport (`src/node/network.rs`), so `hiverelayUploadMbps` does not yet throttle the wire itself.
+- `hiverelay-seed` marks HiveRelay connections bulk on the shared traffic gate, which buckets them and reports `peersBusy`; the gate's `pause`/`resume` hold and release that connection's inbound reads (`ReadGate` in `src/node/network.rs`), so `hiverelayUploadMbps` caps what the peer can draw from it.
 - The default cast adapter has no `PeerFactory`: a load targeting a different network reuses the current node. Continuous read-ahead retargeting and `holdIfThin` are not wired; retry window timing differs. See [cast notes](docs/port-notes-cast.md).
 - LAN mDNS and the isolated DHT are implemented, but the real-interface interoperability matrix remains environment-blocked on this Mac. A standalone raw UDP probe also receives no LAN multicast; an ALF “permitted” query alone does not establish delivery. See [LAN notes](docs/port-notes-lan.md).
 - Corestore storage tuning uses engine defaults; free disk space is unknown. Status reports live blob-peer in-flight requests and UDX RTT/retransmitted packets; see [node notes](docs/node-api.md).

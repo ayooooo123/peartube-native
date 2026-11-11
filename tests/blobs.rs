@@ -19,6 +19,7 @@ use peartube_native::node::blobs::{
     SendFuture,
 };
 use peartube_native::node::hash_state::{Sha256State, base64_decode, base64_encode};
+use peartube_native::traffic::{Connection, Options as TrafficOptions, TrafficGate};
 use serde_json::{Map, Value, json};
 use tokio::io::{AsyncRead, AsyncWriteExt};
 
@@ -895,8 +896,8 @@ fn run_node_script(script: &str, args: &[&str], app: &std::path::Path) -> Value 
     serde_json::from_slice(&output.stdout).expect("JSON from the script")
 }
 
-/// Dropping a job's half-written core releases its blocks and leaves the name openable: a purged core cannot be
-/// created again from its discovery key, so the retry at the same name failed `NotFound`.
+/// Dropping a job's half-written core purges it (`dropStore` -> `core.purge()`), which also frees its
+/// name: the next attempt at that name opens an empty core instead of failing `NotFound`.
 #[tokio::test]
 async fn a_dropped_named_core_can_be_ingested_again() {
     let h = harness([0x71; 32], [0x72; 32], 1_000_000).await;
@@ -910,6 +911,13 @@ async fn a_dropped_named_core_can_be_ingested_again() {
     core.append(&[&payload[..BLOCK]]).await.expect("half");
     core.close();
     h.blobs.drop_store(name).await.expect("drop");
+    let reopened = h
+        .store
+        .get(StoreGetOptions::name(name))
+        .await
+        .expect("the name opens again");
+    assert_eq!(reopened.length(), 0, "the purged blocks are gone");
+    reopened.close();
 
     let mut meta = put_meta("clip:dropped", "Dropped", name);
     meta.expected_size = Some(Some(payload.len() as u64));
@@ -923,10 +931,10 @@ async fn a_dropped_named_core_can_be_ingested_again() {
     assert_eq!(announce.blob.block_length, 2, "both blocks came from the retry");
 }
 
-/// A private core on disk whose per-job key is missing cannot be read or stitched: `put` empties it and
+/// A private core on disk whose per-job key is missing cannot be read or stitched: `put` purges it and
 /// refuses, so the next attempt starts from zero under a key the job carries.
 #[tokio::test]
-async fn a_private_core_without_its_key_is_reset_not_resumed() {
+async fn a_private_core_without_its_key_is_purged_not_resumed() {
     let h = harness([0x61; 32], [0x62; 32], 1_000_000).await;
     h.host.set_epoch_key([0x63; 32]);
     let name = "video:fixture-private-resume";
@@ -949,6 +957,13 @@ async fn a_private_core_without_its_key_is_reset_not_resumed() {
         .await
         .expect_err("a private core without its key");
     assert!(matches!(err, BlobsError::PrivateKeyMissing { .. }), "{err}");
+    let purged = h
+        .store
+        .get(StoreGetOptions::name(name))
+        .await
+        .expect("the name opens again");
+    assert_eq!(purged.length(), 0, "the unreadable half is gone");
+    purged.close();
 
     meta.extra.insert("storeKey".into(), json!(hex(&[0x64; 32])));
     let announce = h
@@ -1807,4 +1822,184 @@ async fn warm_joins_the_swarm_and_registers_ranges() {
 fn blobs_error_names_the_missing_vault() {
     let err = BlobsError::VaultRequired;
     assert!(err.to_string().contains("12-word recovery vault"));
+}
+
+// ---------------------------------------------------------------------------------------------
+// Source peers
+
+struct GateConn {
+    id: u64,
+    key: [u8; 32],
+    mux: protomux::Mux,
+}
+
+impl Connection for GateConn {
+    fn id(&self) -> u64 {
+        self.id
+    }
+    fn raw_bytes_written(&self) -> u64 {
+        0
+    }
+    fn pause(&self) {}
+    fn resume(&self) {}
+    fn destroyed(&self) -> bool {
+        false
+    }
+    fn mux(&self) -> protomux::Mux {
+        self.mux.clone()
+    }
+    fn remote_public_key(&self) -> Option<[u8; 32]> {
+        Some(self.key)
+    }
+}
+
+/// `isSourcePeer` is evidence, not a claim: a peer counts only after it has served this node a
+/// verified block — the real `download` event's `from` — and only a counted peer's
+/// `peartube/bulk-busy` message holds backfill.
+#[tokio::test]
+async fn a_busy_claim_counts_only_from_a_peer_that_served_blocks() {
+    use protomux::ChannelOptions;
+
+    let h = harness([0x71; 32], [0x72; 32], 1).await;
+    let writer_dir = tempfile::tempdir().unwrap();
+    let writer_store = Corestore::open(writer_dir.path()).unwrap();
+    let writer = writer_store
+        .get(StoreGetOptions {
+            key_pair: Some(hypercore::crypto::KeyPair::from_seed(&[0x73; 32])),
+            ..Default::default()
+        })
+        .await
+        .expect("writer core");
+    writer
+        .append(&[vec![7u8; 4096], vec![8u8; 4096]])
+        .await
+        .expect("append");
+    let key = *writer.key();
+    let writer_peer = h.store.create_key_pair("remote-writer").public_key;
+    let stranger = h.store.create_key_pair("remote-stranger").public_key;
+
+    // The node's own blob core: opening it installs the counter that hears download events.
+    let viewer = h.blobs.blob_core(&key).await.expect("viewer core");
+    let ((ar, aw), (br, bw)) = protomux::memory::duplex(64);
+    let handshake = Some([7u8; 64]);
+    let ma = protomux::Mux::new(
+        ar,
+        aw,
+        protomux::StreamInfo {
+            is_initiator: true,
+            handshake_hash: handshake,
+            remote_public_key: Some(stranger),
+        },
+    );
+    let mb = protomux::Mux::new(
+        br,
+        bw,
+        protomux::StreamInfo {
+            is_initiator: false,
+            handshake_hash: handshake,
+            remote_public_key: Some(writer_peer),
+        },
+    );
+    writer.core().replicate(&ma);
+    viewer.core().replicate(&mb);
+
+    assert!(
+        !h.blobs.is_source_peer(&hex(&writer_peer)),
+        "nothing served this node yet"
+    );
+    let block = tokio::time::timeout(
+        Duration::from_secs(10),
+        viewer.get(0, GetOptions::default()),
+    )
+    .await
+    .expect("download")
+    .expect("download ok")
+    .expect("block");
+    assert_eq!(&block[..], vec![7u8; 4096].as_slice());
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while !h.blobs.is_source_peer(&hex(&writer_peer)) {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the serving peer is recorded"
+        );
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    assert!(
+        !h.blobs.is_source_peer(&hex(&stranger)),
+        "a peer that served nothing is not a source"
+    );
+
+    // The gate reads that evidence, on one gate for both peers: a stranger's claim never counts,
+    // and the serving peer's does until it withdraws.
+    let blobs = h.blobs.clone();
+    let gate = TrafficGate::new(TrafficOptions {
+        auto_tick: false,
+        is_source_peer: Some(Arc::new(move |key: &str| blobs.is_source_peer(key))),
+        ..TrafficOptions::default()
+    });
+    gate.attach(Arc::new(GateConn {
+        id: 1,
+        key: writer_peer,
+        mux: mb.clone(),
+    }));
+    let ((sr, sw), (xr, xw)) = protomux::memory::duplex(64);
+    let stranger_mux = protomux::Mux::new(
+        xr,
+        xw,
+        protomux::StreamInfo {
+            is_initiator: false,
+            handshake_hash: handshake,
+            remote_public_key: Some(stranger),
+        },
+    );
+    let far = protomux::Mux::new(
+        sr,
+        sw,
+        protomux::StreamInfo {
+            is_initiator: true,
+            handshake_hash: handshake,
+            remote_public_key: Some(stranger),
+        },
+    );
+    gate.attach(Arc::new(GateConn {
+        id: 2,
+        key: stranger,
+        mux: stranger_mux,
+    }));
+
+    let claim = async |peer_mux: &protomux::Mux, value: u64| -> protomux::Channel {
+        let mut pairs = peer_mux.pair(peartube_native::traffic::BUSY_PROTOCOL, None);
+        let request = tokio::time::timeout(Duration::from_secs(5), pairs.recv())
+            .await
+            .expect("the gate's channel reaches the peer")
+            .expect("a pair request");
+        drop(request);
+        let channel = peer_mux
+            .open_channel(ChannelOptions::new(peartube_native::traffic::BUSY_PROTOCOL))
+            .expect("peer channel");
+        channel.sender().send(0, &value);
+        channel
+    };
+
+    let stranger_claim = claim(&far, 1).await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(
+        !gate.peers_busy(),
+        "a stranger's claim does not count"
+    );
+    let serving_claim = claim(&ma, 1).await;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while !gate.peers_busy() {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the serving peer's claim counts"
+        );
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    gate.stop();
+    drop(stranger_claim);
+    drop(serving_claim);
+    ma.destroy();
+    mb.destroy();
+    far.destroy();
 }

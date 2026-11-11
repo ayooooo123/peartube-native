@@ -202,6 +202,8 @@ pub struct WireBytes {
     /// This connection's own sent bytes; `tx` may be the route's shared total.
     sent: Arc<AtomicU64>,
     transport: Option<libudx::UdxStreamAbort>,
+    /// `conn.pause()`/`conn.resume()`: stops the mux polling this connection's inbound stream.
+    gate: ReadGate,
 }
 
 impl WireBytes {
@@ -214,6 +216,11 @@ impl WireBytes {
             transport: Some(transport),
             ..Self::default()
         }
+    }
+
+    /// The connection's inbound gate (`traffic.js` `conn.pause()`/`conn.resume()`).
+    pub fn gate(&self) -> ReadGate {
+        self.gate.clone()
     }
 
     fn attach_udx_rtt(&self, mux: &Mux) {
@@ -233,6 +240,68 @@ impl WireBytes {
 
     pub fn sent(&self) -> u64 {
         self.sent.load(Ordering::Relaxed)
+    }
+}
+
+/// `conn.pause()`/`conn.resume()`: while paused the mux does not start another read of this
+/// connection's inbound stream, so the peer's requests stop arriving and this node stops
+/// sending to it. A frame already in flight when the pause lands still arrives; the socket's
+/// receive window then holds the rest. A paused connection still closes: the mux's read loop
+/// selects on its own close signal, not only on the read.
+#[derive(Clone, Default)]
+pub struct ReadGate(Arc<ReadGateState>);
+
+#[derive(Default)]
+struct ReadGateState {
+    paused: AtomicBool,
+    wake: tokio::sync::Notify,
+}
+
+impl ReadGate {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn pause(&self) {
+        self.0.paused.store(true, Ordering::Release);
+    }
+
+    pub fn resume(&self) {
+        if self.0.paused.swap(false, Ordering::AcqRel) {
+            self.0.wake.notify_one();
+        }
+    }
+
+    pub fn is_paused(&self) -> bool {
+        self.0.paused.load(Ordering::Acquire)
+    }
+
+    /// Waits while paused. `notify_one` leaves a permit for a waiter that arrives later, so a
+    /// resume between the check and the wait cannot be lost.
+    async fn wait(&self) {
+        while self.0.paused.load(Ordering::Acquire) {
+            self.0.wake.notified().await;
+        }
+    }
+}
+
+/// A reader that waits on the connection's gate before each read.
+pub struct GatedRead<R> {
+    inner: R,
+    gate: ReadGate,
+}
+
+impl<R: FrameRead> GatedRead<R> {
+    /// Frames from `inner`, held while `gate` is paused.
+    pub fn new(inner: R, gate: ReadGate) -> Self {
+        Self { inner, gate }
+    }
+}
+
+impl<R: FrameRead> FrameRead for GatedRead<R> {
+    async fn read(&mut self) -> std::io::Result<Option<bytes::Bytes>> {
+        self.gate.wait().await;
+        self.inner.read().await
     }
 }
 
@@ -278,7 +347,13 @@ where
     };
     let (read, write) = stream.into_split();
     let mux = Mux::new(
-        MeteredRead(read, Arc::clone(&bytes.rx)),
+        MeteredRead(
+            GatedRead {
+                inner: read,
+                gate: bytes.gate.clone(),
+            },
+            Arc::clone(&bytes.rx),
+        ),
         MeteredWrite(write, Arc::clone(&bytes.tx), Arc::clone(&bytes.sent)),
         info,
     );
@@ -355,7 +430,13 @@ fn private_mux(
     };
     let (read, write) = stream.split();
     let mux = Mux::new(
-        MeteredRead(FramesRead(read), Arc::clone(&bytes.rx)),
+        MeteredRead(
+            GatedRead {
+                inner: FramesRead(read),
+                gate: bytes.gate.clone(),
+            },
+            Arc::clone(&bytes.rx),
+        ),
         MeteredWrite(
             FramesWrite(write),
             Arc::clone(&bytes.tx),
@@ -408,6 +489,7 @@ async fn start_private(
             tx: Arc::clone(&network.private_tx),
             sent: Arc::default(),
             transport: stream.udx_handle(),
+            ..WireBytes::default()
         };
         let mux = private_mux(stream, is_initiator, handshake_hash, peer, &bytes);
         let handle = network.wire(
@@ -506,10 +588,16 @@ impl crate::traffic::Connection for ConnectionHandle {
     fn raw_bytes_written(&self) -> u64 {
         self.0.bytes.as_ref().map_or(0, WireBytes::sent)
     }
-    // shortcut: pausing a bulk HiveRelay connection is a no-op, so `uploadMbps` does not cap
-    // HiveRelay seeding yet; add a UDX read/write pause when hiverelay-seed is ported.
-    fn pause(&self) {}
-    fn resume(&self) {}
+    fn pause(&self) {
+        if let Some(bytes) = &self.0.bytes {
+            bytes.gate.pause();
+        }
+    }
+    fn resume(&self) {
+        if let Some(bytes) = &self.0.bytes {
+            bytes.gate.resume();
+        }
+    }
     fn destroyed(&self) -> bool {
         ConnectionHandle::destroyed(self)
     }
@@ -565,6 +653,8 @@ pub struct Sample {
 }
 
 type Listener = Arc<dyn Fn(ConnectionHandle) + Send + Sync>;
+/// A peer key whose last connection closed.
+pub type DisconnectListener = Arc<dyn Fn([u8; 32]) + Send + Sync>;
 
 /// `createNetwork(ctx)`.
 pub struct Network {
@@ -581,6 +671,7 @@ pub struct Network {
     private_peers: Arc<AtomicU64>,
     connections: Mutex<Vec<ConnectionHandle>>,
     listeners: Mutex<Vec<(u64, Listener)>>,
+    disconnects: Mutex<Vec<(u64, DisconnectListener)>>,
     next_listener: AtomicU64,
     wakeups: Mutex<Vec<Arc<dyn WakeupSink>>>,
     content: Mutex<ContentState>,
@@ -670,6 +761,7 @@ impl Network {
             private_peers: Arc::new(AtomicU64::new(0)),
             connections: Mutex::new(Vec::new()),
             listeners: Mutex::new(Vec::new()),
+            disconnects: Mutex::new(Vec::new()),
             next_listener: AtomicU64::new(0),
             wakeups: Mutex::new(Vec::new()),
             content: Mutex::new(ContentState::default()),
@@ -768,6 +860,7 @@ impl Network {
             tx: Arc::clone(&self.wire_tx),
             sent: Arc::default(),
             transport: Some(connection.peer.stream.abort_handle()),
+            ..WireBytes::default()
         };
         let mux = metered_mux(connection.peer.stream, &bytes);
         self.wire(
@@ -827,7 +920,23 @@ impl Network {
         tokio::spawn(async move {
             watched.closed().await;
             if let Some(network) = weak.upgrade() {
-                lock(&network.connections).retain(|connection| !connection.destroyed());
+                let listeners = {
+                    let mut connections = lock(&network.connections);
+                    connections.retain(|connection| !connection.destroyed());
+                    if connections
+                        .iter()
+                        .any(|connection| connection.0.peer == peer)
+                    {
+                        return;
+                    }
+                    lock(&network.disconnects)
+                        .iter()
+                        .map(|(_, listener)| listener.clone())
+                        .collect::<Vec<_>>()
+                };
+                for listener in listeners {
+                    listener(peer);
+                }
             }
         });
         for (_, listener) in lock(&self.listeners).iter() {
@@ -929,6 +1038,19 @@ impl Network {
         Box::new(move || {
             if let Some(network) = weak.upgrade() {
                 lock(&network.listeners).retain(|(kept, _)| *kept != id);
+            }
+        })
+    }
+
+    /// A connection closed and no live connection keeps its peer any more (`network.js`'s
+    /// `conn.once('close')` source-peer cleanup). Returns the unsubscribe.
+    pub fn on_disconnect(&self, callback: DisconnectListener) -> Box<dyn Fn() + Send + Sync> {
+        let id = self.next_listener.fetch_add(1, Ordering::AcqRel) + 1;
+        lock(&self.disconnects).push((id, callback));
+        let weak = self.weak.clone();
+        Box::new(move || {
+            if let Some(network) = weak.upgrade() {
+                lock(&network.disconnects).retain(|(kept, _)| *kept != id);
             }
         })
     }
@@ -1357,6 +1479,7 @@ impl Network {
                 tx: Arc::clone(&network.wire_tx),
                 sent: Arc::default(),
                 transport: Some(connection.stream.abort_handle()),
+                ..WireBytes::default()
             };
             let mux = metered_mux(connection.stream, &bytes);
             network.wire(

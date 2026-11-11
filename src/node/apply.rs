@@ -111,13 +111,9 @@ impl Mirror {
     }
 }
 
-/// `onWriterChange(writerHex, added)`.
-pub type WriterChange = Arc<dyn Fn(&str, bool) + Send + Sync>;
-
 /// The channel's apply handler and its `isTrusted` / `update` companions.
 pub struct Apply {
     channel: String,
-    writer_change: Option<WriterChange>,
     mirror: Option<Mirror>,
 }
 
@@ -126,15 +122,8 @@ impl Apply {
     pub fn new(channel: impl Into<String>) -> Self {
         Self {
             channel: channel.into(),
-            writer_change: None,
             mirror: None,
         }
-    }
-
-    /// `onWriterChange`: tells the node which secondary writer cores to hold.
-    pub fn on_writer_change(mut self, callback: WriterChange) -> Self {
-        self.writer_change = Some(callback);
-        self
     }
 
     /// channel.js's `update` handler. Without a mirror the handler supplies none.
@@ -181,7 +170,6 @@ struct Context<'a, 'b> {
     channel: &'a str,
     view: &'a Bee,
     host: &'a ApplyCalls<'a, 'b>,
-    writer_change: Option<&'a WriterChange>,
     ops: Vec<Op>,
     roles: HashMap<String, String>,
     revoked: HashMap<String, bool>,
@@ -296,9 +284,6 @@ impl<'a, 'b> Context<'a, 'b> {
                         role = Some("owner".to_string());
                         self.roles.insert(writer.clone(), "owner".to_string());
                         claimed_here = true;
-                        if let Some(callback) = self.writer_change {
-                            callback(&writer, true);
-                        }
                     }
                 } else if cur_owner.is_empty() {
                     self.host
@@ -307,9 +292,6 @@ impl<'a, 'b> Context<'a, 'b> {
                     role = Some("writer".to_string());
                     self.roles.insert(writer.clone(), "writer".to_string());
                     legacy_granted_here = true;
-                    if let Some(callback) = self.writer_change {
-                        callback(&writer, true);
-                    }
                 } else {
                     self.roles.insert(writer.clone(), String::new());
                 }
@@ -388,9 +370,6 @@ impl<'a, 'b> Context<'a, 'b> {
                             .await?;
                         let alias = clean_text(Some(&js_text(op.get("alias"))), "");
                         self.put(format!("writer/{target}"), writer_record(next_role, &alias));
-                        if let Some(callback) = self.writer_change {
-                            callback(target, true);
-                        }
                     }
                 }
                 "revoke" => {
@@ -402,9 +381,6 @@ impl<'a, 'b> Context<'a, 'b> {
                             self.revoked.insert(target.to_string(), true);
                             self.del(format!("writer/{target}"));
                             self.put(format!("revoked/{target}"), "1");
-                            if let Some(callback) = self.writer_change {
-                                callback(target, false);
-                            }
                             if truthy(op.get("purgeEntries")) {
                                 self.flush().await?;
                                 let mut stream = self.view.range(RangeOptions::default());
@@ -489,7 +465,6 @@ impl Handlers for Apply {
                 channel: &self.channel,
                 view,
                 host,
-                writer_change: self.writer_change.as_ref(),
                 ops: Vec::new(),
                 roles: HashMap::new(),
                 revoked: HashMap::new(),

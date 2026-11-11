@@ -464,6 +464,9 @@ struct Inner<C: ChannelView, S: ContentSwarm, H: BlobHost> {
     ceilings: Mutex<Ceilings>,
     warm: Mutex<Warm>,
     block_counts: Mutex<HashMap<[u8; 32], Arc<BlockCounter>>>,
+    /// `sourcePeers`: peers that have sent this node verified blocks, forgotten with the peer's
+    /// last connection. Only their `peartube/bulk-busy` claims count.
+    source_peers: Mutex<HashSet<[u8; 32]>>,
     http_owned: Mutex<HashMap<[u8; 32], HttpOwned>>,
     http_generation: AtomicU64,
     evicted_to: Mutex<HashMap<[u8; 32], u64>>,
@@ -542,6 +545,7 @@ where
             ceilings: Mutex::new(Ceilings::default()),
             warm: Mutex::new(Warm::default()),
             block_counts: Mutex::new(HashMap::new()),
+            source_peers: Mutex::new(HashSet::new()),
             http_owned: Mutex::new(HashMap::new()),
             http_generation: AtomicU64::new(0),
             evicted_to: Mutex::new(HashMap::new()),
@@ -932,13 +936,19 @@ where
                     Err(_) => break,
                 };
                 match event {
-                    CoreEvent::Download { byte_length, .. } => {
-                        // shortcut: the app records the serving peer here (`from.remotePublicKey`
-                        // feeds `ctx.blobs.sourcePeers`); hypercore-rs reports no peer with a
-                        // download, so there is nothing truthful to record yet.
+                    CoreEvent::Download {
+                        byte_length,
+                        from,
+                        ..
+                    } => {
+                        let blobs = Blobs::from_inner(inner.clone());
+                        if let Some(peer) = from {
+                            // `sourcePeers.add(from.remotePublicKey)`: this peer served blocks,
+                            // so a `peartube/bulk-busy` claim from it counts.
+                            blobs.remember_source_peer(peer);
+                        }
                         counter.blocks.fetch_add(1, Ordering::Relaxed);
                         lock(&counter.slices).clear();
-                        let blobs = Blobs::from_inner(inner.clone());
                         blobs.record_cached(
                             key,
                             listener.length(),
@@ -1356,9 +1366,7 @@ where
 
     /// `purgeBeacon` on video removal: a HiveRelay's beacon core is named by alias, and it is
     /// purged by the discovery key the alias points at, never by hashing the alias name again.
-    ///
-    /// shortcut: corestore-rs has no `force` purge, so a beacon core another session still holds
-    /// stays; the Rust HiveRelay seeder does not create beacons yet, so nothing is ever open here.
+    /// The purge is forced, as in `blobs.js`: a beacon core another session still holds goes too.
     fn purge_beacon(&self, key: &[u8; 32]) {
         let store = self.inner.store.clone();
         let alias = hypercore::storage::Alias {
@@ -1367,7 +1375,7 @@ where
         };
         tokio::spawn(async move {
             if let Ok(Some(discovery)) = store.storage().get_alias(&alias) {
-                let _ = store.purge(&discovery).await;
+                let _ = store.purge_with(&discovery, true).await;
             }
         });
     }
@@ -1970,11 +1978,13 @@ where
                     .is_none()
             {
                 // The half on disk was written under the key the job carried; another key reads it as garbage,
-                // and two halves under two keys never stitch. Only resetting the core is safe here.
+                // and two halves under two keys never stitch. Only purging the core is safe here.
                 let error = BlobsError::PrivateKeyMissing {
                     id: meta.id.clone(),
                 };
-                reset_named_core(&session).await?;
+                let discovery = *session.discovery_key();
+                session.close();
+                self.inner.store.purge_with(&discovery, true).await?;
                 return Err(error);
             }
             self.ingest(&session, &meta, &mut source, start).await
@@ -2156,9 +2166,8 @@ where
     }
 
     /// `dropStore`: drops a half-written core when its job is cancelled, dead-lettered or restarted, so its
-    /// blocks leave the disk. The core is truncated and closed rather than purged: the name's alias outlives a
-    /// purge in this stack and a purged core cannot be created again from its discovery key, so the next
-    /// attempt at the same name would fail `NotFound` instead of starting from zero.
+    /// blocks leave the disk. The name's alias goes with the core, so the next attempt opens the same name as
+    /// an empty core, and any session still on it is closed first (`store.purge(key, { force: true })`).
     pub async fn drop_store(&self, name: &str) -> Result<(), BlobsError> {
         if name.is_empty() {
             return Ok(());
@@ -2166,7 +2175,10 @@ where
         let mut opts = StoreGetOptions::name(name.as_bytes());
         opts.inactive = true;
         let session = self.inner.store.get(opts).await?;
-        reset_named_core(&session).await
+        let discovery = *session.discovery_key();
+        session.close();
+        self.inner.store.purge_with(&discovery, true).await?;
+        Ok(())
     }
 
     fn published(&self, op: Announce) -> Published {
@@ -2640,6 +2652,22 @@ where
         }
     }
 
+    /// `isSourcePeer(hex)`: this peer has served this node verified blocks. The claim gate in
+    /// `traffic.rs` honours a `peartube/bulk-busy` message only from such a peer.
+    pub fn is_source_peer(&self, key_hex: &str) -> bool {
+        parse_hex32(key_hex).is_some_and(|key| lock(&self.inner.source_peers).contains(&key))
+    }
+
+    fn remember_source_peer(&self, key: [u8; 32]) {
+        lock(&self.inner.source_peers).insert(key);
+    }
+
+    /// A peer's last connection closed: forget what it served (JS `network.js` drops the key
+    /// when no live connection keeps it).
+    pub fn forget_source_peer(&self, key: &[u8; 32]) {
+        lock(&self.inner.source_peers).remove(key);
+    }
+
     pub fn mark_bulk_peer(&self, key: &str, on: bool) {
         let mut peers = lock(&self.inner.bulk_peers);
         if on {
@@ -2891,14 +2919,6 @@ fn write_private(path: &std::path::Path, bytes: &[u8]) {
     {
         let _ = std::fs::write(path, bytes);
     }
-}
-
-/// Empties a named core and closes it, so the next `get` by name opens the same core (its own key pair, the
-/// caller's encryption key) at byte zero.
-async fn reset_named_core(session: &Session) -> Result<(), BlobsError> {
-    session.core().truncate(0, None).await?;
-    session.close();
-    Ok(())
 }
 
 /// Bytes of content in a core. hypercore-rs counts an encrypted core's per-block padding in

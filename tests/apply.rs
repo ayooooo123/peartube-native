@@ -1,7 +1,7 @@
 //! Replays `fixtures/apply-reference.json`: `fixtures/gen/apply.mjs` drives the app's own apply.js
-//! through a stub view/host that records put/del/flush, addWriter/removeWriter and onWriterChange.
-//! Every scenario runs here against the Rust handler on a real hyperbee, and both the recorded host
-//! calls and the bytes that landed in the view must match.
+//! through a stub view/host that records put/del/flush and addWriter/removeWriter. Every scenario
+//! runs here against the Rust handler on a real hyperbee, and both the recorded host calls and the
+//! bytes that landed in the view must match.
 
 use std::sync::{Arc, Mutex};
 
@@ -196,17 +196,7 @@ async fn apply_fixtures() {
             .iter()
             .map(node_of)
             .collect();
-        let calls = recorder.calls.clone();
-        let mut handler = Apply::new(&channel);
-        {
-            let calls = calls.clone();
-            handler = handler.on_writer_change(Arc::new(move |writer: &str, added: bool| {
-                calls
-                    .lock()
-                    .unwrap()
-                    .push(json!({ "t": "writerChange", "writer": writer, "added": added }));
-            }));
-        }
+        let handler = Apply::new(&channel);
         let host = ApplyCalls::new(&recorder, Some(&nodes));
         handler
             .apply(&nodes, &bee, &host)

@@ -554,11 +554,14 @@ impl CoreNode {
                     node.blobs().mark_bulk_peer(key, on);
                 }
             })),
-            // shortcut: hypercore-rs reports a download without the peer that served the block
-            // (`CoreEvent::Download { index, byte_length }`), so `isSourcePeer` has no evidence to
-            // read and every claim counts as before. The hook is wired here the moment the crate
-            // attributes a block to a peer.
-            is_source_peer: None,
+            is_source_peer: {
+                let source = Arc::downgrade(self);
+                Some(Arc::new(move |key: &str| {
+                    source
+                        .upgrade()
+                        .is_some_and(|node| node.blobs().is_source_peer(key))
+                }))
+            },
             ..Options::default()
         });
         let net = self.net();
@@ -1241,6 +1244,12 @@ pub async fn create_node(options: Value) -> Result<Arc<CoreNode>, NodeError> {
     // relay's complete cached copies rotate past the cap.
     net.install_content_index(Arc::new(BlobIndex(weak.clone())));
     net.prime_content();
+    // `network.js` `trackConn`: a peer's source record is forgotten with its last connection.
+    // The node lives as long as the network, so its unsubscribe is never needed.
+    let _unsubscribe = {
+        let forget = blobs.clone();
+        net.on_disconnect(Arc::new(move |peer| forget.forget_source_peer(&peer)))
+    };
 
     let sources = Sources::new(
         Arc::new(SourcesDeps {
@@ -1395,6 +1404,16 @@ pub async fn create_node(options: Value) -> Result<Arc<CoreNode>, NodeError> {
 
     // A primary channel is hydrated once the update that follows the swarm's join has run.
     if channel.use_primary() {
+        // `network.js`: the tracker's own `findingPeers` is held until the swarm's flush answers
+        // (3 s cap, public routing only), so its first update does not conclude with no peer.
+        if !net.private_routing() {
+            let done = channel.finding_peers();
+            let net = net.clone();
+            tokio::spawn(async move {
+                net.flush(Duration::from_secs(3)).await;
+                done.release();
+            });
+        }
         let bee = channel.auto().clone();
         let blobs = blobs.clone();
         let closing = closing.clone();
@@ -2048,6 +2067,10 @@ impl Node for CoreNode {
 
     async fn mark_bulk_peer(&self, key: &str, on: bool) {
         self.blobs().mark_bulk_peer(key, on);
+    }
+
+    async fn is_source_peer(&self, key: &str) -> bool {
+        self.blobs().is_source_peer(key)
     }
 
     async fn set_lan(&self, lan: Option<Self::Lan>) -> Result<(), Self::Error> {

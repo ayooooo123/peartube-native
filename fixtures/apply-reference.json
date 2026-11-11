@@ -88,11 +88,6 @@
      "isIndexer": false
     },
     {
-     "t": "writerChange",
-     "writer": "9b4558df1aa5a360dbf08ac7459e729dd5f896f8c9e921346907b4505029c8c1",
-     "added": true
-    },
-    {
      "t": "put",
      "key": "7772697465722f39623435353864663161613561333630646266303861633734353965373239646435663839366638633965393231333436393037623435303530323963386331",
      "value": "7b22726f6c65223a22777269746572222c22616c696173223a22227d"
@@ -126,11 +121,6 @@
      "t": "addWriter",
      "key": "9b4558df1aa5a360dbf08ac7459e729dd5f896f8c9e921346907b4505029c8c1",
      "isIndexer": false
-    },
-    {
-     "t": "writerChange",
-     "writer": "9b4558df1aa5a360dbf08ac7459e729dd5f896f8c9e921346907b4505029c8c1",
-     "added": true
     },
     {
      "t": "put",
@@ -347,11 +337,6 @@
      "isIndexer": false
     },
     {
-     "t": "writerChange",
-     "writer": "3029643d1e6f67445046a831e742703b6304510a0a85e2f19b9e24c0ea1f34b3",
-     "added": true
-    },
-    {
      "t": "put",
      "key": "7772697465722f33303239363433643165366636373434353034366138333165373432373033623633303435313061306138356532663139623965323463306561316633346233",
      "value": "7b22726f6c65223a22777269746572222c22616c696173223a22227d"
@@ -385,11 +370,6 @@
      "t": "addWriter",
      "key": "0bab69546ed28b290918dbb114402e050b18c2d8b53eb375e942d4910ec51fb1",
      "isIndexer": false
-    },
-    {
-     "t": "writerChange",
-     "writer": "0bab69546ed28b290918dbb114402e050b18c2d8b53eb375e942d4910ec51fb1",
-     "added": true
     },
     {
      "t": "put",
@@ -483,18 +463,8 @@
      "isIndexer": false
     },
     {
-     "t": "writerChange",
-     "writer": "e2aa00f0d177e914e0e2fd731b5479392a61a8710eea90b166a8b158d86f45e0",
-     "added": true
-    },
-    {
      "t": "removeWriter",
      "key": "e2aa00f0d177e914e0e2fd731b5479392a61a8710eea90b166a8b158d86f45e0"
-    },
-    {
-     "t": "writerChange",
-     "writer": "e2aa00f0d177e914e0e2fd731b5479392a61a8710eea90b166a8b158d86f45e0",
-     "added": false
     },
     {
      "t": "put",
@@ -766,11 +736,6 @@
      "isIndexer": false
     },
     {
-     "t": "writerChange",
-     "writer": "3029643d1e6f67445046a831e742703b6304510a0a85e2f19b9e24c0ea1f34b3",
-     "added": true
-    },
-    {
      "t": "put",
      "key": "7772697465722f33303239363433643165366636373434353034366138333165373432373033623633303435313061306138356532663139623965323463306561316633346233",
      "value": "7b22726f6c65223a22777269746572222c22616c696173223a22227d"
@@ -817,11 +782,6 @@
      "t": "addWriter",
      "key": "0bab69546ed28b290918dbb114402e050b18c2d8b53eb375e942d4910ec51fb1",
      "isIndexer": false
-    },
-    {
-     "t": "writerChange",
-     "writer": "0bab69546ed28b290918dbb114402e050b18c2d8b53eb375e942d4910ec51fb1",
-     "added": true
     },
     {
      "t": "put",
@@ -900,11 +860,6 @@
      "t": "addWriter",
      "key": "00a1c13bf5e28bf2a9c1525884c76b727bc40f4eb844371e7e134fa1658974f1",
      "isIndexer": false
-    },
-    {
-     "t": "writerChange",
-     "writer": "00a1c13bf5e28bf2a9c1525884c76b727bc40f4eb844371e7e134fa1658974f1",
-     "added": true
     },
     {
      "t": "put",
@@ -1231,11 +1186,6 @@
      "isIndexer": false
     },
     {
-     "t": "writerChange",
-     "writer": "e2aa00f0d177e914e0e2fd731b5479392a61a8710eea90b166a8b158d86f45e0",
-     "added": true
-    },
-    {
      "t": "del",
      "key": "7265766f6b65642f65326161303066306431373765393134653065326664373331623534373933393261363161383731306565613930623136366138623135386438366634356530"
     },
@@ -1368,28 +1318,13 @@
      "isIndexer": false
     },
     {
-     "t": "writerChange",
-     "writer": "9b4558df1aa5a360dbf08ac7459e729dd5f896f8c9e921346907b4505029c8c1",
-     "added": true
-    },
-    {
      "t": "addWriter",
      "key": "e2aa00f0d177e914e0e2fd731b5479392a61a8710eea90b166a8b158d86f45e0",
      "isIndexer": false
     },
     {
-     "t": "writerChange",
-     "writer": "e2aa00f0d177e914e0e2fd731b5479392a61a8710eea90b166a8b158d86f45e0",
-     "added": true
-    },
-    {
      "t": "removeWriter",
      "key": "e2aa00f0d177e914e0e2fd731b5479392a61a8710eea90b166a8b158d86f45e0"
-    },
-    {
-     "t": "writerChange",
-     "writer": "e2aa00f0d177e914e0e2fd731b5479392a61a8710eea90b166a8b158d86f45e0",
-     "added": false
     },
     {
      "t": "put",

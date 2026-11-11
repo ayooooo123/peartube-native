@@ -555,6 +555,9 @@ impl Node for Fake {
         false
     }
     async fn mark_bulk_peer(&self, _key: &str, _on: bool) {}
+    async fn is_source_peer(&self, _key: &str) -> bool {
+        false
+    }
     async fn set_lan(&self, _lan: Option<()>) -> Result<(), FakeError> {
         Ok(())
     }
