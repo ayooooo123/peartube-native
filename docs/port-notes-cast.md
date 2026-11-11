@@ -1,129 +1,150 @@
-# Cast: port notes for `src/cast.js`
+# Cast: port notes for `src/cast.js` and `src/cast-control.js`
 
-`cast.js` has two roles the worker drives, and both are ported:
+A cast runs over the peer connection the two nodes already share. The control channel is a
+Protomux protocol paired on that connection (`src/cast-control.js`); there is no separate Noise
+stream, no info handshake, no browser receiver, no thin mode and no HTTP video path. Receivers
+advertise mDNS TXT `v=2` with the LAN DHT port (`lp`); a v1 receiver is listed but not current.
+The receiver's HTTP is `/cast/v1/p2p/<token>` and `/cast/v1/info` on `127.0.0.1` only.
 
 | JS | Rust | Notes |
 | --- | --- | --- |
-| `createReceiver` | `src/cast/receiver.rs` (`Receiver::start`) | identity file, LAN HTTP server, Noise RPC server, mDNS, media |
-| `createCastController` | `src/cast/controller.rs` (`CastController::start`) | discovery, pairing, LAN blob server, hosted web receivers, cast session |
-| `cast-ui.js` `receiverPage` | `src/cast/ui.rs` + `src/cast/ui/receiver.html` | the page is embedded byte-for-byte; only the boot literal is substituted |
+| `cast-control.js` `serveControl` / `openControl` | `src/cast/control.rs` | the channel, its `c.json` frames, request ids and state pushes |
+| `createReceiver` | `src/cast/receiver.rs` (`Receiver::start`) | identity, the channel on every connection, the loopback player port, mDNS, media |
+| `createCastController` | `src/cast/controller.rs` (`CastController::start`) | mDNS discovery, pairing, the cast session over the peer connection |
+| `receiverKeyPair` | `src/cast/pairing.rs` `receiver_key_pair` | the seed in `receiver.json` becomes the receiver node's key pair |
 | `qr.js` `qrSvg` | `src/cast/qr.rs` | versions 1–14, byte mode, ECC M, same mask choice, same SVG |
 
 Shared modules: `state.rs` (the cast state document and its transitions), `pairing.rs`
-(`receiver.json`, pair codes, rate limit, `safeEqual`), `records.rs` (`cast-receivers.json`,
-`receiverAddress`, `listReceivers`), `http.rs` (Range parsing, MIME, CORS, the server loop and the
-JSON client), `media.rs` (blob windowing, cached-byte accounting, the HTTP→P2P splice),
-`rpc.rs` (the newline JSON protocol on the Noise pipe), `disk.rs` (free space, the low-disk
-reclaim, the peer-storage probe), `mdns.rs` (`peartube-cast` advertise/browse).
+(`receiver.json`, pair codes, the rate limit, `safeEqual`), `records.rs` (`cast-receivers.json`,
+`pairedWith`, `receiverTarget`, `listReceivers`), `http.rs` (Range parsing, MIME, CORS, the
+loopback server), `media.rs` (blob windowing, cached-byte accounting, the windowed P2P response),
+`mdns.rs` (`peartube-cast` advertise/browse), `disk.rs` (free space, the low-disk reclaim, the
+peer-storage probe), `traits.rs` (the seams the host fills).
 
-## Wire compatibility
+## The channel
 
-Every route, method, status, header and JSON body the receiver answers with is the app's:
+One Protomux protocol, `peartube-cast/v1`, one channel per connection (a second open is refused),
+one message type whose payload is `c.json` — a `compact uint` length followed by UTF-8 JSON, byte
+for byte what the app writes.
 
-- `GET /`, `/tv`, `/cast/receiver` → the Smart TV page (`mode: "standalone"`).
-- `GET|HEAD /cast/v1/p2p/<32 hex>` → windowed Range reads from the video core (no auth; the token
-  is unguessable).
-- `GET|HEAD /cast/v1/hybrid/<32 hex>` → the byte-exact HTTP→P2P splice for the active load.
-- `GET /cast/v1/events` (bearer or `?token=`) and `GET /cast/v1/web-events?token=<webToken>` → SSE.
-- `GET /cast/v1/info`, `GET /cast/v1/web-info`, `POST /cast/v1/web-state`, `POST /cast/v1/pair`,
-  `POST /cast/v1/command` → JSON with the app's field order.
-- Controller hub: `GET /tv`, `GET /v1/cast/web-events`, `GET /cast/v1/events`,
-  `POST /v1/cast/web-register`, `POST /v1/cast/web-state`, `/cast/v1/{info,pair,command}`.
+- Sender → receiver: `{id, type: 'pair' | 'subscribe' | 'cmd', ...payload}`.
+- Receiver → sender: `{id, ok, result | error}`, and `{event: 'state', state}` once subscribed.
+- A message that is too long (> 64 KiB), not JSON, not an object, or broken is dropped; a decoder
+  never throws, because Protomux closes the whole connection on a throwing handler.
+- Requests are handled in order of arrival, each on its own task; a reply is sent as
+  `{id, ok: true, result}` or `{id, ok: false, error}` with the handler's message.
+- Backpressure: the app's `message.send` always writes and reports `drained`; `protomux-rs`'s
+  `send_raw` refuses while the transport is above its high-water mark. The port waits on
+  `Mux::drained` and retries, so a request or reply is never dropped; state pushes keep the
+  app's rule (skip while backpressured, push the newest state once the connection drains).
 
-The Noise pipe is `{id, type, ...payload}` requests with `{id, ok, result}` / `{id, ok:false,
-error}` replies and `{event:"state", state}` pushes; `info` is called as the handshake, `pair`,
-`subscribe` and `cmd` are the receiver's verbs. Retryable dial codes are `HOLEPUNCH_ABORTED`,
-`PEER_CONNECTION_FAILED`, `TRY_LATER`, `ERR_PRIVACY_UNAVAILABLE` plus an attempted `ETIMEDOUT`,
-over a 90 s deadline, exactly like `connectNoiseRpc`.
+Pairing rules are the receiver's, exactly as in the app:
 
-Integration seams (`src/cast/traits.rs`): `CastPeer` (the P2P node), `PeerFactory`, `DhtConnect` /
-`DhtServer` (peeroxide secret streams), `BlobServerFactory` / `LanBlobServer`. Nothing in the cast
-port opens P2P sockets itself; `src/cast/adapters.rs` fills every seam for the real node and
-`Backend::spawn` wires it as the `CastFactory`, while `tests/cast.rs` keeps the TCP stand-ins.
+- `pair` with the 6-character code answers `{deviceId, name, publicKey, token}`. Wrong codes count
+  per link kind (LAN and everything else apart), six inside 15 s lock that kind out.
+- An open receiver (`openAuth`) on a **LAN** link is trusted: `pair` needs no code and answers an
+  **empty** token, never its permanent pair token; commands from that link need no token.
+- Every other request needs the pair token (`Unauthorized; pair with this TV first`).
+- `subscribe` registers the channel for state pushes and answers `{state}`; `cmd` applies a
+  command and answers `{ok: true, state}`.
 
-`src/cast/adapters.rs` is the app's wiring, one seam per JS call:
+## The receiver
 
-- `NodePeer` is `CastPeer` over `CoreNode`: the catalog's `find_entry`/`search`/`open_uri`, the
-  blob core from `Node::blob_core`, the swarm's `join_peer`/`dial_lan_peer`, `evict_behind`,
-  `clear_cache` and `warm`. `warm` takes the raw announcement, the shape `Node::warm` parses. Its
-  `close` is a no-op: the backend owns that node and closes it with the worker.
-- `NodeDht` dials with the node's own HyperDHT handle and key pair; `NodeDhtServer` is
-  `dht.createServer` + `listen(keyPair)` — a peeroxide swarm bound to the receiver identity's Noise
-  key that accepts the controller's dials. Both wrap a `SecretStream` in a pump onto a tokio
-  duplex so the newline JSON RPC sees a byte pipe (`shortcut: one protocol frame per 64 KiB read
-  chunk, no coalescing`).
-- `CastBlobServers` binds one `byte_stream::BlobServer` on `0.0.0.0:0` with the default random
-  token and 96 MiB window. Its resolver admits only `allow`ed blob keys, calls `Node::blob_core`
-  for the swarm/ledger/ceiling side effects, then opens the request's own Corestore session, the
-  way the app's `store.session().get()` does. `get_link` re-hosts the server's link on the LAN
-  address the controller picked.
-- `Factory::start_local_receiver` loads the receiver identity first so the DHT server has its
-  seed, and binds the receiver on `RECEIVER_PORT` (`any_port` fallback) with mDNS on, exactly like
-  `startLocalReceiver`. `PeerFactory` stays `None`: a load whose network differs from the current
-  node reuses it instead of opening a second one.
+`Receiver::start` loads `receiver.json` (creating it on first run), joins the LAN topic
+`hash('peartube-cast/v1')`, serves the channel on every connection the node has and will have,
+binds the loopback player port (any-port fallback) and advertises mDNS:
+
+```
+v=2, proto=peartube-cast, id, name, h, pk, lp=<LAN DHT port>, auth=open|code
+```
+
+There is no `p2p` key and no receiver HTTP port in the record: a sender dials the node's LAN DHT
+port, or joins it through the DHT. A receiver whose LAN DHT did not start still advertises
+(`lp=0` and the service port `RECEIVER_PORT`), as the app does: it stays listable and a sender can
+still pair with it by key. `info()` carries `protocol`, `deviceId`, `name`, `publicKey`,
+`host`, `port` (the loopback player port), `authRequired`, `routes`, `storageFreeBytes`,
+`externalStorage`, `state`, `pairCode` (`OPEN` when open) and `pairingUri`/`qrSvg`.
+
+The loopback server answers the player and nothing else:
+
+- `GET|HEAD /cast/v1/p2p/<32 hex>` — windowed Range reads of a remembered load.
+- `GET /cast/v1/info` — the telemetry document (`deviceId`, `name`, `routes`, `state`).
+- anything else — `404`.
+
+A load keeps the last four streams addressable by token; the player's URL is
+`http://127.0.0.1:<port>/cast/v1/p2p/<token>`.
+
+## The controller
+
+`CastController::start` reads `cast-receivers.json`, browses mDNS for `_peartube-cast._tcp`,
+merges the discovered receivers with the saved pairings (`listReceivers`, with `current` and
+`transport`), and drives one session at a time. A session opens the controller's node to the
+receiver (`connectPeer`: the open connection, else a LAN dial and a DHT join), opens the channel on
+it, subscribes, and sends `load` (20 s) or `status` (10 s). The session records its transport
+(`lan` or `p2p`), and the receiver's state pushes update it until it closes.
+
+`startSession` retries once, on the new connection, when the connection closes during setup
+(`Receiver connection closed`). Opening the channel has the same one-retry rule when LAN discovery
+replaced the link between `connectPeer` resolving and the open: the retry happens only if the
+connection is gone, so a peer that genuinely refuses casts is reported at once. A newer cast,
+attach or stop retires an in-flight attempt; a stale attempt that finishes later never installs
+its connection. When the channel closes under the active session, the controller re-attaches to
+the TV on the link that is left.
+
+Pairing: by a `peartube://receiver/<64-hex key>?token=…` link (the token is trusted as given), or
+by the 64-hex key plus the code. A discovered receiver contributes its LAN address, display name
+and `current`; a v1 receiver is refused with `This receiver runs an older PearTube: update it`.
+The saved key wins over mDNS, which is unsigned.
+
+`castPlay` resolves the entry, warms the film when this device holds it (the TV then fetches from
+this node over their connection), and sends the load with the watch link plus its channel. A
+receiver without a token, and not open, is refused before connecting:
+`Pair with <name> using its 6-character TV code before casting`.
+
+## Integration seams
+
+`src/cast/traits.rs` narrows the host to what the app's node API offers:
+
+- `CastPeer` — `peerKey`, `privateRouting`, `hasLan`, `lanEndpoint`, `status`, `joinLanTopic`,
+  `peerConnections`, `onConnection`, `connectPeer`, `openUri`, `blobCore`, `clearCache`,
+  `evictBehind`, `findEntry`, `search`, `warm`, `close`.
+- `PeerConnection` — `id`, `remotePublicKey`, `isLan` (`node.isLanConnection`), `destroyed`, `mux`
+  (`Protomux.from(conn)`), `closed` and `close`.
+
+`src/cast/adapters.rs` fills them for `CoreNode`: `NodePeer` wraps the node's catalog, blob cores,
+connection set, LAN topic and cache trimming; `Conn` wraps a `ConnectionHandle`'s mux;
+`Service`/`Factory` are the worker's `Cast`/`CastFactory`.
+
+Node hooks added for this port:
+
+- `createNode({ keyPair })` — `{ publicKey, secretKey }` hex (or the 64-hex seed), so a receiver's
+  node runs under `receiverKeyPair(castStorage)` and senders find it after a restart.
+  `Network::open_with_key` carries it; `Network::open` stays as the no-key form.
+- `Network::join_lan_topic(id, topic)` — the LAN-only topic, re-joined when the LAN binding is
+  replaced (`setLan`), never announced on the DHT.
+- `isLanConnection`, `peerConnections` and `onConnection` already existed on the node; the cast
+  adapter reads them directly (`node.net()`), so `Node` needed no new trait method.
 
 ## Deliberate differences
 
 | JS | Rust | Why |
 | --- | --- | --- |
-| `state` is a plain object; `reportState` may leave `videoDecoder: undefined` | the state map keeps the key with `null` and `state::to_json` drops a null `videoDecoder` | JSON has no `undefined`; this keeps the key's position (before `droppedFrames`) and the app's bytes |
+| `steerReadAhead` keeps one `core.download` window per stream, retargeted every second | each range response opens one `byte-stream-rs` window sized by the same disk-aware arithmetic (`media::read_ahead_bytes`); eviction still runs every 15 s (3 s on a tight disk) through `CastPeer::evict_behind` | the window is per-response, so a started range is never retargeted mid-stream |
+| `serveWindowedStream` counts `core.download` blocks via `core.count` | `Media::cached_bytes` walks `core.has(i)` over the blob's block range, cached 3 s | hypercore-rs has no range count; the 3 s cache bounds the cost |
+| `holdIfThin` pauses the response for a cushion | not modelled; the window arithmetic and the worklet's memory budget already bound the response | a paused body has no equivalent in the per-response window; see gaps |
+| `state` is a plain object; `reportState` may leave `videoDecoder: undefined` | the state map keeps the key with `null` and `state::to_json` drops a null `videoDecoder` | JSON has no `undefined`; the app's bytes and key order are preserved |
 | `freeDiskBytes` via `statfsSync` | `df -kP <dir>` | `statvfs` needs `unsafe`, which the crate forbids; `df -kP` reports the same `bavail * 1024` |
 | `resolvePeerStorage` probes with a RocksDB Corestore | probes with a hypercore-rs store and one appended block | the Rust backend's storage is hypercore-rs; the probe still proves lock+append works there |
-| `steerReadAhead` keeps one download window per stream and retargets it every second | each range response opens one `byte-stream-rs` window sized by the same disk-aware arithmetic (`media::read_ahead_bytes`); eviction still runs every 15 s (3 s on a tight disk) through `CastPeer::evict_behind` | the window is per-response in the Rust port, so a started range is never retargeted mid-stream; see deferred pieces below |
-| `serveWindowedStream` counts `core.download` blocks via `core.count` | `Media::cached_bytes` walks `core.has(i)` over the blob's block range, cached 3 s | hypercore-rs has no range count; the 3 s cache bounds the cost |
-| Physical disk reserve | read-ahead reserves 4/3 of new cached bytes and eviction budgets four rather than three logical windows | the storage engine now gates blob relocation at 25% garbage, avoiding live-video rewrites while bounding retained garbage; logical cache contribution is unchanged |
-| Receiver-only cache writes | only `App::open_receiver_node` passes `storageWal: false`; ordinary app and writer nodes retain the WAL | re-fetchable verified blocks need one flash write rather than WAL plus blob writes; an unflushed tail may be lost on close/crash, while receiver pairing remains in its separate identity file |
-| `bonjour-service` browse removes a service by TXT `id` | `mdns-sd` `ServiceRemoved` carries only the full name, so the entry stays until the next resolve | `mdns-sd` cannot resolve a removed record; the stale row is only cosmetic in the picker |
+| `bonjour-service` browse removes a service by TXT `id` | `mdns-sd` `ServiceRemoved` carries only the full name; the browse keeps a fullname→id index to remove the row | the index reproduces the app's removal |
 | `interfaceAdapter`/`selfAddressAdapter` per host | one `mdns-sd` daemon per role, advertising the LAN IPv4 it was given | same simplification as the LAN port (see `docs/port-notes-lan.md`) |
 | `os.hostname()` default receiver name | callers pass `name`; `ReceiverOptions::default()` uses `"PearTube TV"` | `std` has no `gethostname` without `unsafe`; the worker always passes the TV name |
-| `worklet: true` shrinks the node's request windows | not modelled | that is the node's own option, passed through `PeerFactory` |
-| hosted web receiver `pairCode` in `/cast/v1/web-register` is `OPEN` | same; `/cast/v1/pair` therefore falls through to the active browser | the app never exposes the random code, so the code match never fires there either |
+| Physical disk reserve | read-ahead reserves 4/3 of new cached bytes and eviction budgets four rather than three logical windows | the storage engine gates blob relocation at 25% garbage, avoiding live-video rewrites while bounding retained garbage |
+| Receiver-only cache writes | only `App::open_receiver_node` passes `storageWal: false`; ordinary app and writer nodes retain the WAL | re-fetchable verified blocks need one flash write rather than WAL plus blob writes |
 
-## Deferred pieces
+## Not ported
 
-1. **Continuous read-ahead steering.** `steerReadAhead` retargets a stream's download window every
-   second as the playhead moves. The port sizes a window when a response starts and leaves it; a
-   later response opens a new window. Eviction and free-space trimming are ported. Wiring a
-   background retarget needs a per-stream window handle from `byte-stream-rs`; when that lands,
-   replace the per-response window.
-2. **`holdIfThin`.** The player cushion (wait for 10 s buffered after 2 MiB, 2 s once cushioned,
-   at most 20 s) is specified by `media::hold_deadline` and the `HOLD_*` constants but not wired
-   into `windowed_response`; the bounded window already removes the worst stall pattern.
-3. **LAN isolated HyperDHT for cast.** `network.lan`/`privateRouting` are forwarded to
-   `PeerFactory`, which owns the node; the isolated LAN DHT itself is the LAN port's deferred half.
-4. **`serveSpliceStream`'s 1 MiB cold HTTP window after the first splice error.** The port keeps the
-   app's window, stall timeouts (3.5 s with an HTTP fallback, 8 s upstream) and mid-response
-   fallback, but a retried HTTP slice always uses the extended window; the app shrinks it only
-   while P2P is available. Same bytes, marginally different retry timing.
-5. **`receiverPage` boot literal.** The page is copied verbatim from `cast-ui.js`; if that file
-   changes, re-extract `src/cast/ui/receiver.html` (single `__BOOT__` placeholder).
-
-## Tests
-
-- `fixtures/cast-reference.json` is generated by `tests/js/cast-fixtures.mjs` from the app's own
-  code: `parseHttpRange`, `guessMediaMime` and `receiverAddress` are lifted from `src/cast.js`;
-  command and player-report transitions come from a real `createReceiver` over HTTP; pairing
-  records come from a real `createCastController`. Regenerate with
-  `node tests/js/cast-fixtures.mjs > fixtures/cast-reference.json`.
-- `cargo test --test cast` runs the pure-function parity and the full receiver flow, including the
-  `info`/`web-info` bodies, the pairing record, the saved file and the merged listing.
-- `cargo test --test cast -- --include-ignored` additionally runs five tests (needs `node` and the
-  app checkout via `PEARTUBE_APP`): the real `cast.js` controller drives this receiver over HTTP and
-  over a TCP stand-in for the secret stream, this controller drives the real `cast.js` receiver both
-  ways, and the committed fixture is regenerated and compared, so a stale reference fails the suite.
-- `cargo test --test cast_default` runs the real stack: two `Backend::spawn` instances on one
-  local HyperDHT testnet, a fixture published into the controller's storage, pairing over LAN with
-  the receiver's code, `castPlay` (asserting `mode: "p2p"`), the receiver's player URL serving the
-  source's exact bytes full and ranged, and the `castControl`/`castStop` transitions.
-  `js_cast_receiver_is_driven_by_the_default_backend` (ignored) drives the app's own `cast.js`
-  receiver through the same backend.
-  Its bootstrap is a HyperDHT node, not bare DHT-RPC: the latter cannot store peer announcements
-  or forward `PEER_HANDSHAKE`, and replies with error code 1 instead of reaching the receiver.
-- Module unit tests sit next to the code (`cargo test --lib cast`).
-- `cast::controller::tests::active_session_survives_contended_status_and_stop` holds the
-  active-session lock on another thread while status and stop run. Session updates never await,
-  so this slot uses a synchronous mutex: contention must not become a null session or a lost stop.
-
-## Private routing
-
-Under `privateRouting` the cast Noise RPC has no public DHT: `NodeDht::connect` fails with "Private routing is on: casting over the public DHT is unavailable", and a local receiver starts without a public DHT server. JS behaves the same way, because there `node.dht` is the overlay facade, which has no `connect` or `createServer`. So pairing or attaching by Noise key fails, while LAN-addressed casting (HTTP to a receiver's LAN address) is unchanged.
+- The app's `#1`/`#2` cast e2e scenarios around a 3rd peer seeding and private-routing casts are
+  covered by the JS suite; the Rust tests cover pairing, the control channel, the data path and
+  both interop directions.
+- `holdIfThin`'s read pause (see above). The receiver's RAM window budget, reader leases and
+  watched-block trimming are ported.

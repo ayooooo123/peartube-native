@@ -1,21 +1,27 @@
 //! PearTube Cast & TV Receiver stack, ported from the app's `src/cast.js`.
 //!
-//! The split mirrors the two roles the worker drives:
+//! A receiver is a node with a player: senders find it by mDNS or by its key, connect to it as to
+//! any peer, and pair with and control it on a Protomux channel of that one connection
+//! ([`control`], the app's `src/cast-control.js`). The film reaches it over the same connection
+//! and the swarm. Pairing secrets stay outside Corestore, so they never reach replicating
+//! strangers.
 //!
-//! - [`controller`] — the sender/hub: mDNS discovery, pairing (LAN HTTP or Noise P2P), the
-//!   token-gated LAN blob server, zero-install Smart TV web receivers, and the cast session.
-//! - [`receiver`] — the TV: pairing identity on disk, the LAN HTTP server (with `/tv`, the JSON
-//!   command API and the token-gated Range routes), the Noise RPC server, and mDNS advertising.
+//! - [`controller`] — the sender: mDNS discovery, pairing (6-char code or a receiver link), the
+//!   cast session over the peer connection, and `castPlay`/`castAttach`/`castControl`/`castStop`.
+//! - [`receiver`] — the TV: pairing identity on disk, the control channel on every connection, the
+//!   loopback HTTP server its own player reads, and mDNS advertising (`v=2`, LAN DHT port).
 //!
-//! Shared pieces: [`state`] (the cast state document and its transitions), [`pairing`] (the
-//! receiver identity file and pair codes), [`records`] (saved receivers and the merged listing),
-//! [`http`] (Range parsing, CORS, the server and the JSON client), [`media`] (blob windowing and
-//! the byte-exact HTTP→P2P splice), [`rpc`] (the newline JSON protocol on the Noise pipe),
-//! [`disk`] (free space, the low-disk reclaim and the peer-storage probe), [`qr`] and [`ui`].
+//! Shared pieces: [`control`] (the cast channel and its JSON frames), [`state`] (the cast state
+//! document and its transitions), [`pairing`] (the receiver identity file, pair codes and the
+//! receiver's node key), [`records`] (saved receivers and the merged listing), [`http`] (Range
+//! parsing, CORS, the loopback server), [`media`] (the windowed P2P stream and its read-ahead),
+//! [`mdns`] (advertising and discovery), [`disk`] (free space, the low-disk reclaim and the
+//! peer-storage probe), [`qr`] and [`traits`] (the seams the host fills).
 //!
 //! `docs/port-notes-cast.md` records the deliberate differences and what is deferred.
 
 pub mod adapters;
+pub mod control;
 pub mod controller;
 pub mod disk;
 pub mod http;
@@ -25,33 +31,28 @@ pub mod pairing;
 pub mod qr;
 pub mod receiver;
 pub mod records;
-pub mod rpc;
 pub mod state;
 pub mod traits;
-pub mod ui;
 
 use std::fmt;
 
-pub use controller::{CastController, CastSession, ControllerOptions};
+pub use controller::{CastController, ControllerOptions};
 pub use disk::{free_disk_bytes, reclaim_low_disk_receiver_storage, resolve_peer_storage};
 pub use pairing::{
     PairLimiter, ReceiverIdentity, code_from_bytes, generate_pair_code, normalize_pair_code,
-    random_hex, safe_equal,
+    random_hex, receiver_key_pair, safe_equal,
 };
-pub use receiver::{Receiver, ReceiverOptions};
+pub use receiver::{Receiver, ReceiverOptions, cast_lan_topic};
 pub use records::{
-    DiscoveredReceiver, ListedReceiver, SavedReceiver, SavedReceivers, WebListing, list_receivers,
-    receiver_address,
+    DiscoveredReceiver, ListedReceiver, SavedReceiver, SavedReceivers, list_receivers,
+    receiver_target,
 };
 pub use state::{CastState, Plan};
-pub use ui::receiver_page;
 
 /// Pair code alphabet, minus `0`, `1`, `I` and `O`.
 pub const CODE_ALPHABET: &[u8] = b"23456789ABCDEFGHJKLMNPQRSTUVWXYZ";
 /// mDNS service type advertised by a receiver.
 pub const CAST_SERVICE_TYPE: &str = "peartube-cast";
-/// Largest JSON body the command API reads.
-pub const MAX_JSON_BODY: usize = 64 * 1024;
 /// Below this free space a receiver purges its stale Corestores on boot.
 pub const LOW_DISK_BOOT_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 /// Below this free space a load clears blocks for other videos.
@@ -72,20 +73,11 @@ pub const STREAM_FLOOR_BYTES: u64 = 256 * 1024 * 1024;
 pub const DEFAULT_STREAM_BYTES_PER_SEC: u64 = 8 * 1024 * 1024;
 /// Cadence of the eviction pass.
 pub const EVICT_EVERY_MS: u64 = 15_000;
-/// Bytes after which a reader is treated as the streaming player, not a probe.
-pub const HOLD_AFTER_BYTES: u64 = 2 * 1024 * 1024;
-/// Buffered seconds the player waits for when starting (or just after a seek).
-pub const HOLD_SECONDS: u64 = 10;
-/// Buffered seconds a cushioned reader waits for.
-pub const HOLD_LOW_SECONDS: u64 = 2;
-/// Longest a thin reader waits for its cushion.
-pub const HOLD_MAX_MS: u64 = 20_000;
-/// HTTP→P2P splice: bytes served over HTTP from a cold start before re-checking P2P.
-pub const COLD_HTTP_WINDOW: u64 = 1024 * 1024;
 /// A load's stream token is remembered for this many recent loads.
 pub const REMEMBERED_STREAMS: usize = 4;
 
-/// A failure carrying the HTTP status the app's handlers answer with.
+/// A failure carrying the HTTP status the app's handlers answer with; `0` for a cast-channel
+/// error, which has no HTTP status.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CastError {
     pub message: String,

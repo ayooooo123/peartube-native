@@ -178,27 +178,15 @@ pub trait Mirror: Send + Sync {
     ) -> BoxFuture<'a, Result<Value, HttpError>>;
 }
 
-/// The cast hub the API server forwards to. The cast stack owns every one of these; the API
-/// server only decides which routes reach it.
+/// The cast stack the API server forwards `/v1/cast/*` to. The cast controller owns every one of
+/// these; the API server only decides which routes reach it.
 pub trait CastBridge: Send + Sync {
     fn status(&self) -> Value;
-    fn web_setup_qr_svg(&self, url: &str) -> String;
-    fn register_web_receiver(&self, params: &Value) -> Value;
-    fn update_web_receiver_state(&self, params: &Value) -> Value;
     fn pair_receiver<'a>(&'a self, params: &'a Value) -> BoxFuture<'a, Result<Value, HttpError>>;
     fn remove_receiver(&self, id: &str) -> Value;
     fn cast_play<'a>(&'a self, params: &'a Value) -> BoxFuture<'a, Result<Value, HttpError>>;
     fn cast_control<'a>(&'a self, params: &'a Value) -> BoxFuture<'a, Result<Value, HttpError>>;
     fn cast_stop<'a>(&'a self, params: &'a Value) -> BoxFuture<'a, Result<Value, HttpError>>;
-    /// `/cast/v1/*`: `None` is the app's `handleHubCastJson` miss.
-    fn hub_json<'a>(
-        &'a self,
-        method: &'a Method,
-        url: &'a Url,
-        body: Value,
-    ) -> BoxFuture<'a, Option<Result<Value, HttpError>>>;
-    fn web_events(&self, url: &Url) -> Response<Body>;
-    fn hub_sender_events(&self, url: &Url) -> Response<Body>;
 }
 
 /// Everything the app reads off `state` besides the node.
@@ -495,34 +483,6 @@ impl<N: Node> Api<N> {
                 .blob_route(&method, &url, parts.headers.get(header::RANGE))
                 .await;
         }
-        if method == Method::GET
-            && (path == "/tv" || path == "/cast/receiver")
-            && self.options.cast.is_some()
-        {
-            let mut response = full(Bytes::from(crate::cast::ui::receiver_page(
-                "hub",
-                "PearTube Smart TV",
-            )));
-            let headers = response.headers_mut();
-            cors(headers);
-            isolation(headers);
-            headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
-            headers.insert(
-                header::CONTENT_TYPE,
-                HeaderValue::from_static("text/html; charset=utf-8"),
-            );
-            return response;
-        }
-        if method == Method::GET
-            && let Some(cast) = &self.options.cast
-            && (path == "/v1/cast/web-events" || path == "/cast/v1/events")
-        {
-            return if path == "/v1/cast/web-events" {
-                cast.web_events(&url)
-            } else {
-                cast.hub_sender_events(&url)
-            };
-        }
         if method == Method::GET && path == "/v1/events" {
             return self.events_route();
         }
@@ -622,16 +582,6 @@ impl<N: Node> Api<N> {
         let url = req.url;
         let path = url.path();
         let node = self.node();
-        if let Some(cast) = &self.options.cast {
-            if *method == Method::POST && path == "/v1/cast/web-register" {
-                let body = self.read_body(req.body).await?;
-                return Ok(Some(cast.register_web_receiver(&body)));
-            }
-            if *method == Method::POST && path == "/v1/cast/web-state" {
-                let body = self.read_body(req.body).await?;
-                return Ok(Some(cast.update_web_receiver_state(&body)));
-            }
-        }
         // Writes, and the settings themselves, need the token; reads of public state do not.
         if let Some(token) = self.token()
             && (matches!(*method, Method::POST | Method::PUT | Method::DELETE)
@@ -1085,59 +1035,40 @@ impl<N: Node> Api<N> {
             return mirror.run(&plugin, Value::Object(payload)).await.map(Some);
         }
 
-        if let Some(cast) = &self.options.cast {
-            if path.starts_with("/cast/v1/") {
-                let body = if matches!(*method, Method::POST | Method::PUT) {
-                    self.read_body(req.body).await.unwrap_or(Value::Null)
-                } else {
-                    Value::Null
-                };
-                return match cast.hub_json(method, url, body).await {
-                    Some(result) => result.map(Some),
-                    None => Ok(None),
-                };
+        if let Some(cast) = &self.options.cast
+            && path.starts_with("/v1/cast/")
+        {
+            if *method == Method::GET && path == "/v1/cast/status" {
+                return Ok(Some(cast.status()));
             }
-            if path.starts_with("/v1/cast/") {
-                if *method == Method::GET && path == "/v1/cast/status" {
-                    let status = cast.status();
-                    let qr = status
-                        .get("webReceiverUrl")
-                        .and_then(Value::as_str)
-                        .map(|url| cast.web_setup_qr_svg(url))
-                        .unwrap_or_default();
-                    let mut out = object(status);
-                    out.insert("webReceiverQrSvg".to_owned(), Value::String(qr));
-                    return Ok(Some(Value::Object(out)));
-                }
-                if *method == Method::POST && path == "/v1/cast/pair" {
-                    return cast
-                        .pair_receiver(&self.read_body(req.body).await?)
-                        .await
-                        .map(Some);
-                }
-                if *method == Method::DELETE
-                    && let Some(id) = rest(path, "/v1/cast/receivers/")
-                {
-                    return Ok(Some(cast.remove_receiver(&percent_decode(&id))));
-                }
-                if *method == Method::POST && path == "/v1/cast/play" {
-                    return cast
-                        .cast_play(&self.read_body(req.body).await?)
-                        .await
-                        .map(Some);
-                }
-                if *method == Method::POST && path == "/v1/cast/control" {
-                    return cast
-                        .cast_control(&self.read_body(req.body).await?)
-                        .await
-                        .map(Some);
-                }
-                if *method == Method::POST && path == "/v1/cast/stop" {
-                    return cast
-                        .cast_stop(&self.read_body(req.body).await?)
-                        .await
-                        .map(Some);
-                }
+            if *method == Method::POST && path == "/v1/cast/pair" {
+                return cast
+                    .pair_receiver(&self.read_body(req.body).await?)
+                    .await
+                    .map(Some);
+            }
+            if *method == Method::DELETE
+                && let Some(id) = rest(path, "/v1/cast/receivers/")
+            {
+                return Ok(Some(cast.remove_receiver(&percent_decode(&id))));
+            }
+            if *method == Method::POST && path == "/v1/cast/play" {
+                return cast
+                    .cast_play(&self.read_body(req.body).await?)
+                    .await
+                    .map(Some);
+            }
+            if *method == Method::POST && path == "/v1/cast/control" {
+                return cast
+                    .cast_control(&self.read_body(req.body).await?)
+                    .await
+                    .map(Some);
+            }
+            if *method == Method::POST && path == "/v1/cast/stop" {
+                return cast
+                    .cast_stop(&self.read_body(req.body).await?)
+                    .await
+                    .map(Some);
             }
         }
         if *method == Method::GET && path == "/manifest.json" {

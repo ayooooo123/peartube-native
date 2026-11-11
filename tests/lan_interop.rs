@@ -558,12 +558,11 @@ fn rust_to_rust_over_lan() {
         "cast peers excludes its separately counted LAN peers"
     );
     assert_eq!(status.lan_peers, follower.net().connection_count());
-    assert_eq!(status.connected_peers.len() as u64, status.lan_peers);
-    assert!(
-        status
-            .connected_peers
-            .iter()
-            .all(|peer| peer["route"] == "lan" && peer["remoteAddress"].is_string())
+    assert_eq!(
+        status.routes.as_ref().expect("routes")["lan"]["peers"]
+            .as_u64()
+            .unwrap_or(0),
+        status.lan_peers
     );
 
     rt.block_on(follower.close()).expect("close follower");

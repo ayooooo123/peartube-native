@@ -11,14 +11,14 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use bytes::Bytes;
-use http_body_util::{BodyExt, Empty, Full};
+use http_body_util::{BodyExt, Full};
 use hyper::header::{HeaderMap, HeaderName, HeaderValue};
 use hyper::{Method, Request, Response, StatusCode};
 use hyper_util::client::legacy::Client;
 use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::rt::TokioExecutor;
 use peartube_native::http::{
-    Acquirer, Api, ArtLookup, BlobAddr, Body, CastBridge, HttpError, Mirror, Options,
+    Acquirer, Api, ArtLookup, BlobAddr, CastBridge, HttpError, Mirror, Options,
 };
 use peartube_native::node::api::*;
 use peartube_native::node::{Node, PutSource};
@@ -619,33 +619,13 @@ impl Mirror for FakeMirror {
 
 struct FakeCast;
 
-fn empty_body() -> Body {
-    Empty::new().map_err(|error| match error {}).boxed_unsync()
-}
-
 impl CastBridge for FakeCast {
     fn status(&self) -> Value {
         json!({
-            "webReceiverUrl": "http://127.0.0.1:8177/tv",
             "receivers": [],
             "session": null,
             "receiverMode": null,
         })
-    }
-
-    fn web_setup_qr_svg(&self, url: &str) -> String {
-        format!("<svg data-url=\"{url}\"/>")
-    }
-
-    fn register_web_receiver(&self, params: &Value) -> Value {
-        json!({
-            "registered": true,
-            "id": params.get("id").and_then(Value::as_str).unwrap_or("w1"),
-        })
-    }
-
-    fn update_web_receiver_state(&self, _params: &Value) -> Value {
-        json!({ "ok": true })
     }
 
     fn pair_receiver<'a>(
@@ -678,25 +658,6 @@ impl CastBridge for FakeCast {
         _params: &'a Value,
     ) -> futures_util::future::BoxFuture<'a, Result<Value, HttpError>> {
         Box::pin(async move { Ok(json!({ "ok": true, "action": "stop" })) })
-    }
-
-    fn hub_json<'a>(
-        &'a self,
-        _method: &'a Method,
-        url: &'a url::Url,
-        _body: Value,
-    ) -> futures_util::future::BoxFuture<'a, Option<Result<Value, HttpError>>> {
-        Box::pin(async move {
-            (url.path() == "/cast/v1/info").then(|| Ok(json!({ "protocol": "peartube-cast/v1" })))
-        })
-    }
-
-    fn web_events(&self, _url: &url::Url) -> Response<Body> {
-        Response::new(empty_body())
-    }
-
-    fn hub_sender_events(&self, _url: &url::Url) -> Response<Body> {
-        Response::new(empty_body())
     }
 }
 
@@ -842,13 +803,7 @@ async fn replay(scenario: &str, options: Options, node: Option<Arc<Fake>>) {
                 wrong.push(format!("extra header {name}"));
             }
         }
-        // The cast page asset ends in a newline the app's template does not; that one byte is
-        // `cast::ui`'s file, not this server's.
-        let body_matches = if response.path == "/tv" {
-            body.trim_end_matches('\n') == response.body.trim_end_matches('\n')
-        } else {
-            same_body(&response.headers, &response.body, &body)
-        };
+        let body_matches = same_body(&response.headers, &response.body, &body);
         if !body_matches {
             wrong.push(format!("body {body:?} != {:?}", response.body));
         }

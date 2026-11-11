@@ -343,7 +343,6 @@ pub enum OpenUri {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CastStatus {
-    pub web_receiver_url: Option<String>,
     pub receivers: Vec<Value>,
     pub session: Option<Value>,
     pub receiver_mode: Option<Value>,
@@ -440,7 +439,6 @@ pub struct CastOptions<N: crate::node::Node> {
     pub get_lan_host: std::sync::Arc<dyn Fn() -> Option<String> + Send + Sync>,
     /// `onchange`: a cast state change the worker should broadcast.
     pub on_change: std::sync::Arc<dyn Fn() + Send + Sync>,
-    pub worklet: bool,
 }
 
 /// `startLocalReceiver`'s argument object.
@@ -453,7 +451,6 @@ pub struct ReceiverStart {
 
 /// The cast controller and TV receiver, as the worker drives them (`src/cast.js`).
 pub trait Cast: Send + Sync {
-    fn init_hub(&self) -> BoxFuture<'_, ()>;
     fn set_lan_host(&self, host: Option<String>) -> BoxFuture<'_, ()>;
     fn status(&self) -> Value;
     fn pair_receiver<'a>(&'a self, params: &'a Value) -> BoxFuture<'a, Result<Value, String>>;
@@ -486,4 +483,7 @@ pub trait CastFactory<N: crate::node::Node>: Send + Sync {
     ) -> impl Future<Output = String> + Send;
     /// `reclaimLowDiskReceiverStorage`: purges stale Corestores when the disk is nearly full.
     fn reclaim(&self, storage: &str);
+    /// `receiverKeyPair(castStorage)` as a `createNode({ keyPair })` option: the receiver's node
+    /// runs under the key saved in its `receiver.json`, so senders find it after a restart.
+    fn receiver_key_pair(&self, storage: &str) -> Option<Value>;
 }

@@ -847,6 +847,22 @@ impl CoreNode {
     }
 }
 
+/// The `{ publicKey, secretKey }` a host passes as `keyPair`. A bare 64-hex seed is also accepted.
+fn key_pair_option(value: &Value) -> Option<peeroxide::KeyPair> {
+    if let Some(seed_hex) = value.as_str() {
+        return parse_hex32(seed_hex).map(peeroxide::KeyPair::from_seed);
+    }
+    let secret = value.get("secretKey")?.as_str()?;
+    if secret.len() < 64 {
+        return None;
+    }
+    let mut seed = [0u8; 32];
+    for (index, byte) in seed.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(&secret[index * 2..index * 2 + 2], 16).ok()?;
+    }
+    Some(peeroxide::KeyPair::from_seed(seed))
+}
+
 /// `createNode(opts)`, the reference's opening order and undo discipline.
 pub async fn create_node(options: Value) -> Result<Arc<CoreNode>, NodeError> {
     let storage_path = options
@@ -1137,7 +1153,9 @@ pub async fn create_node(options: Value) -> Result<Arc<CoreNode>, NodeError> {
                 .map(|key| js_string(key).to_lowercase())
                 .collect::<Vec<_>>()
         });
-    let net = Network::open(
+    // `createNode({ keyPair })`: a TV receiver keeps the key senders paired with.
+    let key_pair = options.get("keyPair").and_then(key_pair_option);
+    let net = Network::open_with_key(
         shared.storage.store().clone(),
         bootstrap,
         private_host,
@@ -1146,6 +1164,7 @@ pub async fn create_node(options: Value) -> Result<Arc<CoreNode>, NodeError> {
         allowed_peers,
         private_routing,
         closing.clone(),
+        key_pair,
     )
     .await?;
     net.attach_wakeup(channel.auto().clone());

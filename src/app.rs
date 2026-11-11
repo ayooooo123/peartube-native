@@ -725,12 +725,19 @@ where
         let budget =
             receiver_memory_bytes(&std::fs::read_to_string("/proc/meminfo").unwrap_or_default());
         let live_bytes = budget * 2 / 5;
+        // Under the receiver's saved key, so the senders that paired with this TV find it again
+        // after a restart.
+        let key_pair = factory.receiver_key_pair(&storage);
+        let mut options = json!({
+            "storage": peer_dir, "worklet": true, "storageWal": false,
+            "storageMemory": true, "memoryCacheBytes": live_bytes
+        });
+        if let (Some(key_pair), Some(options)) = (key_pair, options.as_object_mut()) {
+            options.insert("keyPair".to_owned(), key_pair);
+        }
         let node = self
             .factory
-            .create(json!({
-                "storage": peer_dir, "worklet": true, "storageWal": false,
-                "storageMemory": true, "memoryCacheBytes": live_bytes
-            }))
+            .create(options)
             .await
             .map_err(|error| error.to_string())?;
         self.attach_node(node.clone(), Owner::Receiver).await;
@@ -767,12 +774,10 @@ where
                 }
                 send_cast_event(&events, &lock(&shared_cast.cast).clone());
             }),
-            worklet: true,
         };
         loop {
             let created = factory.create(options_clone(&options)).await?;
             self.set_cast(Some(created.clone()));
-            created.init_hub().await;
             created.set_lan_host(self.current_device_ip().await).await;
             if self
                 .cast()
@@ -1079,9 +1084,27 @@ where
         serde_json::from_value(status).map_err(|error| error.to_string())
     }
 
+    /// `castOnLan`: a sender reaches a TV on the LAN first, so pairing, casting and attaching turn
+    /// LAN discovery on.
+    async fn cast_on_lan(&mut self) -> Result<Arc<dyn Cast>, String> {
+        let cast = self.ensure_cast().await?;
+        let needs_lan = match self.node() {
+            Some(node) => !node.private_routing() && !self.lan_wanted,
+            None => false,
+        };
+        if needs_lan {
+            self.lan_wanted = true;
+            self.move_lan().await;
+        } else {
+            let host = self.current_device_ip().await;
+            cast.set_lan_host(host).await;
+        }
+        Ok(cast)
+    }
+
     /// `castPair`.
     pub async fn cast_pair(&mut self, params: Value) -> Result<CastPairReply, String> {
-        let cast = self.ensure_cast().await?;
+        let cast = self.cast_on_lan().await?;
         let receiver = cast.pair_receiver(&params).await?;
         let paired_id = receiver
             .get("id")
@@ -1102,24 +1125,12 @@ where
 
     /// `castPlay`.
     pub async fn cast_play(&mut self, params: Value) -> Result<Value, String> {
-        let cast = self.ensure_cast().await?;
-        let needs_lan = match self.node() {
-            Some(node) => !node.private_routing() && !self.lan_wanted,
-            None => false,
-        };
-        if needs_lan {
-            self.lan_wanted = true;
-            self.move_lan().await;
-        } else {
-            let host = self.current_device_ip().await;
-            cast.set_lan_host(host).await;
-        }
-        cast.cast_play(&params).await
+        self.cast_on_lan().await?.cast_play(&params).await
     }
 
     /// `castAttach`.
     pub async fn cast_attach(&mut self, params: Value) -> Result<Value, String> {
-        self.ensure_cast().await?.cast_attach(&params).await
+        self.cast_on_lan().await?.cast_attach(&params).await
     }
 
     /// `castControl`.
@@ -1251,7 +1262,6 @@ fn options_clone<N: Node>(options: &CastOptions<N>) -> CastOptions<N> {
         node: options.node.clone(),
         get_lan_host: options.get_lan_host.clone(),
         on_change: options.on_change.clone(),
-        worklet: options.worklet,
     }
 }
 

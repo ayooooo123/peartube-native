@@ -1,25 +1,21 @@
 //! The receiver's media side: the blob/entry a load points at, cached-byte accounting, the
-//! windowed P2P route and the byte-exact HTTP→P2P splice, ported from `prepareMediaLoad`'s media
-//! object, `hasBlockCached`, `hasActiveReplicationPeer`, `countCachedBlobBytes`,
-//! `serveWindowedStream` and `serveSpliceStream` in `src/cast.js`.
+//! read rate the disk-aware window is sized from, and the windowed loopback response the
+//! receiver's own player reads (`serveWindowedStream` / `steerReadAhead` in `src/cast.js`).
 //!
-//! The app steers one sliding download window per stream every second (`steerReadAhead`) on the
-//! node's core; the port hands the same disk-aware window size to `byte-stream-rs` for each
-//! response, and asks the node to trim watched blocks from [`evict_plan`]. Port notes record the
-//! difference.
+//! The app steers one sliding download window per stream every second on the node's core; the
+//! port hands the same disk-aware window size to `byte-stream-rs` for each response, and asks the
+//! node to trim watched blocks from [`evict_plan`]. Port notes record the difference.
 
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use bytes::Bytes;
-use http_body_util::BodyExt;
-use hyper::body::Frame;
 use hyper::header::{self, HeaderValue};
-use hyper::{Method, Response, StatusCode};
+use hyper::{Response, StatusCode};
 use hyperblobs::BlobId;
 use hypercore::{Core, RequestBag};
-use serde_json::{Map, Value, json};
+use serde_json::{Map, Value};
 use tokio::sync::mpsc;
 
 use byte_stream::{ByteStream, StreamOptions};
@@ -29,9 +25,8 @@ use super::CastError;
 use super::http::{Body, RangeSpec, channel_body, cors_headers, parse_http_range};
 use super::traits::{CastPeer, EvictOptions};
 use super::{
-    BEHIND_SECONDS, COLD_HTTP_WINDOW, DEFAULT_STREAM_BYTES_PER_SEC, EVICT_EVERY_MS,
-    MIN_READ_AHEAD_SECONDS, READ_AHEAD_SECONDS, STREAM_FLOOR_BYTES, STREAM_RESERVE_BYTES,
-    TRIM_FREE_BYTES,
+    BEHIND_SECONDS, DEFAULT_STREAM_BYTES_PER_SEC, EVICT_EVERY_MS, MIN_READ_AHEAD_SECONDS,
+    READ_AHEAD_SECONDS, STREAM_FLOOR_BYTES, STREAM_RESERVE_BYTES, TRIM_FREE_BYTES,
 };
 
 /// Bytes a reader must have been sent before it counts as the streaming player.
@@ -48,17 +43,11 @@ pub struct Media {
     pub token: String,
     pub entry: Value,
     pub mime: String,
-    pub prefer_mode: String,
-    pub p2p_mode: String,
-    pub private_routing: bool,
-    pub peer: Option<Arc<dyn CastPeer>>,
-    pub http_stream_url: Option<String>,
-    /// The loopback `/cast/v1/p2p/<token>` route, or the node's own blob link.
-    pub local_p2p_url: Option<String>,
     pub core: Option<Core>,
     pub core_key_hex: String,
     pub blob: Option<BlobId>,
-    sender_http_alive: AtomicBool,
+    /// The node, for its memory cache and window budget.
+    pub peer: Option<Arc<dyn CastPeer>>,
     served_bytes: AtomicU64,
     read_rate: Mutex<f64>,
     rate_served: AtomicU64,
@@ -78,36 +67,23 @@ struct Reader {
 }
 
 impl Media {
-    #[allow(clippy::too_many_arguments)]
     pub fn new(
         token: String,
         entry: Value,
         mime: String,
-        prefer_mode: String,
-        p2p_mode: String,
-        private_routing: bool,
-        peer: Option<Arc<dyn CastPeer>>,
-        http_stream_url: Option<String>,
-        local_p2p_url: Option<String>,
         core: Option<Core>,
         core_key_hex: String,
         blob: Option<BlobId>,
-        sender_http_alive: bool,
+        peer: Option<Arc<dyn CastPeer>>,
     ) -> Self {
         Self {
             token,
             entry,
             mime,
-            prefer_mode,
-            p2p_mode,
-            private_routing,
-            peer,
-            http_stream_url,
-            local_p2p_url,
             core,
             core_key_hex,
             blob,
-            sender_http_alive: AtomicBool::new(sender_http_alive),
+            peer,
             served_bytes: AtomicU64::new(0),
             read_rate: Mutex::new(0.0),
             rate_served: AtomicU64::new(0),
@@ -127,42 +103,6 @@ impl Media {
             return blob.byte_length;
         }
         self.entry.get("size").and_then(Value::as_u64).unwrap_or(0)
-    }
-
-    pub fn sender_http_alive(&self) -> bool {
-        self.sender_http_alive.load(Ordering::Relaxed)
-    }
-
-    /// `estimateBlobBlock`: a blob's mean block size locates the byte in a block.
-    fn estimate_block(&self, byte_start: u64) -> Option<u64> {
-        let blob = self.blob?;
-        if blob.block_length == 0 {
-            return None;
-        }
-        let total = if blob.byte_length > 0 {
-            blob.byte_length
-        } else {
-            DEFAULT_STREAM_BYTES_PER_SEC
-        };
-        let avg = (total / blob.block_length.max(1)).max(4096);
-        Some(blob.block_offset + (byte_start / avg).min(blob.block_length - 1))
-    }
-
-    /// `hasBlockCached`.
-    pub fn has_block_cached(&self, byte_start: u64) -> bool {
-        let (Some(core), Some(block)) = (self.core.as_ref(), self.estimate_block(byte_start))
-        else {
-            return false;
-        };
-        core.length() > block && core.has(block)
-    }
-
-    /// `hasActiveReplicationPeer`: a peer holds the whole video.
-    pub fn has_active_peer(&self) -> bool {
-        let (Some(core), Some(blob)) = (self.core.as_ref(), self.blob) else {
-            return false;
-        };
-        core.remote_contiguous_length() >= blob.block_offset + blob.block_length
     }
 
     /// `countCachedBlobBytes`, cached for three seconds so the status loop is cheap.
@@ -265,14 +205,8 @@ impl Media {
         avg.max(recent.min(2.0 * avg))
     }
 
-    pub fn furthest_reader_byte(&self) -> u64 {
-        self.readers
-            .lock()
-            .expect("cast readers")
-            .iter()
-            .map(|reader| reader.pos)
-            .max()
-            .unwrap_or(0)
+    pub fn reader_count(&self) -> usize {
+        self.readers.lock().expect("cast readers").len()
     }
 
     /// The playhead in bytes: the lead reader's position, else the reported position.
@@ -302,11 +236,6 @@ impl Media {
             .map(|reader| reader.pos)
             .min()
             .map_or(lead_pos, |pos| pos.min(lead_pos))
-    }
-
-    /// Whether a peer holds the whole video (or the cache covers it).
-    pub fn has_peer(&self) -> bool {
-        self.has_active_peer()
     }
 
     /// When a reader last started or advanced.
@@ -383,7 +312,7 @@ impl<'a> ReaderLease<'a> {
 
     async fn send(
         &mut self,
-        tx: &mpsc::Sender<Result<Frame<Bytes>, std::io::Error>>,
+        tx: &mpsc::Sender<Result<hyper::body::Frame<Bytes>, std::io::Error>>,
         chunk: Bytes,
         pos: u64,
     ) -> bool {
@@ -409,7 +338,7 @@ impl<'a> ReaderLease<'a> {
         if self.id.is_none() {
             self.id = Some(self.media.register_reader(pos));
         }
-        slot.send(Ok(Frame::data(chunk)));
+        slot.send(Ok(hyper::body::Frame::data(chunk)));
         true
     }
 }
@@ -424,7 +353,7 @@ impl Drop for ReaderLease<'_> {
 }
 
 async fn while_connected<T>(
-    tx: &mpsc::Sender<Result<Frame<Bytes>, std::io::Error>>,
+    tx: &mpsc::Sender<Result<hyper::body::Frame<Bytes>, std::io::Error>>,
     future: impl Future<Output = T>,
 ) -> Option<T> {
     tokio::select! {
@@ -440,34 +369,6 @@ pub fn blob_from_pointer(pointer: crate::protocol::BlobPointer) -> BlobId {
         block_length: pointer.block_length,
         byte_offset: pointer.byte_offset,
         byte_length: pointer.byte_length,
-    }
-}
-
-/// `hasBlockCached` without a [`Media`]: a load decides its first mode before the media exists.
-pub fn blob_has_block(core: &Core, blob: BlobId, byte_start: u64) -> bool {
-    if blob.block_length == 0 {
-        return false;
-    }
-    let total = if blob.byte_length > 0 {
-        blob.byte_length
-    } else {
-        DEFAULT_STREAM_BYTES_PER_SEC
-    };
-    let avg = (total / blob.block_length.max(1)).max(4096);
-    let block = blob.block_offset + (byte_start / avg).min(blob.block_length - 1);
-    core.length() > block && core.has(block)
-}
-
-/// `hasActiveReplicationPeer` without a [`Media`].
-pub fn blob_has_peer(core: &Core, blob: BlobId) -> bool {
-    core.remote_contiguous_length() >= blob.block_offset + blob.block_length
-}
-
-/// The optional form used by the receiver's status tick.
-pub fn blob_has_peer_opt(core: Option<&Core>, blob: Option<BlobId>) -> bool {
-    match (core, blob) {
-        (Some(core), Some(blob)) => blob_has_peer(core, blob),
-        _ => false,
     }
 }
 
@@ -506,9 +407,14 @@ pub fn evict_plan(free: u64, rate: f64, playhead_byte: u64) -> Option<EvictOptio
     })
 }
 
-/// Whether a reader that just started (or seeked) should wait for its cushion, and for how long.
-pub fn hold_deadline(now: Instant) -> Instant {
-    now + Duration::from_millis(super::HOLD_MAX_MS)
+/// A tight disk trims every three seconds instead of every fifteen.
+pub fn trim_due(free: u64, last_evict_at: Instant) -> bool {
+    let every = if free < STREAM_RESERVE_BYTES {
+        Duration::from_millis(3_000)
+    } else {
+        Duration::from_millis(EVICT_EVERY_MS)
+    };
+    last_evict_at.elapsed() >= every
 }
 
 fn partial_headers(
@@ -600,242 +506,23 @@ pub fn windowed_response(
     }
     let (tx, rx) = mpsc::channel(8);
     tokio::spawn(async move {
-        let _ = pipe_p2p(&media, &tx, start, end, free, true).await;
+        let _ = pipe_p2p(&media, &tx, start, end, free).await;
     });
     *res.body_mut() = channel_body(rx);
     res
-}
-
-/// The zero-size fallback: transparently proxy the sender's own Player link.
-pub async fn proxy_response(
-    media: &Media,
-    client: &super::http::HttpClient,
-    method: &Method,
-    range: Option<&str>,
-) -> Response<Body> {
-    let Some(url) = media
-        .local_p2p_url
-        .clone()
-        .or_else(|| media.http_stream_url.clone())
-    else {
-        return super::http::empty(StatusCode::NOT_FOUND);
-    };
-    let headers = match range {
-        Some(value) => vec![(header::RANGE, value.to_owned())],
-        None => Vec::new(),
-    };
-    let upstream = match client
-        .request(method.clone(), &url, headers, None, Duration::from_secs(8))
-        .await
-    {
-        Ok(response) => response,
-        Err(_) => return super::http::empty(StatusCode::BAD_GATEWAY),
-    };
-    let status = upstream.status();
-    let content_type = upstream
-        .headers()
-        .get(header::CONTENT_TYPE)
-        .and_then(|value| value.to_str().ok())
-        .map(str::to_owned);
-    let (tx, rx) = mpsc::channel(8);
-    tokio::spawn(async move {
-        let mut body = upstream.into_body();
-        while let Some(frame) = body.frame().await {
-            let Ok(frame) = frame else { break };
-            let Some(data) = frame.into_data().ok() else {
-                continue;
-            };
-            if tx.send(Ok(Frame::data(data))).await.is_err() {
-                break;
-            }
-        }
-    });
-    let mut res = Response::new(channel_body(rx));
-    *res.status_mut() = status;
-    cors_headers(res.headers_mut());
-    if let Some(content_type) = content_type
-        && let Ok(value) = HeaderValue::from_str(&content_type)
-    {
-        res.headers_mut().insert(header::CONTENT_TYPE, value);
-    }
-    res
-}
-
-/// `serveSpliceStream`: start over HTTP when cold, cut over to local P2P blocks as they arrive,
-/// and fall back mid-response when the sender dies.
-pub async fn splice_response(
-    media: Arc<Media>,
-    client: Arc<super::http::HttpClient>,
-    method: Method,
-    range: Option<&str>,
-    head: bool,
-    on_mode_upgrade: Arc<dyn Fn(&str) + Send + Sync>,
-) -> Response<Body> {
-    let total = media.total_size();
-    if total == 0 {
-        return proxy_response(&media, &client, &method, range).await;
-    }
-    let (partial, start, end) = match partial_range(range, total) {
-        Ok(values) => values,
-        Err(res) => return res,
-    };
-    let spec = if partial {
-        RangeSpec::Partial { start, end }
-    } else {
-        RangeSpec::Full { start, end }
-    };
-    let mime = if media.mime.is_empty() {
-        "video/mp4"
-    } else {
-        media.mime.as_str()
-    };
-    let (status, headers) = partial_headers(total, spec, mime);
-    let mut res = Response::new(super::http::empty_body());
-    *res.status_mut() = status;
-    write_headers(&mut res, &headers);
-    if head {
-        return res;
-    }
-    let (tx, rx) = mpsc::channel(8);
-    tokio::spawn(async move {
-        splice_loop(media, client, tx, start, end, on_mode_upgrade).await;
-    });
-    *res.body_mut() = channel_body(rx);
-    res
-}
-
-async fn splice_loop(
-    media: Arc<Media>,
-    client: Arc<super::http::HttpClient>,
-    tx: mpsc::Sender<Result<Frame<Bytes>, std::io::Error>>,
-    start: u64,
-    end: u64,
-    on_mode_upgrade: Arc<dyn Fn(&str) + Send + Sync>,
-) {
-    let mut cursor = start;
-    let mut force_http = false;
-    let mut last_error: Option<CastError> = None;
-    while cursor <= end {
-        let can_http = media.sender_http_alive() && media.http_stream_url.is_some();
-        let span_end = end.min(cursor.saturating_add(4 * 1024 * 1024));
-        let span_cached = media.has_block_cached(cursor) && media.has_block_cached(span_end);
-        let use_p2p = media.local_p2p_url.is_some()
-            && media.core.is_some()
-            && !force_http
-            && (!can_http || span_cached || media.has_active_peer());
-        if use_p2p {
-            on_mode_upgrade(&media.p2p_mode);
-            match pipe_p2p(&media, &tx, cursor, end, u64::MAX, false).await {
-                Ok(_written) => {
-                    break;
-                }
-                Err((written, err)) => {
-                    cursor += written;
-                    last_error = Some(err);
-                    if !can_http {
-                        break;
-                    }
-                    force_http = true;
-                }
-            }
-        }
-        let slice_end = if media.core.is_some() && media.local_p2p_url.is_some() {
-            end.min(cursor.saturating_add(COLD_HTTP_WINDOW - 1))
-        } else {
-            end
-        };
-        let Some(url) = media.http_stream_url.clone() else {
-            break;
-        };
-        match pipe_http(&client, &tx, &url, cursor, slice_end).await {
-            Ok(written) => cursor += written,
-            Err((written, _err)) => {
-                cursor += written;
-                media.sender_http_alive.store(false, Ordering::Relaxed);
-                if media.local_p2p_url.is_none() || media.core.is_none() {
-                    break;
-                }
-                on_mode_upgrade(&media.p2p_mode);
-            }
-        }
-    }
-    let _ = last_error;
-}
-
-async fn pipe_http(
-    client: &super::http::HttpClient,
-    tx: &mpsc::Sender<Result<Frame<Bytes>, std::io::Error>>,
-    url: &str,
-    start: u64,
-    end: u64,
-) -> Result<u64, (u64, CastError)> {
-    let expected = end - start + 1;
-    let response = match client
-        .range_slice(url, start, end, Some(Duration::from_secs(8)))
-        .await
-    {
-        Ok(response) => response,
-        Err(err) => return Err((0, err)),
-    };
-    let status = response.status().as_u16();
-    if status != 200 && status != 206 {
-        return Err((
-            0,
-            CastError::new(format!("Upstream answered {status}"), 502),
-        ));
-    }
-    let mut body = response.into_body();
-    let mut written = 0u64;
-    loop {
-        let frame = match tokio::time::timeout(Duration::from_secs(8), body.frame()).await {
-            Err(_) => return Err((written, CastError::new("Upstream slice stalled", 504))),
-            Ok(None) => break,
-            Ok(Some(Err(err))) => return Err((written, CastError::new(err.to_string(), 502))),
-            Ok(Some(Ok(frame))) => frame,
-        };
-        let Some(data) = super::http::read_frame(frame).await else {
-            continue;
-        };
-        let remaining = expected - written;
-        if remaining == 0 {
-            break;
-        }
-        let slice = if data.len() as u64 > remaining {
-            data.slice(0..remaining as usize)
-        } else {
-            data
-        };
-        written += slice.len() as u64;
-        if tx.send(Ok(Frame::data(slice))).await.is_err() {
-            return Ok(written);
-        }
-    }
-    if written >= expected {
-        Ok(written)
-    } else {
-        Err((
-            written,
-            CastError::new("Upstream closed before slice finished", 502),
-        ))
-    }
 }
 
 async fn pipe_p2p(
     media: &Media,
-    tx: &mpsc::Sender<Result<Frame<Bytes>, std::io::Error>>,
+    tx: &mpsc::Sender<Result<hyper::body::Frame<Bytes>, std::io::Error>>,
     start: u64,
     end: u64,
     free: u64,
-    active: bool,
 ) -> Result<u64, (u64, CastError)> {
     let (Some(core), Some(blob)) = (media.core.as_ref(), media.blob) else {
         return Err((0, CastError::new("No local P2P source", 502)));
     };
-    let wanted = if active {
-        media.window_bytes(free)
-    } else {
-        (DEFAULT_STREAM_BYTES_PER_SEC * 12).min(media.window_bytes(free))
-    };
+    let wanted = media.window_bytes(free);
     let mut lease = ReaderLease::new(media, start, wanted);
     let mut stream: Option<ByteStream> = None;
     let mut written = 0u64;
@@ -847,7 +534,7 @@ async fn pipe_p2p(
                 start: start + written,
                 length: Some(end - start + 1 - written),
                 window_bytes: window,
-                active,
+                active: true,
             };
             let Some(opened) =
                 while_connected(tx, ByteStream::open(core, blob, opts, lease.bag.clone())).await
@@ -859,14 +546,10 @@ async fn pipe_p2p(
         }
         let next = async {
             let stream = stream.as_mut().expect("opened stream");
-            let next = if !active && media.sender_http_alive() {
-                tokio::time::timeout(Duration::from_millis(3_500), stream.next())
-                    .await
-                    .map_err(|_| CastError::new("Upstream slice stalled", 504))?
-            } else {
-                stream.next().await
-            };
-            next.map_err(|err| CastError::new(err.to_string(), 502))
+            stream
+                .next()
+                .await
+                .map_err(|err| CastError::new(err.to_string(), 502))
         };
         let Some(next) = while_connected(tx, next).await else {
             return Ok(written);
@@ -883,42 +566,34 @@ async fn pipe_p2p(
     }
 }
 
-/// The status loop's next mode: P2P once anything is cached or a peer holds the video.
-pub fn upgraded_mode(cached_bytes: u64, has_peer: bool, p2p_mode: &str) -> Option<&str> {
-    (cached_bytes > 0 || has_peer).then_some(p2p_mode)
-}
-
-/// `reportState`'s idle reset condition, shared with the receiver.
-pub fn media_snapshot(media: &Media) -> Value {
-    json!({
-        "token": media.token,
-        "preferMode": media.prefer_mode,
-        "p2pMode": media.p2p_mode,
-        "http": media.http_stream_url.is_some(),
-        "p2p": media.core.is_some(),
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     fn lease_media() -> Media {
         Media::new(
             "lease".into(),
             json!({}),
             "video/mp4".into(),
-            "p2p".into(),
-            "p2p".into(),
-            false,
-            None,
-            None,
-            None,
             None,
             String::new(),
             None,
-            false,
+            None,
         )
+    }
+
+    #[test]
+    fn a_reader_counts_only_past_the_probe_size() {
+        let media = lease_media();
+        let id = media.register_reader(0);
+        media.advance_reader(id, 112, 112);
+        // A reader still inside its first 2 MiB is a probe, not the lead.
+        assert_eq!(media.lead_byte(&Map::new(), None), 112);
+        assert_eq!(media.reader_count(), 1);
+        media.drop_reader(id);
+        assert_eq!(media.reader_count(), 0);
+        assert_eq!(media.lead_byte(&Map::new(), None), 0);
     }
 
     #[tokio::test]
@@ -964,37 +639,6 @@ mod tests {
         assert_eq!(budget.available_permits(), 100);
     }
 
-    #[tokio::test]
-    async fn paused_consumer_keeps_the_complete_body_after_parking() {
-        let media = lease_media();
-        let budget = Arc::new(tokio::sync::Semaphore::new(100));
-        let (tx, mut rx) = mpsc::channel(1);
-        let mut lease = ReaderLease::new(&media, 0, 50);
-        lease.budget = Some(budget.clone());
-        assert_eq!(lease.reserve(), 50);
-        let producer = async move {
-            for (pos, byte) in [b"a", b"b", b"c"].into_iter().enumerate() {
-                assert!(lease.send(&tx, Bytes::from_static(byte), pos as u64).await);
-            }
-        };
-        let consumer = async move {
-            tokio::time::sleep(Duration::from_secs(16)).await;
-            let mut bytes = Vec::new();
-            while let Some(frame) = rx.recv().await {
-                bytes.extend_from_slice(&frame.unwrap().into_data().unwrap());
-            }
-            assert_eq!(bytes, b"abc");
-        };
-        let parked = async {
-            tokio::time::sleep(Duration::from_millis(15_500)).await;
-            assert!(media.readers.lock().unwrap().is_empty());
-            assert_eq!(budget.available_permits(), 100);
-        };
-        tokio::join!(producer, consumer, parked);
-        assert!(media.readers.lock().unwrap().is_empty());
-        assert_eq!(budget.available_permits(), 100);
-    }
-
     #[test]
     fn concurrent_responses_share_one_prefetch_budget() {
         let budget = Arc::new(tokio::sync::Semaphore::new(100));
@@ -1006,33 +650,6 @@ mod tests {
         assert_eq!(reserve_window(Some(budget.clone()), 75).0, 75);
         drop(second);
         assert_eq!(budget.available_permits(), 100);
-    }
-
-    #[test]
-    fn forward_seek_starts_at_its_range_and_trims_behind_the_slowest_reader() {
-        let media = Media::new(
-            "test".into(),
-            json!({"size": 1_000_000_000u64}),
-            "video/mp4".into(),
-            "p2p".into(),
-            "p2p".into(),
-            false,
-            None,
-            None,
-            None,
-            None,
-            String::new(),
-            None,
-            false,
-        );
-        let first = media.register_reader(500_000_000);
-        assert_eq!(media.lead_byte(&Map::new(), None), 500_000_000);
-        let second = media.register_reader(600_000_000);
-        media.advance_reader(second, 610_000_000, LEAD_MIN_BYTES);
-        assert_eq!(media.lead_byte(&Map::new(), None), 500_000_000);
-        assert_eq!(media.furthest_reader_byte(), 610_000_000);
-        media.drop_reader(first);
-        assert_eq!(media.lead_byte(&Map::new(), None), 610_000_000);
     }
 
     #[test]
@@ -1063,12 +680,9 @@ mod tests {
         let high_rate = 16.0 * 1024.0 * 1024.0;
         let three_windows = (3.0 * high_rate * READ_AHEAD_SECONDS as f64) as u64;
         assert!(evict_plan(three_windows, high_rate, 0).is_some());
-    }
-
-    #[test]
-    fn mode_upgrades_once_bytes_or_peers_exist() {
-        assert_eq!(upgraded_mode(0, false, "p2p"), None);
-        assert_eq!(upgraded_mode(1, false, "p2p"), Some("p2p"));
-        assert_eq!(upgraded_mode(0, true, "private-p2p"), Some("private-p2p"));
+        let long_ago = Instant::now() - Duration::from_secs(EVICT_EVERY_MS / 1000 + 1);
+        assert!(trim_due(STREAM_FLOOR_BYTES, long_ago), "a tight disk waits 3 s");
+        assert!(trim_due(64 * 1024 * 1024 * 1024, long_ago));
+        assert!(!trim_due(64 * 1024 * 1024 * 1024, Instant::now()));
     }
 }

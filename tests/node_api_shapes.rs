@@ -82,14 +82,12 @@ fn node_json_shapes() {
     roundtrip::<OpenUri>(json!({"action":"source","source":source}));
     roundtrip::<OpenUri>(json!({"action":"access","channel":"key","epoch":1,"source":source}));
     roundtrip::<OpenUri>(json!({"action":"watch","entry":entry}));
-    roundtrip::<CastStatus>(
-        json!({"webReceiverUrl":null,"receivers":[],"session":null,"receiverMode":null}),
-    );
+    roundtrip::<CastStatus>(json!({"receivers":[],"session":null,"receiverMode":null}));
     roundtrip::<ReceiverCommand>(json!({"seq":1,"action":"pause"}));
     for event in [
         json!({"event":"update"}),
         json!({"event":"sources","sources":[{"key":"key","kind":"channel","alias":""}]}),
-        json!({"event":"cast","cast":{"webReceiverUrl":null,"receivers":[],"session":null,"receiverMode":null}}),
+        json!({"event":"cast","cast":{"receivers":[],"session":null,"receiverMode":null}}),
         json!({"event":"receiverCommand","command":{"seq":1,"action":"pause"}}),
         json!({"event":"fatal","error":"failure"}),
     ] {

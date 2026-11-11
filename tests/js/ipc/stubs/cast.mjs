@@ -7,11 +7,15 @@ export async function resolvePeerStorage (candidate, fallback) {
 
 export function reclaimLowDiskReceiverStorage () {}
 
+export function receiverKeyPair (storage) {
+  // A fixed key pair: the scenario never opens the receiver's node.
+  return { publicKey: Buffer.alloc(32, 0x11), secretKey: Buffer.alloc(64, 0x11) }
+}
+
 export function createCastController (options) {
   const status = () => clone(fixtures.castStatus)
   const change = () => options.onchange?.()
   return {
-    async initHub () {},
     async setLanHost (host) { this.lanHost = host },
     status,
     async pairReceiver () { change(); return clone(fixtures.receiver) },

@@ -7,9 +7,10 @@ use std::io;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
+use peeroxide::KeyPair;
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value, json};
+use serde_json::Value;
 
 use crate::protocol::{clean_name, is_hex64};
 
@@ -20,6 +21,8 @@ use super::{CODE_ALPHABET, CastError};
 pub enum PairingError {
     Io(io::Error),
     Json(serde_json::Error),
+    /// The identity file exists but holds no usable seed.
+    Identity(String),
 }
 
 impl std::fmt::Display for PairingError {
@@ -27,6 +30,7 @@ impl std::fmt::Display for PairingError {
         match self {
             PairingError::Io(e) => write!(f, "io: {e}"),
             PairingError::Json(e) => write!(f, "json: {e}"),
+            PairingError::Identity(message) => f.write_str(message),
         }
     }
 }
@@ -213,32 +217,16 @@ impl PairLimiter {
     pub fn record_failure(&mut self, now_ms: u64) {
         self.failures.push(now_ms);
     }
-
-    /// Pair-code check plus the failure bookkeeping the app does inline.
-    pub fn verify_code(
-        &mut self,
-        supplied: Option<&str>,
-        expected: &str,
-        open_auth: bool,
-        now_ms: u64,
-    ) -> Result<(), CastError> {
-        self.check(now_ms)?;
-        if !open_auth && !safe_equal(Some(&normalize_pair_code(supplied)), Some(expected)) {
-            self.record_failure(now_ms);
-            return Err(CastError::forbidden("Invalid TV pairing code"));
-        }
-        Ok(())
-    }
 }
 
-/// The capabilities object a receiver advertises.
-pub fn capabilities(p2p: bool) -> Map<String, Value> {
-    let mut out = Map::new();
-    out.insert("http".into(), json!(true));
-    out.insert("p2p".into(), json!(p2p));
-    out.insert("privateP2P".into(), json!(p2p));
-    out.insert("tracks".into(), json!(true));
-    out
+/// `receiverKeyPair(storage)`: the key a receiver's node runs under, from the saved seed. A host
+/// opens that node with it, so the key senders paired with stays the same after a restart.
+pub fn receiver_key_pair(storage: &Path) -> Result<KeyPair, PairingError> {
+    let identity = ReceiverIdentity::load_or_create(storage, "")?;
+    let seed = identity
+        .seed_bytes()
+        .ok_or_else(|| PairingError::Identity("receiver.json holds no seed".into()))?;
+    Ok(KeyPair::from_seed(seed))
 }
 
 #[cfg(test)]
@@ -264,16 +252,29 @@ mod tests {
     fn limiter_locks_out_after_six_failures_inside_the_window() {
         let mut limiter = PairLimiter::default();
         for at in 0..6 {
-            assert!(
-                limiter
-                    .verify_code(Some("WRONG"), "ABC123", false, at)
-                    .is_err()
-            );
+            limiter.check(at).unwrap();
+            limiter.record_failure(at);
         }
         let err = limiter.check(5_000).unwrap_err();
         assert_eq!(err.status, 429);
         // A later window forgets the failures.
         assert!(limiter.check(16_000).is_ok());
+    }
+
+    #[test]
+    fn the_receiver_key_pair_comes_from_the_saved_seed() {
+        let dir = std::env::temp_dir().join(format!("cast-keypair-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let identity = ReceiverIdentity::load_or_create(&dir, "Kitchen TV").unwrap();
+        let pair = receiver_key_pair(&dir).unwrap();
+        assert_eq!(
+            pair.public_key.to_vec(),
+            KeyPair::from_seed(identity.seed_bytes().unwrap())
+                .public_key
+                .to_vec()
+        );
+        assert_eq!(receiver_key_pair(&dir).unwrap().public_key, pair.public_key);
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

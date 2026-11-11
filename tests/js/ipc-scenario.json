@@ -110,7 +110,6 @@
       }
     },
     "castStatus": {
-      "webReceiverUrl": null,
       "receivers": [],
       "session": null,
       "receiverMode": null
