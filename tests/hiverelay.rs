@@ -147,7 +147,9 @@ fn js_vectors() {
             .status()
             .unwrap(),
         None => {
-            eprintln!("skipped: set PEARTUBE_APP to the app checkout to verify the signature in JS");
+            eprintln!(
+                "skipped: set PEARTUBE_APP to the app checkout to verify the signature in JS"
+            );
             return;
         }
     };
