@@ -33,7 +33,7 @@ this port was written against before the alignment, and `73d2dfa47` is the relay
 | `bin/relay.js` | `relay`, `src/bin/peartube-relay.rs` | `pending: align-relay` (standalone guard, `status.lan` shape) | `73d2dfa47` |
 | `src/acquire.js` | `acquire` | `pending: align-acquire` | `2b88b0281` |
 | `src/app-settings.js` | `app_settings` | `match` | `2b88b0281` |
-| `src/apply.js` | `node/apply` | `match` | `2b88b0281` |
+| `src/apply.js` | `node/apply` | `pending: align-node` (the `makeApply` writer hook was removed in `fe2897172`) | `2b88b0281` |
 | `src/art.js` | `art` | `debt:` artwork HTTP timeout covers the whole exchange, unlike the app's socket inactivity timeout — see README "Known gaps" | `2b88b0281` |
 | `src/blob-server.js` | `node/blobs`, `http` (Range streaming) | `match` | `2b88b0281` |
 | `src/cast-control.js` | `cast/rpc` | `pending: align-cast` | `2b88b0281` |
@@ -54,7 +54,7 @@ this port was written against before the alignment, and `73d2dfa47` is the relay
 | `src/node/storage.js` | `node/storage` | `pending: align-node` | `2b88b0281` |
 | `src/private-overlay.js` | `private_overlay` | `pending: align-node` (RPC channel paired before it opens) | `2b88b0281` |
 | `src/protocol.js` | `protocol` | `pending: align-node` (`parseReceiver` `p2p` default) | `2b88b0281` |
-| `src/qr.js` | `cast/qr` | `match` | `2b88b0281` |
+| `src/qr.js` | `cast/qr` | `pending: align-cast` (the cast fixture generator needs the `JS_REF` receiver) | `2b88b0281` |
 | `src/rebuild-view.js` | — | `JS-only:` the library behind `bin/rebuild-view.js`; an operator repair tool, not a runtime path | — |
 | `src/resolution.js` | `resolution` | `match` | `2b88b0281` |
 | `src/settings.js` | `settings` | `match` | `73d2dfa47` |
