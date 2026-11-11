@@ -4,8 +4,13 @@
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream};
+use std::sync::Arc;
 use std::time::Duration;
 
+use peartube_native::cast::adapters::NodePeer;
+use peartube_native::cast::traits::CastPeer;
+use peartube_native::cast::{Receiver, ReceiverOptions};
+use peartube_native::node::core::{CoreNode, create_node};
 use peartube_native::relay::Relay;
 use serde_json::Value;
 
@@ -14,9 +19,16 @@ fn get_json(addr: SocketAddr, path: &str) -> Value {
 }
 
 fn request_json(addr: SocketAddr, method: &str, path: &str, body: &str) -> Value {
+    let (status, answer) = try_request_json(addr, method, path, body);
+    assert_eq!(status, 200, "{method} {path}: {answer}");
+    answer
+}
+
+/// One request and its parsed body, whatever the status.
+fn try_request_json(addr: SocketAddr, method: &str, path: &str, body: &str) -> (u16, Value) {
     let mut stream = TcpStream::connect(addr).expect("api listens");
     stream
-        .set_read_timeout(Some(Duration::from_secs(10)))
+        .set_read_timeout(Some(Duration::from_secs(40)))
         .unwrap();
     write!(
         stream,
@@ -27,11 +39,20 @@ fn request_json(addr: SocketAddr, method: &str, path: &str, body: &str) -> Value
     let mut raw = String::new();
     stream.read_to_string(&mut raw).expect("a response");
     let (head, body) = raw.split_once("\r\n\r\n").expect("headers end");
-    assert!(head.starts_with("HTTP/1.1 200"), "{method} {path}: {head}");
-    serde_json::from_str(body).expect("JSON body")
+    let status = head
+        .lines()
+        .next()
+        .and_then(|line| line.split_whitespace().nth(1))
+        .and_then(|code| code.parse().ok())
+        .expect("status");
+    (status, serde_json::from_str(body).expect("JSON body"))
 }
 
 fn env(storage: &std::path::Path) -> HashMap<String, String> {
+    env_on(storage, "127.0.0.1:9")
+}
+
+fn env_on(storage: &std::path::Path, bootstrap: &str) -> HashMap<String, String> {
     [
         ("PEARTUBE_STORAGE", storage.display().to_string()),
         ("PEARTUBE_API_HOST", "127.0.0.1".into()),
@@ -39,7 +60,7 @@ fn env(storage: &std::path::Path) -> HashMap<String, String> {
         ("PEARTUBE_STREAM_HOST", "127.0.0.1".into()),
         ("PEARTUBE_STREAM_PORT", "0".into()),
         ("PEARTUBE_HTTPS_PORT", "0".into()),
-        ("PEARTUBE_BOOTSTRAP", "127.0.0.1:9".into()),
+        ("PEARTUBE_BOOTSTRAP", bootstrap.to_owned()),
         ("PEARTUBE_LAN", "0".into()),
     ]
     .into_iter()
@@ -110,4 +131,175 @@ async fn a_live_setting_applies_without_a_reopen() {
         ready["writer"]
     );
     relay.shutdown().await;
+}
+
+// ---------------------------------------------------------------- cast routes
+
+const DEVICE_ID: &str = "0123456789abcdef0123456789abcdef";
+const SEED: &str = "abababababababababababababababababababababababababababababababab";
+const PAIR_TOKEN: &str = "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd";
+const PAIR_CODE: &str = "ABC123";
+
+/// One DHT node both peers bootstrap from.
+struct Testnet {
+    _runtime: tokio::runtime::Runtime,
+    _udx: libudx::UdxRuntime,
+    _task: tokio::task::JoinHandle<Result<(), peeroxide_dht::hyperdht::HyperDhtError>>,
+    bootstrap: Value,
+}
+
+fn testnet() -> Testnet {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .expect("testnet runtime");
+    let udx = libudx::UdxRuntime::new().expect("udx");
+    let (task, port) = runtime.block_on(async {
+        let mut config = peeroxide_dht::hyperdht::HyperDhtConfig::default();
+        config.dht.bootstrap = Vec::new();
+        config.dht.host = "127.0.0.1".to_owned();
+        config.dht.port = 0;
+        config.dht.firewalled = false;
+        let (task, handle, _events) = peeroxide_dht::hyperdht::spawn(&udx, config)
+            .await
+            .expect("testnet node");
+        let port = handle.local_port().await.expect("testnet port");
+        (task, port)
+    });
+    Testnet {
+        _runtime: runtime,
+        _udx: udx,
+        _task: task,
+        bootstrap: serde_json::json!([format!("127.0.0.1:{port}")]),
+    }
+}
+
+/// A receiver identity the test can pair with: fixed code, token and device id.
+fn seed_identity(dir: &std::path::Path) {
+    std::fs::create_dir_all(dir).expect("cast dir");
+    let identity = serde_json::json!({
+        "deviceId": DEVICE_ID,
+        "name": "Kitchen TV",
+        "seed": SEED,
+        "pairToken": PAIR_TOKEN,
+        "pairCode": PAIR_CODE,
+    });
+    std::fs::write(
+        peartube_native::cast::pairing::ReceiverIdentity::file(dir),
+        serde_json::to_string_pretty(&identity).expect("json"),
+    )
+    .expect("identity");
+}
+
+async fn receiver_on(bootstrap: &Value, dir: &std::path::Path) -> Arc<CoreNode> {
+    let key_pair =
+        peartube_native::cast::receiver::receiver_key_pair_json(dir).expect("key pair");
+    create_node(serde_json::json!({
+        "storage": dir.join("peer").to_string_lossy(),
+        "bootstrap": bootstrap,
+        "keyPair": key_pair,
+        "storageWal": false,
+        "storageMemory": true
+    }))
+    .await
+    .expect("receiver node")
+}
+
+/// `/v1/cast/status` answers from the relay's live controller, and `/v1/cast/pair` reaches a
+/// receiver on the network and saves the pairing it hands back.
+#[test]
+fn the_cast_routes_reach_a_receiver() {
+    let testnet = testnet();
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .expect("runtime");
+    runtime.block_on(async {
+        let dir = tempfile::tempdir().unwrap();
+        cast_routes(&testnet.bootstrap, dir.path()).await;
+    });
+}
+
+async fn cast_routes(bootstrap: &Value, dir: &std::path::Path) {
+    let cast_dir = dir.join("tv");
+    seed_identity(&cast_dir);
+    let node = receiver_on(bootstrap, &cast_dir).await;
+    let receiver = Receiver::start(ReceiverOptions {
+        storage: cast_dir.clone(),
+        peer_storage: Some(cast_dir.join("peer")),
+        name: "Kitchen TV".to_owned(),
+        port: 0,
+        lan_host: None,
+        peer: Some(Arc::new(NodePeer::new(node.clone())) as Arc<dyn CastPeer>),
+        mdns: false,
+        open_auth: false,
+        any_port: true,
+        on_command: None,
+        on_change: None,
+    })
+    .await
+    .expect("receiver starts");
+    let receiver_key = receiver.public_key();
+
+    let bootstrap_host = bootstrap[0].as_str().expect("bootstrap host").to_owned();
+    let relay = Relay::listen(env_on(dir, &bootstrap_host))
+        .await
+        .expect("relay listens");
+    relay.start().await.expect("node opens");
+    let addr = relay.addresses()[0];
+
+    // A live controller answers the status route: the relay's cast stack is open with its node.
+    let status = tokio::task::spawn_blocking(move || get_json(addr, "/v1/cast/status"))
+        .await
+        .unwrap();
+    assert!(status["receivers"].is_array(), "{status}");
+    assert_eq!(status["session"], Value::Null, "{status}");
+    assert_eq!(status["receiverMode"], Value::Null, "{status}");
+
+    // The pair reaches the receiver itself: its code approves and its token comes back.
+    let body = format!(r#"{{"publicKey":"{receiver_key}","code":"{PAIR_CODE}"}}"#);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(150);
+    let paired = loop {
+        let attempt = tokio::task::spawn_blocking({
+            let body = body.clone();
+            move || try_request_json(addr, "POST", "/v1/cast/pair", &body)
+        })
+        .await
+        .unwrap();
+        if attempt.0 == 200 {
+            break attempt.1;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "pair: {} {}",
+            attempt.0,
+            attempt.1
+        );
+        tokio::time::sleep(Duration::from_secs(2)).await;
+    };
+    assert_eq!(paired["publicKey"], receiver_key.as_str());
+    assert_eq!(paired["token"], PAIR_TOKEN);
+    assert_eq!(paired["id"], DEVICE_ID);
+    assert_eq!(paired["name"], "Kitchen TV");
+
+    // The saved pairing is what the status route lists.
+    let status = tokio::task::spawn_blocking(move || get_json(addr, "/v1/cast/status"))
+        .await
+        .unwrap();
+    assert!(
+        status["receivers"]
+            .as_array()
+            .expect("receivers")
+            .iter()
+            .any(|row| row["publicKey"] == receiver_key.as_str()),
+        "{status}"
+    );
+
+    // A stop closes the cast stack with the node; the route is the app's 404 until it reopens.
+    relay.shutdown().await;
+    receiver.close().await;
+    let _ = node.close().await;
+    let _ = std::fs::remove_dir_all(dir);
 }

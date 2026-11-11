@@ -24,11 +24,13 @@ moved to `channel` and its `streamHost`/`streamPort` dropped at start. HTTPS run
 `http-acquire`, `channel-backfill`, `blob-rechunk`, `watch-dir`, `feed-mirror` and
 `p2p-replicate` plugins (`replicate`, over the `traffic` gate's `peartube/bulk-busy`).
 The `privateGuard` setting runs the guard forwarder in-process on its own HyperDHT and port
-(JS spawns `bin/private-relay.js`). Not yet ported: the `hiverelay-seed` plugin (so
-`PEARTUBE_HIVERELAY_UPLOAD_MBPS` caps nothing), standalone guard mode (`PEARTUBE_PRIVATE_RELAY`),
-cast routes, and JS plugins from `<storage>/plugins`. `status.lan` also carries the LAN `publicKey`. The UI and web player
-come from `PEARTUBE_WEB_DIR` (default: `web/` beside the binary). `relay.Dockerfile`
-builds the image from this stack and the app's `src/ui.js` and `web/assets`.
+(JS spawns `bin/private-relay.js`). The cast stack (the app's `createCastController`) opens with
+the node and answers `/v1/cast/*` from it, closing with a stop or reopen. Not yet ported: the
+`hiverelay-seed` plugin (so `PEARTUBE_HIVERELAY_UPLOAD_MBPS` caps nothing), standalone guard mode
+(`PEARTUBE_PRIVATE_RELAY`), and JS plugins from `<storage>/plugins`. `status.lan` also carries the
+LAN `publicKey`. The UI and web player come from `PEARTUBE_WEB_DIR` (default: `web/` beside the
+binary). `relay.Dockerfile` builds the image from this stack and the app's `src/ui.js` and
+`web/assets`.
 
 ## Module map
 
@@ -271,7 +273,7 @@ tested and rejected for lack of repeatable wins. No ACK, pacing or wire changes.
 ## Known gaps and differences
 
 - The `hiverelay-seed` mirror plugin is not built in; hosts can register plugins with `MirrorHost::register`. `p2p-replicate` (`replicate`) is built on `CoreNode` and registered by the relay; it runs one title at a time (the app's default `replicateConcurrency`).
-- Cast: the receiver's read-ahead is one `byte-stream-rs` window per range response instead of the app's retargeted `core.download`; `holdIfThin`'s read pause is not wired. A v1 receiver is listed but not castable. See [cast notes](docs/port-notes-cast.md).
+- Cast: the receiver's read-ahead is one retargeted `core.download` window per stream, sized like the app's (`holdIfThin` and watched-block trimming included), with the TV build's memory-cache permits capping it. A v1 receiver is listed but not castable. See [cast notes](docs/port-notes-cast.md).
 - LAN mDNS and the isolated DHT are implemented, but the real-interface interoperability matrix remains environment-blocked on this Mac. A standalone raw UDP probe also receives no LAN multicast; an ALF “permitted” query alone does not establish delivery. See [LAN notes](docs/port-notes-lan.md).
 - Corestore storage tuning uses engine defaults; free disk space is unknown. Status reports live blob-peer in-flight requests and UDX RTT/retransmitted packets; see [node notes](docs/node-api.md).
 - Rust cannot represent already-lone JS surrogates; exponent-form receiver ports can format differently. Artwork HTTP timeout covers the whole exchange, unlike the JS socket inactivity timeout. See [identify/art notes](docs/port-notes-identify-art.md).

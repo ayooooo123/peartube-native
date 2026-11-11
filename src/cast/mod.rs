@@ -73,6 +73,14 @@ pub const STREAM_FLOOR_BYTES: u64 = 256 * 1024 * 1024;
 pub const DEFAULT_STREAM_BYTES_PER_SEC: u64 = 8 * 1024 * 1024;
 /// Cadence of the eviction pass.
 pub const EVICT_EVERY_MS: u64 = 15_000;
+/// A reader past this many bytes is the player streaming, not probing a header or an index.
+pub const HOLD_AFTER_BYTES: u64 = 2 * 1024 * 1024;
+/// Seconds of the film a streaming reader must have downloaded ahead of it.
+pub const HOLD_SECONDS: u64 = 10;
+/// Seconds of the film needed once a reader has taken one cushion.
+pub const HOLD_LOW_SECONDS: u64 = 2;
+/// Longest a thin reader is held before it resumes regardless.
+pub const HOLD_MAX_MS: u64 = 20_000;
 /// A load's stream token is remembered for this many recent loads.
 pub const REMEMBERED_STREAMS: usize = 4;
 

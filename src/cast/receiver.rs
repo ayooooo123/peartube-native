@@ -119,6 +119,8 @@ struct Inner {
     closing: AtomicBool,
     last_loaded_blobs: Mutex<String>,
     evicting: AtomicBool,
+    /// `steerStreams`' one-at-a-time guard: a reader's open and the timer never steer twice over.
+    steering: AtomicBool,
     last_evict_at: Mutex<Instant>,
     free_cache: Mutex<(Instant, u64)>,
     timers: Mutex<Vec<JoinHandle<()>>>,
@@ -284,7 +286,10 @@ impl Inner {
         let mut streams = lock(&self.streams);
         streams.insert(0, media);
         while streams.len() > REMEMBERED_STREAMS {
-            streams.pop();
+            // `rememberStream` destroys the evicted stream's window; steering no longer visits it.
+            if let Some(evicted) = streams.pop() {
+                evicted.clear_window();
+            }
         }
     }
 
@@ -537,6 +542,13 @@ impl Inner {
         if media.core.is_none() || media.blob.is_none() {
             return;
         }
+        if self.closing.load(Ordering::Acquire)
+            || !lock(&self.streams)
+                .iter()
+                .any(|kept| Arc::ptr_eq(kept, &media))
+        {
+            return;
+        }
         let free = self.free_bytes();
         let (state, duration) = {
             let state = self.state();
@@ -546,18 +558,20 @@ impl Inner {
                 .filter(|value| *value > 0.0);
             (state, duration)
         };
-        let duration_ms = duration.map(|value| value as u64);
+        let active = lock(&self.active)
+            .as_ref()
+            .is_some_and(|active| Arc::ptr_eq(active, &media));
+        // Only the playing load has a duration; another stream's is its own average bitrate.
+        let duration_ms = duration.filter(|_| active).map(|value| value as u64);
         let rate = media.rate(duration_ms);
         let playhead = media.lead_byte(&state, duration_ms);
+        media.steer_window(free, rate, playhead);
         let Some(plan) = super::media::evict_plan(free, rate, playhead) else {
             return;
         };
         if media.core_key_hex.is_empty() || media.blob.is_none() {
             return;
         }
-        let active = lock(&self.active)
-            .as_ref()
-            .is_some_and(|active| Arc::ptr_eq(active, &media));
         let settling = (active && state.get("buffering").is_some_and(truthy))
             || media.last_reader_at().elapsed() < Duration::from_millis(super::media::SETTLING_MS);
         if settling && free >= super::STREAM_FLOOR_BYTES {
@@ -584,19 +598,27 @@ impl Inner {
         if self.closing.load(Ordering::Acquire) {
             return;
         }
+        // `steerStreams`' one-at-a-time guard: a reader that just opened and the timer coincide.
+        if self.steering.swap(true, Ordering::AcqRel) {
+            return;
+        }
         let streams = lock(&self.streams).clone();
         let active = lock(&self.active).clone();
         for media in streams {
+            // `steerStreams`' read-rate estimate, taken for every remembered stream.
+            media.refresh_rate();
             if media.core.is_none() {
                 continue;
             }
             let live = lock_media_readers(&media)
                 || active.as_ref().is_some_and(|a| Arc::ptr_eq(a, &media));
             if !live {
+                media.clear_window();
                 continue;
             }
             self.steer_read_ahead(media).await;
         }
+        self.steering.store(false, Ordering::Release);
     }
 
     /// The status loop's peer/cache counters while something plays.
@@ -745,8 +767,10 @@ impl Inner {
             && (method == Method::GET || method == Method::HEAD)
             && let Some(media) = self.stream(&token)
         {
-            let free = self.free_bytes();
-            return super::media::windowed_response(media, range.as_deref(), head, free);
+            // `onReader` → `steerStreams()`: a new reader starts the stream's window at once.
+            let steering = self.clone();
+            tokio::spawn(async move { steering.steer_streams().await });
+            return super::media::windowed_response(media, range.as_deref(), head);
         }
         if method == Method::GET && path == "/cast/v1/info" {
             return http::json_response(
@@ -840,6 +864,7 @@ impl Receiver {
             closing: AtomicBool::new(false),
             last_loaded_blobs: Mutex::new(String::new()),
             evicting: AtomicBool::new(false),
+            steering: AtomicBool::new(false),
             last_evict_at: Mutex::new(Instant::now()),
             free_cache: Mutex::new((Instant::now() - Duration::from_secs(10), 0)),
             timers: Mutex::new(Vec::new()),
@@ -970,6 +995,9 @@ impl Receiver {
             timer.abort();
         }
         *lock(&self.inner.active) = None;
+        for media in lock(&self.inner.streams).iter() {
+            media.clear_window();
+        }
         lock(&self.inner.streams).clear();
         if let Some(ad) = lock(&self.inner.ad).take() {
             ad.stop();

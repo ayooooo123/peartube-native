@@ -2,10 +2,13 @@
 //! read rate the disk-aware window is sized from, and the windowed loopback response the
 //! receiver's own player reads (`serveWindowedStream` / `steerReadAhead` in `src/cast.js`).
 //!
-//! The app steers one sliding download window per stream every second on the node's core; the
-//! port hands the same disk-aware window size to `byte-stream-rs` for each response, and asks the
-//! node to trim watched blocks from [`evict_plan`]. Port notes record the difference.
+//! The app steers one sliding `core.download` window per stream every second, sized by the
+//! stream's bitrate and the free disk; the port does the same on the node's core
+//! ([`Media::steer_window`]), and each response reads through it on demand with no prefetch of
+//! its own. A reader past its first 2 MiB waits while the cushion ahead of it is thin
+//! (`hold_if_thin`). [`evict_plan`] trims watched blocks behind the player.
 
+use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -25,8 +28,9 @@ use super::CastError;
 use super::http::{Body, RangeSpec, channel_body, cors_headers, parse_http_range};
 use super::traits::{CastPeer, EvictOptions};
 use super::{
-    BEHIND_SECONDS, DEFAULT_STREAM_BYTES_PER_SEC, EVICT_EVERY_MS, MIN_READ_AHEAD_SECONDS,
-    READ_AHEAD_SECONDS, STREAM_FLOOR_BYTES, STREAM_RESERVE_BYTES, TRIM_FREE_BYTES,
+    BEHIND_SECONDS, DEFAULT_STREAM_BYTES_PER_SEC, EVICT_EVERY_MS, HOLD_AFTER_BYTES,
+    HOLD_LOW_SECONDS, HOLD_MAX_MS, HOLD_SECONDS, MIN_READ_AHEAD_SECONDS, READ_AHEAD_SECONDS,
+    STREAM_FLOOR_BYTES, STREAM_RESERVE_BYTES, TRIM_FREE_BYTES,
 };
 
 /// Bytes a reader must have been sent before it counts as the streaming player.
@@ -37,6 +41,23 @@ const COUNT_TTL_MS: u64 = 3_000;
 pub const SETTLING_MS: u64 = 20_000;
 /// Behind-the-player bytes kept on a tight disk.
 const TIGHT_KEEP_BYTES: u64 = 64 * 1024 * 1024;
+/// How often a held reader checks whether its cushion arrived.
+const HOLD_POLL: Duration = Duration::from_millis(250);
+/// Two hold checks at least this far apart (`reader.at - reader.checkedAt >= 500`).
+const HOLD_CHECK: Duration = Duration::from_millis(500);
+
+/// One stream's sliding download window: the block range `core.download` is holding open, the
+/// permits its blocks take from the TV build's memory budget, and where the range sits.
+struct DownloadWindow {
+    start: u64,
+    end: u64,
+    /// Registered by `Core::download` when it is created and cancelled when it drops; it is never
+    /// polled, so holding it keeps the range open.
+    #[allow(dead_code)]
+    range: Pin<Box<dyn Future<Output = ()> + Send>>,
+    #[allow(dead_code)]
+    permit: Option<tokio::sync::OwnedSemaphorePermit>,
+}
 
 /// One load's media, as `activeMedia` / `streams` hold it.
 pub struct Media {
@@ -56,6 +77,8 @@ pub struct Media {
     readers: Mutex<Vec<Reader>>,
     last_reader_at: Mutex<Instant>,
     counts: Mutex<Option<(u64, Instant, u64)>>,
+    /// The stream's one sliding download window, as `media.window` holds it.
+    window: Mutex<Option<DownloadWindow>>,
 }
 
 #[derive(Clone, Copy)]
@@ -92,6 +115,7 @@ impl Media {
             readers: Mutex::new(Vec::new()),
             last_reader_at: Mutex::new(Instant::now()),
             counts: Mutex::new(None),
+            window: Mutex::new(None),
         }
     }
 
@@ -153,7 +177,8 @@ impl Media {
         id
     }
 
-    fn advance_reader(&self, id: u64, pos: u64, delta: u64) {
+    fn advance_reader(&self, id: u64, pos: u64, delta: u64) -> u64 {
+        let mut sent = 0;
         if let Some(reader) = self
             .readers
             .lock()
@@ -164,8 +189,10 @@ impl Media {
             reader.pos = pos;
             reader.sent += delta;
             reader.at = Instant::now();
+            sent = reader.sent;
         }
         self.served_bytes.fetch_add(delta, Ordering::Relaxed);
+        sent
     }
 
     fn drop_reader(&self, id: u64) {
@@ -203,6 +230,16 @@ impl Media {
         *self.avg_rate.lock().expect("cast media rate") = avg;
         let recent = *self.read_rate.lock().expect("cast media rate");
         avg.max(recent.min(2.0 * avg))
+    }
+
+    /// `media.avgRate || DEFAULT_STREAM_BYTES_PER_SEC`, as `holdIfThin` sizes its cushion.
+    fn avg_rate_or_default(&self) -> f64 {
+        let known = *self.avg_rate.lock().expect("cast media rate");
+        if known > 0.0 {
+            known
+        } else {
+            DEFAULT_STREAM_BYTES_PER_SEC as f64
+        }
     }
 
     pub fn reader_count(&self) -> usize {
@@ -243,15 +280,80 @@ impl Media {
         *self.last_reader_at.lock().expect("cast readers")
     }
 
-    /// The byte count a response may read ahead, from [`read_ahead_bytes`].
-    pub fn window_bytes(&self, free: u64) -> u64 {
-        let rate = self.rate(None);
-        let cached = 0;
-        let wanted = read_ahead_bytes(rate, free, cached);
-        self.peer
+    /// `steerReadAhead`'s window half: one sliding `core.download` window per stream, ahead of
+    /// the playhead, sized in seconds of the stream and shrunk by the free disk. A registered
+    /// range moves only once the playhead or the window end left its step, so a slow reader keeps
+    /// one range instead of re-requesting every tick. Returns whether a range was (re)registered.
+    ///
+    /// The TV build's memory budget caps it: the window's bytes hold permits from
+    /// `memory_window_budget`, and a range is only as long as the permits it could take.
+    pub fn steer_window(&self, free: u64, rate: f64, playhead_byte: u64) -> bool {
+        let (Some(core), Some(blob)) = (self.core.as_ref(), self.blob) else {
+            self.clear_window();
+            return false;
+        };
+        if blob.block_length == 0 {
+            self.clear_window();
+            return false;
+        }
+        // `bs = Math.ceil(blob.byteLength / blob.blockLength)`: the blob's mean block size.
+        let bs = blob.byte_length.div_ceil(blob.block_length).max(1);
+        let last = blob.block_offset + blob.block_length;
+        let first = (blob.block_offset + playhead_byte / bs).min(last - 1);
+        let ahead_blocks = ((rate * READ_AHEAD_SECONDS as f64) / bs as f64).ceil() as u64;
+        let full_end = (first + ahead_blocks).min(last);
+        let cached_ahead = core.count_local(first, full_end) * bs;
+        let wanted = read_ahead_bytes(rate, free, cached_ahead);
+        // The app's RAM-built TV caps a window at its memory cache; the permits bound it further.
+        let cache_cap = self
+            .peer
             .as_ref()
             .and_then(|peer| peer.memory_cache_bytes())
-            .map_or(wanted, |limit| wanted.min(limit * 3 / 4))
+            .map_or(u64::MAX, |limit| limit * 3 / 4);
+        let (bytes, permit) = reserve_window(
+            self.peer
+                .as_ref()
+                .and_then(|peer| peer.memory_window_budget()),
+            wanted.min(cache_cap),
+        );
+        let end = (first + bytes.div_ceil(bs).max(1)).min(last);
+        let step = ((end - first) / 8).max(4);
+        {
+            let window = self.window.lock().expect("cast window");
+            if let Some(window) = window.as_ref()
+                && first.abs_diff(window.start) < step
+                && end.abs_diff(window.end) < step
+            {
+                return false;
+            }
+        }
+        // Register the new range before the old one is dropped, so no block request falls between.
+        let registered = core.download(first, Some(end), true);
+        let range: Pin<Box<dyn Future<Output = ()> + Send>> =
+            Box::pin(async move {
+                let _ = registered.await;
+            });
+        *self.window.lock().expect("cast window") = Some(DownloadWindow {
+            start: first,
+            end,
+            range,
+            permit,
+        });
+        true
+    }
+
+    /// The block range this stream's download window covers, while it has one.
+    pub fn window_range(&self) -> Option<(u64, u64)> {
+        self.window
+            .lock()
+            .expect("cast window")
+            .as_ref()
+            .map(|window| (window.start, window.end))
+    }
+
+    /// `media.window = null`: nothing on this stream is playing, so the range is cancelled.
+    pub fn clear_window(&self) {
+        let _ = self.window.lock().expect("cast window").take();
     }
 }
 
@@ -271,73 +373,32 @@ fn reserve_window(
     }
 }
 
+/// A response's reader: its place in [`Media::readers`], and the bag that cancels every block it
+/// asked for when the player disconnects. The stream's prefetch window is not the reader's; one
+/// window per stream belongs to [`Media`].
 struct ReaderLease<'a> {
     media: &'a Media,
-    id: Option<u64>,
+    id: u64,
     bag: RequestBag,
-    budget: Option<Arc<tokio::sync::Semaphore>>,
-    cap: u64,
-    window: u64,
-    restart: bool,
-    permit: Option<tokio::sync::OwnedSemaphorePermit>,
 }
 
 impl<'a> ReaderLease<'a> {
-    fn new(media: &'a Media, start: u64, wanted: u64) -> Self {
-        let limit = media
-            .peer
-            .as_ref()
-            .and_then(|peer| peer.memory_cache_bytes());
+    fn new(media: &'a Media, start: u64) -> Self {
         Self {
             media,
-            id: Some(media.register_reader(start)),
+            id: media.register_reader(start),
             bag: RequestBag::new(),
-            budget: media
-                .peer
-                .as_ref()
-                .and_then(|peer| peer.memory_window_budget()),
-            cap: limit.map_or(wanted, |limit| wanted.min(limit * 3 / 8)),
-            window: 0,
-            restart: false,
-            permit: None,
         }
-    }
-
-    fn reserve(&mut self) -> u64 {
-        if self.window == 0 {
-            (self.window, self.permit) = reserve_window(self.budget.clone(), self.cap);
-        }
-        self.window
     }
 
     async fn send(
-        &mut self,
+        &self,
         tx: &mpsc::Sender<Result<hyper::body::Frame<Bytes>, std::io::Error>>,
         chunk: Bytes,
-        pos: u64,
     ) -> bool {
-        let reserved = if self.budget.is_some() {
-            match tokio::time::timeout(Duration::from_secs(15), tx.reserve()).await {
-                Ok(result) => result,
-                Err(_) => {
-                    self.permit.take();
-                    self.window = 0;
-                    self.bag.destroy("reader parked");
-                    self.bag = RequestBag::new();
-                    if let Some(id) = self.id.take() {
-                        self.media.drop_reader(id);
-                    }
-                    self.restart = true;
-                    tx.reserve().await
-                }
-            }
-        } else {
-            tx.reserve().await
+        let Ok(slot) = tx.reserve().await else {
+            return false;
         };
-        let Ok(slot) = reserved else { return false };
-        if self.id.is_none() {
-            self.id = Some(self.media.register_reader(pos));
-        }
         slot.send(Ok(hyper::body::Frame::data(chunk)));
         true
     }
@@ -346,9 +407,7 @@ impl<'a> ReaderLease<'a> {
 impl Drop for ReaderLease<'_> {
     fn drop(&mut self) {
         self.bag.destroy("reader closed");
-        if let Some(id) = self.id {
-            self.media.drop_reader(id);
-        }
+        self.media.drop_reader(self.id);
     }
 }
 
@@ -468,14 +527,10 @@ fn partial_range(range: Option<&str>, total: u64) -> Result<(bool, u64, u64), Re
     }
 }
 
-/// `serveWindowedStream`: the receiver's own player reads straight from the video core, one
-/// bounded read-ahead window per response and no download to the end of the film.
-pub fn windowed_response(
-    media: Arc<Media>,
-    range: Option<&str>,
-    head: bool,
-    free: u64,
-) -> Response<Body> {
+/// `serveWindowedStream`: the receiver's own player reads straight from the video core through
+/// the stream's one sliding window, with no prefetch of its own and no download to the end of the
+/// film. Each open response is a reader whose position the window follows.
+pub fn windowed_response(media: Arc<Media>, range: Option<&str>, head: bool) -> Response<Body> {
     let Some(blob) = media.blob else {
         return super::http::empty(StatusCode::NOT_FOUND);
     };
@@ -506,10 +561,77 @@ pub fn windowed_response(
     }
     let (tx, rx) = mpsc::channel(8);
     tokio::spawn(async move {
-        let _ = pipe_p2p(&media, &tx, start, end, free).await;
+        let _ = pipe_p2p(&media, &tx, start, end).await;
     });
     *res.body_mut() = channel_body(rx);
     res
+}
+
+/// `holdIfThin`: a reader past its first 2 MiB is the player streaming, not probing a header or
+/// an index. It gets no more bytes while fewer than [`HOLD_LOW_SECONDS`] of the film lie
+/// downloaded ahead of it ([`HOLD_SECONDS`] before its first cushion), until [`HOLD_SECONDS`] do
+/// or [`HOLD_MAX_MS`] passes. The player then waits once, through one "Buffering…", instead of
+/// resuming with a second in hand and stalling again moments later. False when the player left.
+async fn hold_if_thin(
+    tx: &mpsc::Sender<Result<hyper::body::Frame<Bytes>, std::io::Error>>,
+    media: &Media,
+    pos: u64,
+    cushioned: bool,
+) -> bool {
+    hold_for(
+        tx,
+        media,
+        pos,
+        cushioned,
+        Duration::from_millis(HOLD_MAX_MS),
+    )
+    .await
+}
+
+/// [`hold_if_thin`] with the wait the caller allows; a test does not need 20 s.
+async fn hold_for(
+    tx: &mpsc::Sender<Result<hyper::body::Frame<Bytes>, std::io::Error>>,
+    media: &Media,
+    pos: u64,
+    cushioned: bool,
+    max_wait: Duration,
+) -> bool {
+    let (Some(core), Some(blob)) = (media.core.as_ref(), media.blob) else {
+        return true;
+    };
+    if blob.block_length == 0 {
+        return true;
+    }
+    let bs = blob.byte_length.div_ceil(blob.block_length).max(1);
+    let rate = media.avg_rate_or_default();
+    let last = blob.block_offset + blob.block_length;
+    let at = (blob.block_offset + pos / bs).min(last);
+    let blocks_for = |seconds: u64| -> u64 {
+        let wanted = ((rate * seconds as f64) / bs as f64).ceil() as u64;
+        (last - at).min(wanted)
+    };
+    let buffered = |seconds: u64| {
+        let blocks = blocks_for(seconds);
+        blocks == 0 || core.count_local(at, at + blocks) == blocks
+    };
+    if buffered(if cushioned {
+        HOLD_LOW_SECONDS
+    } else {
+        HOLD_SECONDS
+    }) {
+        return true;
+    }
+    let deadline = Instant::now() + max_wait;
+    while Instant::now() < deadline {
+        if buffered(HOLD_SECONDS) {
+            break;
+        }
+        tokio::select! {
+            _ = tx.closed() => return false,
+            _ = tokio::time::sleep(HOLD_POLL) => {}
+        }
+    }
+    true
 }
 
 async fn pipe_p2p(
@@ -517,35 +639,29 @@ async fn pipe_p2p(
     tx: &mpsc::Sender<Result<hyper::body::Frame<Bytes>, std::io::Error>>,
     start: u64,
     end: u64,
-    free: u64,
 ) -> Result<u64, (u64, CastError)> {
     let (Some(core), Some(blob)) = (media.core.as_ref(), media.blob) else {
         return Err((0, CastError::new("No local P2P source", 502)));
     };
-    let wanted = media.window_bytes(free);
-    let mut lease = ReaderLease::new(media, start, wanted);
-    let mut stream: Option<ByteStream> = None;
+    let lease = ReaderLease::new(media, start);
+    // Prefetch belongs to the stream's one window, not to the response.
+    let opts = StreamOptions {
+        start,
+        length: Some(end - start + 1),
+        window_bytes: 0,
+        active: true,
+    };
+    let Some(opened) =
+        while_connected(tx, ByteStream::open(core, blob, opts, lease.bag.clone())).await
+    else {
+        return Ok(0);
+    };
+    let mut stream = opened.map_err(|err| (0, CastError::new(err.to_string(), 502)))?;
     let mut written = 0u64;
+    let mut cushioned = false;
+    let mut checked_at = Instant::now() - HOLD_CHECK;
     loop {
-        let previous = lease.window;
-        let window = lease.reserve();
-        if stream.is_none() || lease.restart || (previous == 0 && window > 0) {
-            let opts = StreamOptions {
-                start: start + written,
-                length: Some(end - start + 1 - written),
-                window_bytes: window,
-                active: true,
-            };
-            let Some(opened) =
-                while_connected(tx, ByteStream::open(core, blob, opts, lease.bag.clone())).await
-            else {
-                return Ok(written);
-            };
-            stream = Some(opened.map_err(|err| (written, CastError::new(err.to_string(), 502)))?);
-            lease.restart = false;
-        }
         let next = async {
-            let stream = stream.as_mut().expect("opened stream");
             stream
                 .next()
                 .await
@@ -558,20 +674,36 @@ async fn pipe_p2p(
             return Ok(written);
         };
         let len = chunk.len() as u64;
-        if !lease.send(tx, chunk, start + written).await {
+        if !lease.send(tx, chunk).await {
             return Ok(written);
         }
         written += len;
-        media.advance_reader(lease.id.expect("resumed reader"), start + written, len);
+        let sent = media.advance_reader(lease.id, start + written, len);
+        let now = Instant::now();
+        if sent >= HOLD_AFTER_BYTES && now.duration_since(checked_at) >= HOLD_CHECK {
+            checked_at = now;
+            if !hold_if_thin(tx, media, start + written, cushioned).await {
+                return Ok(written);
+            }
+            cushioned = true;
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use http_body_util::BodyExt;
+    use hypercore::CoreOptions;
+    use hypercore::crypto::KeyPair;
+    use hypercore::storage::Store;
     use serde_json::json;
+    use tokio::time::timeout;
 
-    fn lease_media() -> Media {
+    /// Block size of the fixture film, and the blob's mean block size.
+    const BS: usize = 64 * 1024;
+
+    fn blank_media() -> Media {
         Media::new(
             "lease".into(),
             json!({}),
@@ -585,7 +717,7 @@ mod tests {
 
     #[test]
     fn a_reader_counts_only_past_the_probe_size() {
-        let media = lease_media();
+        let media = blank_media();
         let id = media.register_reader(0);
         media.advance_reader(id, 112, 112);
         // A reader still inside its first 2 MiB is a probe, not the lead.
@@ -597,46 +729,213 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn disconnect_cancels_slow_open_and_drops_reader_resources() {
-        let media = lease_media();
-        let budget = Arc::new(tokio::sync::Semaphore::new(100));
+    async fn disconnect_cancels_a_slow_open_and_drops_the_reader() {
+        let media = blank_media();
         let (tx, rx) = mpsc::channel(1);
-        let mut lease = ReaderLease::new(&media, 500, 50);
-        lease.budget = Some(budget.clone());
-        assert_eq!(lease.reserve(), 50);
         drop(rx);
         assert!(
             while_connected(&tx, std::future::pending::<()>())
                 .await
                 .is_none()
         );
+        let lease = ReaderLease::new(&media, 500);
+        assert_eq!(media.reader_count(), 1);
         drop(lease);
         assert!(media.readers.lock().unwrap().is_empty());
-        assert_eq!(budget.available_permits(), 100);
     }
 
-    #[test]
-    fn demand_only_reader_retries_and_panics_release_its_lease() {
-        let media = lease_media();
-        let budget = Arc::new(tokio::sync::Semaphore::new(100));
-        let (_, held) = reserve_window(Some(budget.clone()), 100);
-        let mut lease = ReaderLease::new(&media, 500, 50);
-        lease.budget = Some(budget.clone());
-        assert_eq!(lease.reserve(), 0);
-        drop(held);
-        assert_eq!(lease.reserve(), 50);
+    /// Two stores and one in-memory replication link: a writer with `blocks` blocks, and a
+    /// reader that knows how long the film is but has fetched nothing yet.
+    struct Peers {
+        _writer_dir: tempfile::TempDir,
+        _reader_dir: tempfile::TempDir,
+        _writer_store: Store,
+        _reader_store: Store,
+        _writer: Core,
+        reader: Core,
+        _session: hypercore::Session,
+        data: Vec<u8>,
+    }
+
+    async fn peers(blocks: usize) -> Peers {
+        let writer_dir = tempfile::tempdir().unwrap();
+        let reader_dir = tempfile::tempdir().unwrap();
+        let writer_store = Store::open(writer_dir.path()).unwrap();
+        let reader_store = Store::open(reader_dir.path()).unwrap();
+        let writer = Core::open(
+            &writer_store,
+            CoreOptions {
+                key_pair: Some(KeyPair::from_seed(&[4u8; 32])),
+                ..CoreOptions::default()
+            },
+        )
+        .unwrap();
+        let data: Vec<u8> = (0..blocks * BS).map(|index| (index % 251) as u8).collect();
+        if blocks > 0 {
+            let chunks: Vec<&[u8]> = data.chunks(BS).collect();
+            writer.append(&chunks).await.unwrap();
+        }
+        let reader = Core::open(
+            &reader_store,
+            CoreOptions {
+                key: Some(*writer.key()),
+                ..CoreOptions::default()
+            },
+        )
+        .unwrap();
+        let session = reader.session(true);
+        let (mw, mr) = link();
+        writer.replicate(&mw);
+        reader.replicate(&mr);
+        if blocks > 0 {
+            timeout(Duration::from_secs(10), reader.update(None))
+                .await
+                .expect("the reader learns the length")
+                .expect("update");
+        }
+        Peers {
+            _writer_dir: writer_dir,
+            _reader_dir: reader_dir,
+            _writer_store: writer_store,
+            _reader_store: reader_store,
+            _writer: writer,
+            reader,
+            _session: session,
+            data,
+        }
+    }
+
+    /// Two muxes over an in-memory link that look like one secret-stream session.
+    fn link() -> (protomux::Mux, protomux::Mux) {
+        let ((ar, aw), (br, bw)) = protomux::memory::duplex(64);
+        let handshake = Some([7u8; 64]);
+        (
+            protomux::Mux::new(
+                ar,
+                aw,
+                protomux::StreamInfo {
+                    is_initiator: true,
+                    handshake_hash: handshake,
+                    ..protomux::StreamInfo::default()
+                },
+            ),
+            protomux::Mux::new(
+                br,
+                bw,
+                protomux::StreamInfo {
+                    handshake_hash: handshake,
+                    ..protomux::StreamInfo::default()
+                },
+            ),
+        )
+    }
+
+    /// A load of `blocks` blocks of the fixture film, read from `reader`.
+    fn media(reader: Core, blocks: u64) -> Media {
+        Media::new(
+            "stream".into(),
+            json!({ "size": blocks * BS as u64 }),
+            "video/mp4".into(),
+            Some(reader),
+            String::new(),
+            Some(BlobId {
+                block_offset: 0,
+                block_length: blocks,
+                byte_offset: 0,
+                byte_length: blocks * BS as u64,
+            }),
+            None,
+        )
+    }
+
+    async fn fetch(reader: &Core, index: u64) {
+        timeout(Duration::from_secs(10), reader.get(index, Default::default()))
+            .await
+            .unwrap_or_else(|_| panic!("block {index} arrives"))
+            .expect("get")
+            .expect("a block");
+    }
+
+    #[tokio::test]
+    async fn one_window_follows_the_reader_and_shrinks_with_the_disk() {
+        let none = blank_media();
+        assert!(!none.steer_window(64 << 30, 8.0e6, 0));
+        assert_eq!(none.window_range(), None);
+
+        let stream = peers(0).await;
+        let media = media(stream.reader.clone(), 400);
+        // A roomy disk asks for 120 s of film: the whole blob at this bitrate.
+        assert!(media.steer_window(64 << 30, 8.0e6, 0));
+        assert_eq!(media.window_range(), Some((0, 400)));
+        // A small move stays inside the window's step: the one range is not re-registered.
+        assert!(!media.steer_window(64 << 30, 8.0e6, 5 * BS as u64));
+        assert_eq!(media.window_range(), Some((0, 400)));
+        // The player jumped far enough: the window follows it.
+        assert!(media.steer_window(64 << 30, 8.0e6, 100 * BS as u64));
+        assert_eq!(media.window_range(), Some((100, 400)));
+        // A disk at the floor leaves only the block being read.
+        assert!(media.steer_window(STREAM_FLOOR_BYTES, 8.0e6, 100 * BS as u64));
+        assert_eq!(media.window_range(), Some((100, 101)));
+        // Nothing is playing on the stream: the range is cancelled.
+        media.clear_window();
+        assert_eq!(media.window_range(), None);
+    }
+
+    #[tokio::test]
+    async fn a_thin_reader_past_the_probe_size_holds_until_the_cushion_arrives() {
+        let stream = peers(200).await;
+        let media = media(stream.reader.clone(), 200);
+        // 512 KiB/s: 10 s of film is 80 blocks, 2 s is 16.
+        assert_eq!(media.rate(Some(25_000)), 512.0 * 1024.0);
+        let mut body = windowed_response(Arc::new(media), None, false).into_body();
+        let mut received: Vec<u8> = Vec::new();
+        // The player streams until its first 2 MiB; the cushion ahead (blocks 32..112) is not
+        // downloaded, so it waits instead of racing on with one second in hand.
+        while let Ok(Some(Ok(frame))) = timeout(Duration::from_secs(2), body.frame()).await {
+            if let Ok(data) = frame.into_data() {
+                received.extend_from_slice(&data);
+            }
+        }
         assert_eq!(
-            budget.available_permits(),
-            50,
-            "leave room for an overlapping seek"
+            received.len(),
+            HOLD_AFTER_BYTES as usize,
+            "a thin reader stops at its first 2 MiB"
         );
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
-            let _lease = lease;
-            panic!("reader failure");
-        }));
-        assert!(result.is_err());
-        assert!(media.readers.lock().unwrap().is_empty());
-        assert_eq!(budget.available_permits(), 100);
+        // The stream's window fills the cushion; the reader resumes at once.
+        for index in 32..112 {
+            fetch(&stream.reader, index).await;
+        }
+        let rest = timeout(Duration::from_secs(30), async {
+            while let Some(frame) = body.frame().await {
+                if let Ok(frame) = frame
+                    && let Ok(data) = frame.into_data()
+                {
+                    received.extend_from_slice(&data);
+                }
+            }
+        })
+        .await;
+        assert!(rest.is_ok(), "the held reader resumes");
+        assert_eq!(received, stream.data, "every byte of the film arrives");
+    }
+
+    #[tokio::test]
+    async fn a_cushioned_reader_needs_only_two_seconds_ahead() {
+        let stream = peers(200).await;
+        let media = media(stream.reader.clone(), 200);
+        media.rate(Some(25_000));
+        for index in 0..48 {
+            fetch(&stream.reader, index).await;
+        }
+        let (tx, _rx) = mpsc::channel(8);
+        // Blocks 32..48 are 2 s of film: enough once the reader has taken a cushion.
+        let started = Instant::now();
+        assert!(hold_for(&tx, &media, 32 * BS as u64, true, Duration::from_millis(400)).await);
+        assert!(started.elapsed() < Duration::from_millis(200));
+        // Before its first cushion the same reader needs 10 s, so it waits out the caller's limit.
+        let started = Instant::now();
+        assert!(hold_for(&tx, &media, 32 * BS as u64, false, Duration::from_millis(400)).await);
+        assert!(started.elapsed() >= Duration::from_millis(400));
     }
 
     #[test]

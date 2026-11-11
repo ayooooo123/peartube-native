@@ -67,12 +67,15 @@ still pair with it by key. `info()` carries `protocol`, `deviceId`, `name`, `pub
 
 The loopback server answers the player and nothing else:
 
-- `GET|HEAD /cast/v1/p2p/<32 hex>` — windowed Range reads of a remembered load.
+- `GET|HEAD /cast/v1/p2p/<32 hex>` — Range reads of a remembered load through that stream's one
+  sliding download window (no prefetch per response).
 - `GET /cast/v1/info` — the telemetry document (`deviceId`, `name`, `routes`, `state`).
 - anything else — `404`.
 
 A load keeps the last four streams addressable by token; the player's URL is
-`http://127.0.0.1:<port>/cast/v1/p2p/<token>`.
+`http://127.0.0.1:<port>/cast/v1/p2p/<token>`. A reader past its first 2 MiB is held while the
+film's cushion ahead is thin (2 s of it, 10 s before that reader's first cushion, for at most
+20 s), which is the app's `holdIfThin`.
 
 ## The controller
 
@@ -100,6 +103,13 @@ The saved key wins over mDNS, which is unsigned.
 this node over their connection), and sends the load with the watch link plus its channel. A
 receiver without a token, and not open, is refused before connecting:
 `Pair with <name> using its 6-character TV code before casting`.
+
+The relay (`bin/relay.js`) opens a controller with its node, gets `getNode` from the API's live
+node and `getLanHost` from the relay's LAN address (the `lanHost` setting, else the detected
+Wi-Fi/Ethernet IPv4), passes `onchange` through as the `cast` event, and calls `setLanHost` when
+it opens and when `lan`/`lanHost` change. The controller is mounted as the API's `state.cast`, so
+`/v1/cast/{status,pair,receivers/:id,play,control,stop}` answer while it is open and 404 between
+opens, and a stop or reopen closes it before the node it drives.
 
 ## Integration seams
 
@@ -129,9 +139,10 @@ Node hooks added for this port:
 
 | JS | Rust | Why |
 | --- | --- | --- |
-| `steerReadAhead` keeps one `core.download` window per stream, retargeted every second | each range response opens one `byte-stream-rs` window sized by the same disk-aware arithmetic (`media::read_ahead_bytes`); eviction still runs every 15 s (3 s on a tight disk) through `CastPeer::evict_behind` | the window is per-response, so a started range is never retargeted mid-stream |
+| `steerReadAhead` keeps one `core.download` window per stream, retargeted every second | the same: `Media::steer_window` holds one unpolled `Core::download` range per stream, retargeted by the receiver's one-second `steerStreams` tick with the same step rule; eviction still runs every 15 s (3 s on a tight disk) through `CastPeer::evict_behind` | hypercore-rs cancels a range when its future drops, so the range is held unpolled and replaced only when the playhead or the window end left its step |
 | `serveWindowedStream` counts `core.download` blocks via `core.count` | `Media::cached_bytes` walks `core.has(i)` over the blob's block range, cached 3 s | hypercore-rs has no range count; the 3 s cache bounds the cost |
-| `holdIfThin` pauses the response for a cushion | not modelled; the window arithmetic and the worklet's memory budget already bound the response | a paused body has no equivalent in the per-response window; see gaps |
+| `holdIfThin` pauses the response for a cushion | the same (`media::hold_for`): a reader past its first 2 MiB waits while 2 s (10 s before its first cushion) of film are not downloaded ahead, up to 20 s, then resumes | the response loop awaits the cushion instead of pausing a stream; a disconnected player ends the wait |
+| `steerReadAhead`'s cache trim counts `cachedAhead` in bytes | `read_ahead_bytes` reserves 4/3 of new cached bytes | the storage engine gates blob relocation at 25% garbage, avoiding live-video rewrites while bounding retained garbage |
 | `state` is a plain object; `reportState` may leave `videoDecoder: undefined` | the state map keeps the key with `null` and `state::to_json` drops a null `videoDecoder` | JSON has no `undefined`; the app's bytes and key order are preserved |
 | `freeDiskBytes` via `statfsSync` | `df -kP <dir>` | `statvfs` needs `unsafe`, which the crate forbids; `df -kP` reports the same `bavail * 1024` |
 | `resolvePeerStorage` probes with a RocksDB Corestore | probes with a hypercore-rs store and one appended block | the Rust backend's storage is hypercore-rs; the probe still proves lock+append works there |
@@ -146,5 +157,3 @@ Node hooks added for this port:
 - The app's `#1`/`#2` cast e2e scenarios around a 3rd peer seeding and private-routing casts are
   covered by the JS suite; the Rust tests cover pairing, the control channel, the data path and
   both interop directions.
-- `holdIfThin`'s read pause (see above). The receiver's RAM window budget, reader leases and
-  watched-block trimming are ported.

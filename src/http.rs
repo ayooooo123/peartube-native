@@ -279,6 +279,8 @@ pub struct Api<N: Node> {
     downloads: Mutex<HashMap<String, (String, String)>>,
     /// `state.node.blobServer`: where `/v1/blob` proxies; the relay sets it on each open.
     blob: Mutex<Option<BlobAddr>>,
+    /// `state.cast`: the cast stack, set when the node opens and cleared when it closes.
+    cast: Mutex<Option<Arc<dyn CastBridge>>>,
     web_cache: Mutex<HashMap<String, Bytes>>,
     sse: Arc<Mutex<Vec<mpsc::Sender<Bytes>>>>,
 }
@@ -288,11 +290,13 @@ impl<N: Node> Api<N> {
     pub fn new(mut options: Options) -> Self {
         let settings = options.settings.take();
         let blob = Mutex::new(options.blob.take());
+        let cast = Mutex::new(options.cast.take());
         Self {
             node: Mutex::new(None),
             options,
             settings,
             blob,
+            cast,
             resolutions: Mutex::new(HashMap::new()),
             downloads: Mutex::new(HashMap::new()),
             web_cache: Mutex::new(HashMap::new()),
@@ -319,6 +323,16 @@ impl<N: Node> Api<N> {
     /// The blob server `/v1/blob` proxies to, `None` while no node serves blobs.
     pub fn set_blob(&self, blob: Option<BlobAddr>) {
         *self.blob.lock().unwrap() = blob;
+    }
+
+    /// `state.cast`: `None` while no node (and so no cast stack) is open, as the app's routes
+    /// answer 404 until it exists.
+    pub fn set_cast(&self, cast: Option<Arc<dyn CastBridge>>) {
+        *self.cast.lock().unwrap() = cast;
+    }
+
+    fn cast(&self) -> Option<Arc<dyn CastBridge>> {
+        self.cast.lock().unwrap().clone()
     }
 
     fn blob(&self) -> Option<BlobAddr> {
@@ -926,7 +940,7 @@ impl<N: Node> Api<N> {
                     .unwrap_or_default()
                     .to_owned()
             };
-            if let Some(cast) = &self.options.cast {
+            if let Some(cast) = self.cast() {
                 // The app evaluates `parseUri(uri).action` only when cast is up, so a broken link
                 // fails here rather than reaching the node.
                 match parse_uri(&uri) {
@@ -1035,7 +1049,7 @@ impl<N: Node> Api<N> {
             return mirror.run(&plugin, Value::Object(payload)).await.map(Some);
         }
 
-        if let Some(cast) = &self.options.cast
+        if let Some(cast) = self.cast()
             && path.starts_with("/v1/cast/")
         {
             if *method == Method::GET && path == "/v1/cast/status" {
