@@ -16,7 +16,6 @@ use serde_json::{Value, json};
 use crate::mirror::{Ctx, MirrorError, MirrorPlugin};
 use crate::node::Node;
 use crate::node::api::SearchOptions;
-use crate::node::blobs::count_local;
 use crate::node::core::CoreNode;
 use crate::protocol::{ParsedUri, parse_uri};
 use crate::traffic::TrafficGate;
@@ -82,6 +81,8 @@ struct Inner {
     /// Blob cores no peer served lately, retried after their deadline.
     dead: Mutex<HashMap<String, Instant>>,
     pace_at: Mutex<Instant>,
+    /// The pass a poll started; it outlives the poll so other plugins keep polling.
+    polled: Mutex<Option<tokio::task::JoinHandle<()>>>,
     onchange: Option<Arc<dyn Fn() + Send + Sync>>,
 }
 
@@ -111,6 +112,7 @@ impl Replicator {
             closed: AtomicBool::new(false),
             dead: Mutex::new(HashMap::new()),
             pace_at: Mutex::new(Instant::now()),
+            polled: Mutex::new(None),
             onchange,
         }))
     }
@@ -126,6 +128,9 @@ impl Replicator {
 
     pub fn close(&self) {
         self.0.closed.store(true, Ordering::SeqCst);
+        if let Some(task) = self.0.polled.lock().unwrap().take() {
+            task.abort();
+        }
     }
 
     fn running(&self) -> bool {
@@ -490,7 +495,7 @@ impl Replicator {
             return None;
         }
         let stop = end.min(start + window);
-        let missing = (stop - start).saturating_sub(count_local(core, start, stop));
+        let missing = (stop - start).saturating_sub(core.count_local(start, stop));
         self.pace(missing * avg).await;
         self.wait_while_peers_busy().await;
         if !self.running() {
@@ -534,12 +539,12 @@ impl Replicator {
             let mut cursor = 0;
             for (s, e) in merged {
                 let gap_end = s.min(length);
-                if gap_end > cursor && count_local(&core, cursor, gap_end) > 0 {
+                if gap_end > cursor && core.count_local(cursor, gap_end) > 0 {
                     cleared |= core.clear(cursor, gap_end).await.is_ok();
                 }
                 cursor = cursor.max(e);
             }
-            if cursor < length && count_local(&core, cursor, length) > 0 {
+            if cursor < length && core.count_local(cursor, length) > 0 {
                 cleared |= core.clear(cursor, length).await.is_ok();
             }
             if cleared {
@@ -623,13 +628,17 @@ impl MirrorPlugin<CoreNode> for Replicator {
 
     fn poll<'a>(
         &'a self,
-        ctx: &'a Ctx<CoreNode>,
+        _ctx: &'a Ctx<CoreNode>,
     ) -> Pin<Box<dyn Future<Output = Result<Option<Value>, MirrorError>> + Send + 'a>> {
         Box::pin(async move {
-            if !self.enabled() || self.0.replicating.load(Ordering::SeqCst) {
-                return Ok(None);
+            if self.enabled() && !self.0.replicating.load(Ordering::SeqCst) && self.running() {
+                let replicator = self.clone();
+                let task = tokio::spawn(async move {
+                    replicator.replicate(json!({})).await;
+                });
+                *self.0.polled.lock().unwrap() = Some(task);
             }
-            self.run(json!({}), ctx).await.map(Some)
+            Ok(None)
         })
     }
 
@@ -668,16 +677,22 @@ impl Replicator {
             self.0.rerun.store(true, Ordering::SeqCst);
             return self.info_with("running", true);
         }
+        // A dropped run (a cancelled HTTP request, an aborted task) must not stay "running".
+        struct Running<'a>(&'a AtomicBool);
+        impl Drop for Running<'_> {
+            fn drop(&mut self) {
+                self.0.store(false, Ordering::SeqCst);
+            }
+        }
+        let _running = Running(&self.0.replicating);
         let once = payload["once"].as_bool().unwrap_or(false);
-        let result = loop {
+        loop {
             self.0.rerun.store(false, Ordering::SeqCst);
             let result = self.pass(&payload).await;
             if !(self.0.rerun.load(Ordering::SeqCst) && self.running() && !once) {
                 break result;
             }
-        };
-        self.0.replicating.store(false, Ordering::SeqCst);
-        result
+        }
     }
 
     fn info_with(&self, key: &str, value: bool) -> Value {
@@ -690,7 +705,7 @@ impl Replicator {
 impl Slice {
     /// Blocks of this slice the node stores (`core.count()`).
     fn held(&self, core: &Session) -> u64 {
-        count_local(core, self.offset, self.offset + self.length)
+        core.count_local(self.offset, self.offset + self.length)
     }
 }
 

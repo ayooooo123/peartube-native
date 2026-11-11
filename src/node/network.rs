@@ -170,6 +170,8 @@ pub trait WakeupSink: Send + Sync {
 pub struct WireBytes {
     rx: Arc<AtomicU64>,
     tx: Arc<AtomicU64>,
+    /// This connection's own sent bytes; `tx` may be the route's shared total.
+    sent: Arc<AtomicU64>,
     transport: Option<libudx::UdxStreamAbort>,
 }
 
@@ -199,6 +201,10 @@ impl WireBytes {
     pub fn tx(&self) -> u64 {
         self.tx.load(Ordering::Relaxed)
     }
+
+    pub fn sent(&self) -> u64 {
+        self.sent.load(Ordering::Relaxed)
+    }
 }
 
 /// The connection's frames, counted: peeroxide's DHT counters never see
@@ -215,11 +221,12 @@ impl<R: FrameRead> FrameRead for MeteredRead<R> {
     }
 }
 
-struct MeteredWrite<W>(W, Arc<AtomicU64>);
+struct MeteredWrite<W>(W, Arc<AtomicU64>, Arc<AtomicU64>);
 
 impl<W: FrameWrite> FrameWrite for MeteredWrite<W> {
     async fn write(&mut self, frame: bytes::Bytes) -> std::io::Result<()> {
         self.1.fetch_add(frame.len() as u64, Ordering::Relaxed);
+        self.2.fetch_add(frame.len() as u64, Ordering::Relaxed);
         self.0.write(frame).await
     }
 
@@ -243,7 +250,7 @@ where
     let (read, write) = stream.into_split();
     let mux = Mux::new(
         MeteredRead(read, Arc::clone(&bytes.rx)),
-        MeteredWrite(write, Arc::clone(&bytes.tx)),
+        MeteredWrite(write, Arc::clone(&bytes.tx), Arc::clone(&bytes.sent)),
         info,
     );
     bytes.attach_udx_rtt(&mux);
@@ -320,7 +327,11 @@ fn private_mux(
     let (read, write) = stream.split();
     let mux = Mux::new(
         MeteredRead(FramesRead(read), Arc::clone(&bytes.rx)),
-        MeteredWrite(FramesWrite(write), Arc::clone(&bytes.tx)),
+        MeteredWrite(
+            FramesWrite(write),
+            Arc::clone(&bytes.tx),
+            Arc::clone(&bytes.sent),
+        ),
         info,
     );
     bytes.attach_udx_rtt(&mux);
@@ -366,6 +377,7 @@ async fn start_private(
         let bytes = WireBytes {
             rx: Arc::clone(&network.private_rx),
             tx: Arc::clone(&network.private_tx),
+            sent: Arc::default(),
             transport: stream.udx_handle(),
         };
         let mux = private_mux(stream, is_initiator, handshake_hash, peer, &bytes);
@@ -463,7 +475,7 @@ impl crate::traffic::Connection for ConnectionHandle {
         Arc::as_ptr(&self.0) as usize as u64
     }
     fn raw_bytes_written(&self) -> u64 {
-        self.0.bytes.as_ref().map_or(0, WireBytes::tx)
+        self.0.bytes.as_ref().map_or(0, WireBytes::sent)
     }
     // shortcut: pausing a bulk HiveRelay connection is a no-op, so `uploadMbps` does not cap
     // HiveRelay seeding yet; add a UDX read/write pause when hiverelay-seed is ported.
@@ -698,6 +710,7 @@ impl Network {
         let bytes = WireBytes {
             rx: Arc::clone(&self.wire_rx),
             tx: Arc::clone(&self.wire_tx),
+            sent: Arc::default(),
             transport: Some(connection.peer.stream.abort_handle()),
         };
         let mux = metered_mux(connection.peer.stream, &bytes);
@@ -1109,6 +1122,7 @@ impl Network {
             let bytes = WireBytes {
                 rx: Arc::clone(&network.wire_rx),
                 tx: Arc::clone(&network.wire_tx),
+                sent: Arc::default(),
                 transport: Some(connection.stream.abort_handle()),
             };
             let mux = metered_mux(connection.stream, &bytes);

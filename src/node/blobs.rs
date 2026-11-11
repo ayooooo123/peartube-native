@@ -894,7 +894,7 @@ where
         }
         counter
             .blocks
-            .store(count_local(session, 0, session.length()), Ordering::Relaxed);
+            .store(session.count_local(0, session.length()), Ordering::Relaxed);
         let inner = self.inner.clone();
         let listener = session.clone();
         let shared = counter.clone();
@@ -921,7 +921,7 @@ where
                         blobs.grew(byte_length);
                     }
                     CoreEvent::Append { .. } => {
-                        let blocks = count_local(&listener, 0, listener.length());
+                        let blocks = listener.count_local(0, listener.length());
                         counter.blocks.store(blocks, Ordering::Relaxed);
                         lock(&counter.slices).clear();
                         Blobs::from_inner(inner.clone()).record_cached(
@@ -963,7 +963,7 @@ where
 
     /// `syncBlockCounter`: recount the whole core and drop cached spans.
     pub async fn sync_block_counter(&self, session: &Session) {
-        let blocks = count_local(session, 0, session.length());
+        let blocks = session.count_local(0, session.length());
         let key = *session.key();
         if let Some(counter) = lock(&self.inner.block_counts).get(&key).cloned() {
             lock(&counter.slices).clear();
@@ -1195,7 +1195,7 @@ where
                 lock(&counter.slices).get(&(block_offset, len)).copied()
             };
             if blocks.is_none() {
-                let counted = count_local(session, block_offset, block_offset + len);
+                let counted = session.count_local(block_offset, block_offset + len);
                 counter.remember((block_offset, len), counted);
                 blocks = Some(counted);
             }
@@ -1230,7 +1230,7 @@ where
         if blocks.is_none() {
             let temporary = self.open_key(key, true).await.ok();
             let counted = match temporary.as_ref() {
-                Some(session) => count_local(session, block_offset, block_offset + len),
+                Some(session) => session.count_local(block_offset, block_offset + len),
                 None => 0,
             };
             if let Some(session) = temporary {
@@ -1417,7 +1417,7 @@ where
             let start = head_guard.max(playhead.saturating_add(ahead.div_ceil(bs)));
             let end = tail_guard.min(session.length());
             if start < end {
-                let blocks = count_local(&session, start, end);
+                let blocks = session.count_local(start, end);
                 if blocks > 0 && session.clear(start, end).await.is_ok() {
                     cleared += blocks;
                 }
@@ -1432,7 +1432,7 @@ where
                     .unwrap_or(head_guard),
             ),
         );
-        let mut start = if hint > head_guard && count_local(&session, head_guard, hint) > 0 {
+        let mut start = if hint > head_guard && session.count_local(head_guard, hint) > 0 {
             head_guard
         } else {
             hint
@@ -1442,7 +1442,7 @@ where
             && opts.max_bytes.is_none_or(|max| cleared * bs < max)
         {
             let end = clear_to.min(start + max_blocks);
-            let blocks = count_local(&session, start, end);
+            let blocks = session.count_local(start, end);
             if blocks > 0 && session.clear(start, end).await.is_err() {
                 break;
             }
@@ -1555,7 +1555,7 @@ where
             self.sync_block_counter(core).await;
             self.local_blocks(key)
         } else {
-            count_local(core, 0, core.length())
+            core.count_local(0, core.length())
         };
         let mut cleared = 0u64;
         if blocks > 0 {
@@ -1817,7 +1817,7 @@ where
                         self.sync_block_counter(&core).await;
                     }
                     let remaining = if core.length() > 0 {
-                        count_local(&core, 0, core.length())
+                        core.count_local(0, core.length())
                     } else {
                         0
                     };
@@ -2792,18 +2792,6 @@ fn content_bytes(session: &Session) -> u64 {
     session
         .byte_length()
         .saturating_sub(session.padding() as u64 * session.length())
-}
-
-/// Local blocks in `[start, end)`; hypercore-rs has no range count.
-pub(crate) fn count_local(session: &Session, start: u64, end: u64) -> u64 {
-    let end = end.min(session.length());
-    let mut count = 0;
-    for index in start..end {
-        if session.has(index) {
-            count += 1;
-        }
-    }
-    count
 }
 
 async fn slot_has_blocks(slot: &Session, entry: &Announce) -> bool {
