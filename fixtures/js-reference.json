@@ -1841,7 +1841,7 @@
         "port": 0,
         "token": "abc",
         "name": "TV",
-        "p2p": true
+        "p2p": false
       }
     },
     {

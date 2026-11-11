@@ -124,6 +124,18 @@ pub fn attach_rpc_channel(
     conn: Arc<dyn Connection>,
     on_request: Option<Handler>,
 ) -> Result<Arc<Rpc>> {
+    // Pair before opening so an eager peer frame arriving mid-handshake never hits an unpaired
+    // Protomux slot; a late remote open is answered by the channel already open here.
+    let mut pairs = mux.pair(PROTOCOL, None);
+    let watched = mux.clone();
+    tokio::spawn(async move {
+        while let Some(request) = pairs.recv().await {
+            drop(request);
+            if watched.is_destroyed() {
+                break;
+            }
+        }
+    });
     let mut channel = mux
         .open_channel(ChannelOptions::new(PROTOCOL))
         .ok_or(Error::Closed("Control channel closed"))?;

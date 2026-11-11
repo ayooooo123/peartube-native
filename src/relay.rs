@@ -389,6 +389,8 @@ impl Relay {
             // The blob server stays on loopback; clients stream through /v1/blob on the API port.
             "privateRouting": js_truthy(&cfg("privateRouting")),
             "relayThrough": list("relayThrough"),
+            // A relay's job: announce the complete copies it caches, not only what it published.
+            "announceCache": true,
         });
         if let Value::Array(bootstrap) = list("bootstrap") {
             options["bootstrap"] = Value::Array(bootstrap);

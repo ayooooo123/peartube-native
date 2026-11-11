@@ -6,8 +6,8 @@
 //! Every view key and value written here becomes a hyperbee value, so the record JSON is built
 //! byte-for-byte as `JSON.stringify` would: `{"role":…,"alias":…}` in that order.
 
-use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, Mutex};
+use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Duration;
 
 use autobee::apply_calls::{AddWriterOptions, ApplyCalls, BoxFuture, Error, Result};
@@ -86,40 +86,27 @@ fn second_segment(key: &str) -> Option<&str> {
     key.split('/').nth(1)
 }
 
-/// The `update` mirror from channel.js: a fast-forward landing downloads the landed system and view
-/// cores whole, once each, and every update bumps the node. The store side is the caller's.
+/// The `update` mirror from channel.js: `mirrorLanding(changes)` (which lives with the channel in
+/// `channel.rs`), then the node's change notification. The store side is the caller's.
 pub struct Mirror {
-    landed: Mutex<HashSet<Key>>,
-    land: Arc<dyn Fn(Key) + Send + Sync>,
+    on_changes: Arc<dyn Fn(Changes) + Send + Sync>,
     changed: Arc<dyn Fn() + Send + Sync>,
 }
 
 impl Mirror {
-    /// `mirrorLanding(changes)` calls `land` for each newly landed core, then `changed` once.
-    pub fn new(land: Arc<dyn Fn(Key) + Send + Sync>, changed: Arc<dyn Fn() + Send + Sync>) -> Self {
+    /// `update: (view, changes) => { mirrorLanding(changes); ctx.update() }`.
+    pub fn new(
+        on_changes: Arc<dyn Fn(Changes) + Send + Sync>,
+        changed: Arc<dyn Fn() + Send + Sync>,
+    ) -> Self {
         Self {
-            landed: Mutex::new(HashSet::new()),
-            land,
+            on_changes,
             changed,
         }
     }
 
     fn update(&self, changes: &Changes) {
-        for name in ["system", "view"] {
-            let Some(change) = changes.get(name) else {
-                continue;
-            };
-            if change.incremental {
-                continue;
-            }
-            let Some(key) = change.to.and_then(|to| to.key) else {
-                continue;
-            };
-            if !self.landed.lock().unwrap().insert(key) {
-                continue;
-            }
-            (self.land)(key);
-        }
+        (self.on_changes)(*changes);
         (self.changed)();
     }
 }

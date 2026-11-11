@@ -55,12 +55,16 @@ async function runScenario (scenario) {
   const listeners = new Set()
   let httpViewing = false
   let gate = null
+  // A `peartube/bulk-busy` claim counts only from a peer that served this node blocks; this fake
+  // node names that set explicitly so the decision table can cover both answers.
+  const sourcePeers = new Set()
   const node = {
     privateRouting: false,
     peerConnections: () => [...conns.values()],
     onConnection: (cb) => { listeners.add(cb); return () => listeners.delete(cb) },
     httpViewing: () => httpViewing,
-    markBulkPeer: (hex, bulk) => marks.push([hex, bulk])
+    markBulkPeer: (hex, bulk) => marks.push([hex, bulk]),
+    isSourcePeer: (hex) => sourcePeers.has(hex)
   }
 
   gate = createTrafficGate({ node, uploadMbps: scenario.uploadMbps })
@@ -88,6 +92,7 @@ async function runScenario (scenario) {
       case 'unmarkBulk': gate.unmarkBulk(conn(step.id)); break
       case 'destroy': conn(step.id).destroyed = true; break
       case 'viewing': httpViewing = Boolean(step.value); break
+      case 'sourcePeer': sourcePeers.add(step.key); break
       case 'stop': gate.stop(); break
       default: throw new Error('unknown op ' + step.op)
     }

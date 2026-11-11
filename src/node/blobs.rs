@@ -227,8 +227,6 @@ pub trait BlobHost: Send + Sync {
     fn ephemeral_announces(&self) -> SendFuture<'_, Vec<Announce>>;
     /// Walk the whole catalog once, so a cache pass sees blocks that survived a restart.
     fn refresh_catalog(&self) -> SendFuture<'_, ()>;
-    /// `ctx.storage.storedDisc.add(hex)`.
-    fn mark_stored(&self, discovery_key: [u8; 32]);
     fn db_disk_bytes(&self) -> u64;
     /// Bytes the filesystem can spare, or `None` when unknown (unbounded).
     fn free_bytes(&self) -> Option<u64>;
@@ -261,14 +259,17 @@ pub trait ChannelView: Send + Sync {
     /// `channel.view.createReadStream()`: every view key and value, newest first.
     fn entries(&self) -> SendFuture<'_, Result<ViewEntries, Self::Error>>;
     fn append(&self, op: &Value) -> SendFuture<'_, Result<(), Self::Error>>;
-    fn add_secondary_writer(&self, writer_hex: &str);
     fn mark_has_entries(&self);
     fn sync_writer_cores(&self) -> SendFuture<'_, ()>;
 }
 
 /// Blob swarm membership and the replication window, as `ctx.net` exposes them.
 pub trait ContentSwarm: Send + Sync {
-    fn join(&self, key: [u8; 32]);
+    /// `announceContent`: this node published the video (or holds it whole as a relay).
+    fn announce(&self, key: [u8; 32]);
+    /// `wantContent`: a title about to be read; `owned`/`holds_all` decide announce or lookup.
+    fn want(&self, key: [u8; 32], owned: bool, holds_all: bool);
+    /// `leaveContent`: forget both the announcement and the lookup.
     fn leave(&self, key: [u8; 32]);
     fn down_bps(&self) -> f64;
     fn up_bps(&self) -> f64;
@@ -634,6 +635,11 @@ where
         lock(&self.inner.ledger).absent.remove(discovery_key);
     }
 
+    /// `absentDisc.add`: the catalog proved this discovery key is not stored here.
+    pub fn mark_absent(&self, discovery_key: &[u8; 32]) {
+        lock(&self.inner.ledger).absent.insert(*discovery_key);
+    }
+
     pub fn blob_disc(&self, key: &[u8; 32]) -> [u8; 32] {
         if let Some(d) = lock(&self.inner.ledger).discs.get(key) {
             return *d;
@@ -763,6 +769,14 @@ where
         } else {
             ledger.cached_by_discovery.remove(&disc);
         }
+    }
+
+    /// `holdsAll`: this node has every block of a video's core, as the cache ledger counts them.
+    pub fn holds_all(&self, key: &[u8; 32]) -> bool {
+        lock(&self.inner.ledger)
+            .cached
+            .get(key)
+            .is_some_and(|meta| meta.length > 0 && meta.blocks >= meta.length)
     }
 
     /// `resolveVideoKey`: unwraps and remembers a video's key from its announce.
@@ -908,6 +922,9 @@ where
                 };
                 match event {
                     CoreEvent::Download { byte_length, .. } => {
+                        // shortcut: the app records the serving peer here (`from.remotePublicKey`
+                        // feeds `ctx.blobs.sourcePeers`); hypercore-rs reports no peer with a
+                        // download, so there is nothing truthful to record yet.
                         counter.blocks.fetch_add(1, Ordering::Relaxed);
                         lock(&counter.slices).clear();
                         let blobs = Blobs::from_inner(inner.clone());
@@ -982,8 +999,6 @@ where
     /// `hydrateOwned`: registers every core this writer announced that is already on disk.
     pub async fn hydrate_owned(&self) -> Result<(), BlobsError> {
         let channel = &self.inner.channel;
-        let primary = channel.primary_key();
-        let primary_hex = hex(&primary);
         let writer_hex = hex(&channel.local_writer());
         let mut candidates: Vec<[u8; 32]> = Vec::new();
         let mut seen = HashSet::new();
@@ -993,12 +1008,6 @@ where
             .map_err(|e| BlobsError::Channel(e.to_string()))?
         {
             let key = String::from_utf8_lossy(&raw_key).into_owned();
-            if let Some(w) = key.strip_prefix("writer/") {
-                if w != primary_hex {
-                    channel.add_secondary_writer(w);
-                }
-                continue;
-            }
             if key.starts_with("source/") {
                 channel.mark_has_entries();
                 continue;
@@ -1058,7 +1067,6 @@ where
             return;
         }
         let disc = *core.discovery_key();
-        self.inner.host.mark_stored(disc);
         // Corestore already keeps cores with peers alive; a session here would prevent GC.
         lock(&self.inner.ledger).absent.remove(&disc);
     }
@@ -1335,6 +1343,24 @@ where
         Ok(false)
     }
 
+    /// `purgeBeacon` on video removal: a HiveRelay's beacon core is named by alias, and it is
+    /// purged by the discovery key the alias points at, never by hashing the alias name again.
+    ///
+    /// shortcut: corestore-rs has no `force` purge, so a beacon core another session still holds
+    /// stays; the Rust HiveRelay seeder does not create beacons yet, so nothing is ever open here.
+    fn purge_beacon(&self, key: &[u8; 32]) {
+        let store = self.inner.store.clone();
+        let alias = hypercore::storage::Alias {
+            namespace: *store.namespace_key(),
+            name: format!("hiverelay-beacon-{}", &hex(key)[..16]),
+        };
+        tokio::spawn(async move {
+            if let Ok(Some(discovery)) = store.storage().get_alias(&alias) {
+                let _ = store.purge(&discovery).await;
+            }
+        });
+    }
+
     /// Drops a per-video core no entry points at any more, or clears a slot's span.
     pub async fn gc_unreferenced_slot_blob(&self, entry: &Announce) -> Result<(), BlobsError> {
         let Some(key) = parse_hex32(&entry.blobs) else {
@@ -1357,6 +1383,7 @@ where
             let victim = self.open_key(key, true).await?;
             self.inner.store.purge(victim.discovery_key()).await?;
             victim.close();
+            self.purge_beacon(&key);
             self.gc_storage(false, false).await;
             return Ok(());
         }
@@ -1948,7 +1975,7 @@ where
                     ledger.unlocked.insert(key, video_key);
                 }
                 session.close();
-                self.inner.swarm.join(key);
+                self.inner.swarm.announce(key);
                 let mut announce = announce;
                 if video_key.is_some() {
                     announce.epoch = Some(epoch);
@@ -2111,9 +2138,10 @@ where
             }
         };
         self.append_op(&op).await?;
-        self.inner
-            .swarm
-            .join(parse_hex32(&op.blobs).unwrap_or_default());
+        let blobs = parse_hex32(&op.blobs).unwrap_or_default();
+        if self.is_owned_blob(&blobs) {
+            self.inner.swarm.announce(blobs);
+        }
         Ok(self.published(op))
     }
 
@@ -2208,7 +2236,7 @@ where
             self.append_op(&announce).await?;
             self.inner
                 .swarm
-                .join(parse_hex32(&announce.blobs).unwrap_or_default());
+                .announce(parse_hex32(&announce.blobs).unwrap_or_default());
             existing.insert(slice);
             backfilled += 1;
         }
@@ -2464,7 +2492,9 @@ where
         if entry.blob.block_length == 0 && entry.blob.byte_length == 0 {
             return Ok(());
         }
-        self.inner.swarm.join(key);
+        let owned = self.is_owned_blob(&key);
+        let holds_all = self.holds_all(&key);
+        self.inner.swarm.want(key, owned, holds_all);
         let core = self.blob_core(&key).await?;
         let tag = format!("{}:{}", entry.blobs, entry.blob.block_offset);
         {
@@ -2600,7 +2630,9 @@ where
         if encrypted && encryption_key.is_none() {
             return None;
         }
-        self.inner.swarm.join(key);
+        let owned = self.is_owned_blob(&key);
+        let holds_all = self.holds_all(&key);
+        self.inner.swarm.want(key, owned, holds_all);
         self.inner
             .last_http_view_at
             .store(self.inner.host.now_ms(), Ordering::Relaxed);

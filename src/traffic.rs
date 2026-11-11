@@ -17,8 +17,8 @@ pub const BUSY_PROTOCOL: &str = "peartube/bulk-busy";
 /// The app ticks every 250 ms; kept so pacing decisions match it. The timer
 /// only runs while connections are attached.
 pub const TICK_MS: u64 = 250;
-/// While viewers stream, paused bulk connections get turns one at a time.
-/// Each still gets a turn within `TURN_MS`, inside Protomux's 10 s timeout.
+/// While viewers stream, paused bulk connections get turns; each still gets a turn within
+/// `TURN_MS`, inside Protomux's 10 s timeout, so a tick resumes the number due within it.
 pub const TURN_MS: u64 = 6000;
 /// More than 1 Mbps to non-bulk peers, held this long, means someone is watching.
 pub const VIEWER_HOLD_MS: u64 = 3000;
@@ -59,6 +59,8 @@ pub trait Connection: Send + Sync {
 
 pub type ViewingHook = Arc<dyn Fn() -> bool + Send + Sync>;
 pub type BulkPeerHook = Arc<dyn Fn(&str, bool) + Send + Sync>;
+/// `node.isSourcePeer(hex)`: this peer has served this node verified blocks.
+pub type SourcePeerHook = Arc<dyn Fn(&str) -> bool + Send + Sync>;
 
 pub struct Options {
     pub upload_mbps: f64,
@@ -70,6 +72,8 @@ pub struct Options {
     pub http_viewing: Option<ViewingHook>,
     /// Told when a peer becomes bulk (or stops being bulk) so it can be bucketed.
     pub mark_bulk_peer: Option<BulkPeerHook>,
+    /// A `peartube/bulk-busy` claim counts only from a peer that serves this node blocks.
+    pub is_source_peer: Option<SourcePeerHook>,
 }
 
 impl Default for Options {
@@ -81,6 +85,7 @@ impl Default for Options {
             clock: Arc::new(SystemClock),
             http_viewing: None,
             mark_bulk_peer: None,
+            is_source_peer: None,
         }
     }
 }
@@ -117,7 +122,8 @@ struct State {
     viewing: bool,
     bulk_tokens: f64,
     bulk_paused: bool,
-    turn: Option<u64>,
+    /// The connections resumed this tick; each is paused again at the next one.
+    turns: Vec<u64>,
 }
 
 struct Shared {
@@ -128,6 +134,7 @@ struct Shared {
     clock: Arc<dyn Clock>,
     http_viewing: Option<ViewingHook>,
     mark_bulk_peer: Option<BulkPeerHook>,
+    is_source_peer: Option<SourcePeerHook>,
     state: Mutex<State>,
     closed: AtomicBool,
     ticking: AtomicBool,
@@ -155,6 +162,7 @@ impl TrafficGate {
                 clock: opts.clock,
                 http_viewing: opts.http_viewing,
                 mark_bulk_peer: opts.mark_bulk_peer,
+                is_source_peer: opts.is_source_peer,
                 state: Mutex::new(State {
                     bulk_tokens: bulk_bytes_per_tick,
                     ..State::default()
@@ -331,9 +339,40 @@ impl TrafficGate {
         }
     }
 
-    /// Any connected relay reports viewers.
+    /// `peersBusy`: any connected relay reports viewers. A busy claim counts only from a peer
+    /// that has sent this node verified blocks: any stranger can open the channel, and a peer
+    /// that serves this node nothing has no viewers its backfill could disturb.
+    ///
+    /// shortcut: a peer that does serve blocks can still hold backfill with a false claim; sign
+    /// the claim with a relay identity if that is abused.
     pub fn peers_busy(&self) -> bool {
-        self.lock().busy.values().any(|rec| rec.remote)
+        let st = self.lock();
+        self.peers_busy_locked(&st)
+    }
+
+    fn peers_busy_locked(&self, st: &State) -> bool {
+        // Without a source-peer predicate (a build whose engine cannot attribute a block to a
+        // peer) every claim counts, as it did before the split: coordinating backfill with real
+        // relays is worth more than closing an abuse path this build cannot detect.
+        let hook = self.shared.is_source_peer.as_ref();
+        for (id, rec) in &st.busy {
+            if !rec.remote {
+                continue;
+            }
+            let Some(hook) = hook else {
+                return true;
+            };
+            let Some(conn) = st.conns.iter().find(|(conn_id, _)| conn_id == id) else {
+                continue;
+            };
+            let Some(key) = conn.1.remote_public_key() else {
+                continue;
+            };
+            if hook(&hex(&key)) {
+                return true;
+            }
+        }
+        false
     }
 
     pub fn info(&self) -> Info {
@@ -343,7 +382,7 @@ impl TrafficGate {
             bulk_peers: st.bulk.len(),
             bulk_paused: st.bulk_paused,
             serving_viewers: st.viewing,
-            peers_busy: st.busy.values().any(|rec| rec.remote),
+            peers_busy: self.peers_busy_locked(&st),
         }
     }
 
@@ -367,7 +406,7 @@ impl TrafficGate {
             bulk.conn.resume();
         }
         st.bulk_paused = false;
-        st.turn = None;
+        st.turns.clear();
         st.viewing = false;
         for (_, rec) in st.busy.drain() {
             rec.sender.close();
@@ -458,12 +497,20 @@ fn tick_state(sh: &Shared, st: &mut State) -> Vec<(String, bool)> {
     };
     let pause = st.bulk_tokens < 0.0;
 
-    if let Some(turn) = st.turn.take()
-        && let Some(bulk) = st.bulk.iter().find(|b| b.id == turn)
-        && st.bulk_paused
-    {
-        // A turn lasts one tick: the backlog it released is already being served.
-        bulk.conn.pause();
+    if !st.turns.is_empty() {
+        // A turn lasts one tick: the backlog it released is already being served. A connection
+        // that became a bulk-busy peer during its turn is never resumed again by this gate, so
+        // pausing it would strand its backfill.
+        let turns = std::mem::take(&mut st.turns);
+        for id in turns {
+            if st.bulk_paused
+                && !st.busy.contains_key(&id)
+                && let Some(bulk) = st.bulk.iter().find(|b| b.id == id)
+                && !bulk.conn.destroyed()
+            {
+                bulk.conn.pause();
+            }
+        }
     }
 
     if st.viewing && pause {
@@ -482,16 +529,25 @@ fn tick_state(sh: &Shared, st: &mut State) -> Vec<(String, bool)> {
                 st.turn_schedule(*id, now - (i as i64 * TURN_MS as i64 / count));
             }
         }
-        let next = held
-            .iter()
-            .min_by_key(|(id, _)| st.last_turn_of(*id))
-            .map(|(id, conn)| (*id, conn.clone()));
-        if let Some((id, conn)) = next
-            && now - st.last_turn_of(id) >= TURN_MS as i64
-        {
+        // Every held connection must get a turn within TURN_MS, or it trips Protomux's 10 s
+        // timeout: resume ceil(held * TICK_MS / TURN_MS) due connections per tick, oldest turn
+        // first, and the whole set cycles within TURN_MS.
+        let held_count = held.len() as i64;
+        let turn_ms = TURN_MS as i64;
+        let mut due = (held_count * TICK_MS as i64 + turn_ms - 1) / turn_ms;
+        let mut ordered = held;
+        ordered.sort_by_key(|(id, _)| st.last_turn_of(*id));
+        for (id, conn) in ordered {
+            if due <= 0 {
+                break;
+            }
+            if now - st.last_turn_of(id) < TURN_MS as i64 {
+                continue;
+            }
             conn.resume();
             st.turn_schedule(id, now);
-            st.turn = Some(id);
+            st.turns.push(id);
+            due -= 1;
         }
         return hooks;
     }

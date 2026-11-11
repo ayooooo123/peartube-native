@@ -573,7 +573,12 @@ fn parse_receiver(body: &str, q: &Query) -> Result<ParsedUri, UriError> {
         ));
     }
     Ok(ParsedUri::Receiver {
-        p2p: q.get("p2p").is_some_and(|p| p == "1") || !public_key.is_empty(),
+        // `q.p2p === undefined ? Boolean(publicKey) : q.p2p === '1'`: an explicit `p2p=0` on a
+        // keyed link is a peer the sender must connect to without announcing.
+        p2p: match q.get("p2p") {
+            None => !public_key.is_empty(),
+            Some(value) => value == "1",
+        },
         public_key,
         device_id,
         host,
