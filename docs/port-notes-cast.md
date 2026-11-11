@@ -59,9 +59,10 @@ v=2, proto=peartube-cast, id, name, h, pk, lp=<LAN DHT port>, auth=open|code
 ```
 
 There is no `p2p` key and no receiver HTTP port in the record: a sender dials the node's LAN DHT
-port, or joins it through the DHT. A receiver whose LAN DHT did not start still advertises
-(`lp=0` and the service port `RECEIVER_PORT`), as the app does: it stays listable and a sender can
-still pair with it by key. `info()` carries `protocol`, `deviceId`, `name`, `publicKey`,
+port, or joins it through the DHT. Like `refreshMdns`, a receiver with no LAN host advertises
+nothing (the app's `h: '127.0.0.1'` fallback belongs to an adapter a host injects); one whose
+LAN DHT did not start but that has a host advertises `lp=0` and the service port `RECEIVER_PORT`.
+`info()` carries `protocol`, `deviceId`, `name`, `publicKey`,
 `host`, `port` (the loopback player port), `authRequired`, `routes`, `storageFreeBytes`,
 `externalStorage`, `state`, `pairCode` (`OPEN` when open) and `pairingUri`/`qrSvg`.
 
@@ -87,12 +88,13 @@ it, subscribes, and sends `load` (20 s) or `status` (10 s). The session records 
 (`lan` or `p2p`), and the receiver's state pushes update it until it closes.
 
 `startSession` retries once, on the new connection, when the connection closes during setup
-(`Receiver connection closed`). Opening the channel has the same one-retry rule when LAN discovery
-replaced the link between `connectPeer` resolving and the open: the retry happens only if the
-connection is gone, so a peer that genuinely refuses casts is reported at once. A newer cast,
-attach or stop retires an in-flight attempt; a stale attempt that finishes later never installs
-its connection. When the channel closes under the active session, the controller re-attaches to
-the TV on the link that is left.
+(`Receiver connection closed`); the retry keeps the attempt its first try started with, so a newer
+cast, attach or stop issued meanwhile wins and the retry refuses to install its connection.
+`connectReceiver` itself opens one connection and one channel on it: a connection that is already
+gone is reported, not redialed. A `stop` resets the receiver's state as `updateState(idleCastState())`
+does, spreading the idle fields over the old state (the player's `videoDecoder` and
+`droppedFrames` survive it). When the channel closes under the active session, the controller
+re-attaches to the TV on the link that is left.
 
 Pairing: by a `peartube://receiver/<64-hex key>?token=…` link (the token is trusted as given), or
 by the 64-hex key plus the code. A discovered receiver contributes its LAN address, display name

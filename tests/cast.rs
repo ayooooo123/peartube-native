@@ -21,7 +21,9 @@ use protomux::{Mux, StreamInfo};
 use serde_json::{Map, Value, json};
 
 use peartube_native::cast::adapters::NodePeer;
-use peartube_native::cast::control::{Control, ControlHandlers, DEFAULT_TIMEOUT, open_control};
+use peartube_native::cast::control::{
+    Control, ControlHandlers, DEFAULT_TIMEOUT, open_control, serve_control,
+};
 use peartube_native::cast::pairing::ReceiverIdentity;
 use peartube_native::cast::traits::{
     CastPeer, ClearCacheOptions, EvictOptions, LanAddress, LanEndpoint, OpenedMedia, PeerConn,
@@ -160,6 +162,9 @@ struct FakePeer {
     entries: Mutex<HashMap<String, Value>>,
     warmed: Mutex<Vec<String>>,
     opened: Mutex<Vec<String>>,
+    /// Connections `connectPeer` hands out first, in order; the rest come from `endpoints`.
+    dials: Mutex<std::collections::VecDeque<PeerConn>>,
+    dial_count: AtomicU64,
 }
 
 impl FakePeer {
@@ -176,6 +181,8 @@ impl FakePeer {
             entries: Mutex::new(HashMap::new()),
             warmed: Mutex::new(Vec::new()),
             opened: Mutex::new(Vec::new()),
+            dials: Mutex::new(std::collections::VecDeque::new()),
+            dial_count: AtomicU64::new(0),
         })
     }
 
@@ -199,6 +206,14 @@ impl FakePeer {
             .unwrap_or_default()
             .to_owned();
         self.entries.lock().expect("entries").insert(key, entry);
+    }
+
+    fn queue_dials(&self, conns: Vec<PeerConn>) {
+        self.dials.lock().expect("dials").extend(conns);
+    }
+
+    fn dial_count(&self) -> u64 {
+        self.dial_count.load(Ordering::SeqCst)
     }
 
     fn warmed(&self) -> Vec<String> {
@@ -264,7 +279,11 @@ impl CastPeer for FakePeer {
         _timeout: Duration,
     ) -> BoxFuture<'_, Result<PeerConn, peartube_native::cast::CastError>> {
         let key = key.to_owned();
+        self.dial_count.fetch_add(1, Ordering::SeqCst);
         Box::pin(async move {
+            if let Some(conn) = self.dials.lock().expect("dials").pop_front() {
+                return Ok(conn);
+            }
             match self.endpoints.lock().expect("endpoints").get(&key).cloned() {
                 Some(conn) => Ok(conn),
                 None => Err(peartube_native::cast::CastError::new(
@@ -964,6 +983,171 @@ async fn the_controller_pairs_casts_and_controls() {
     let _ = std::fs::remove_dir_all(&receiver_dir);
 }
 
+/// A receiver record in the controller's file: `cast_play` targets it by its public key.
+fn pair_saved(dir: &Path) {
+    let mut saved = SavedReceivers::load(dir);
+    saved.set(SavedReceiver {
+        id: RECEIVER_KEY.to_owned(),
+        name: NAME.to_owned(),
+        public_key: RECEIVER_KEY.to_owned(),
+        token: PAIR_TOKEN.to_owned(),
+    });
+    saved.save(dir).expect("saved receivers");
+}
+
+fn ok_state() -> Value {
+    json!({ "state": { "status": "playing", "playing": true, "entry": { "title": "The Matrix" } } })
+}
+
+/// `startSession`'s one setup retry keeps the attempt it started with: a stop issued while the
+/// first connection fails wins, and the retry's session is refused (`claim`).
+#[tokio::test(flavor = "multi_thread")]
+async fn a_stop_issued_during_the_setup_retry_wins() {
+    use tokio::sync::Notify;
+
+    let dir = temp_dir("retry");
+    pair_saved(&dir);
+    let sender = FakePeer::new(SENDER_KEY);
+    let losing = FakePeer::new(RECEIVER_KEY);
+    let retry = FakePeer::new(RECEIVER_KEY);
+    link(&sender, &losing, true);
+    link(&sender, &retry, true);
+    // The controller dials the failing connection first, then the one the retry lands on.
+    sender.queue_dials(sender.peer_connections());
+
+    let command_seen = Arc::new(Notify::new());
+    let release = Arc::new(Notify::new());
+    let seen = Arc::clone(&command_seen);
+    let gate = Arc::clone(&release);
+    let losing_mux = losing.peer_connections()[0].mux();
+    let _losing_server = serve_control(
+        &losing_mux,
+        ControlHandlers {
+            on_request: Some(Arc::new(move |message, control| {
+                let seen = Arc::clone(&seen);
+                let gate = Arc::clone(&gate);
+                Box::pin(async move {
+                    if message.get("type").and_then(Value::as_str) != Some("cmd") {
+                        return Ok(json!({}));
+                    }
+                    seen.notify_one();
+                    gate.notified().await;
+                    // The link goes away under the setup, which is what the one retry is for.
+                    control.mux().destroy();
+                    Err("the link went away".to_owned())
+                })
+            })),
+            ..Default::default()
+        },
+    );
+    let retry_mux = retry.peer_connections()[0].mux();
+    let _retry_server = serve_control(
+        &retry_mux,
+        ControlHandlers {
+            on_request: Some(Arc::new(|_message, _control| {
+                Box::pin(async { Ok(ok_state()) })
+            })),
+            ..Default::default()
+        },
+    );
+
+    let cast = Arc::new(controller(sender.clone(), &dir).await);
+    sender.publish(entry("k1", "imdb:tt0133093", "The Matrix"));
+    let playing = {
+        let cast = cast.clone();
+        tokio::spawn(async move {
+            cast.cast_play(&json!({ "receiverId": RECEIVER_KEY, "key": "k1" }))
+                .await
+        })
+    };
+    tokio::time::timeout(Duration::from_secs(10), command_seen.notified())
+        .await
+        .expect("the first command reaches the receiver");
+    // A stop while the first connection is still open: the retry must not install its session.
+    cast.cast_stop(true).await.expect("stop");
+    release.notify_one();
+
+    let error = playing
+        .await
+        .expect("the cast task")
+        .expect_err("the stop outranks the retry");
+    assert!(
+        error.message.contains("newer cast or stop"),
+        "{}",
+        error.message
+    );
+    assert!(cast.status()["session"].is_null());
+
+    cast.close().await;
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// `connectReceiver` opens one connection and one channel on it. A connection that is already
+/// gone is an error, not a second dial: the app's only setup retry is `startSession`'s.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_connection_that_is_gone_is_not_redialed() {
+    let dir = temp_dir("redial");
+    pair_saved(&dir);
+    let sender = FakePeer::new(SENDER_KEY);
+    let receiver = FakePeer::new(RECEIVER_KEY);
+    link(&sender, &receiver, true);
+    let conn = sender.peer_connections().remove(0);
+    conn.mux().destroy();
+    sender.queue_dials(vec![conn]);
+
+    let cast = controller(sender.clone(), &dir).await;
+    sender.publish(entry("k1", "imdb:tt0133093", "The Matrix"));
+    let error = cast
+        .cast_play(&json!({ "receiverId": RECEIVER_KEY, "key": "k1" }))
+        .await
+        .expect_err("a gone connection fails the cast");
+    assert_eq!(sender.dial_count(), 1, "{error}");
+    assert!(cast.status()["session"].is_null());
+
+    cast.close().await;
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A stop resets the state with `{ ...state, ...idle }`: what only the player reports
+/// (`videoDecoder`, `droppedFrames`) survives, as `updateState(idleCastState())` leaves it.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_stop_keeps_what_only_the_player_reports() {
+    let dir = temp_dir("idle-merge");
+    let receiver = start_receiver(&dir, FakePeer::new(RECEIVER_KEY), true).await;
+    receiver.report_state(&json!({
+        "playing": true,
+        "positionMs": 5_000,
+        "durationMs": 60_000,
+        "droppedFrames": 7,
+        "videoDecoder": { "name": "h264", "hardware": true }
+    }));
+    let stopped = receiver
+        .command(&json!({ "action": "stop" }))
+        .await
+        .expect("stop");
+    assert_eq!(stopped.get("status").and_then(Value::as_str), Some("idle"));
+    assert_eq!(
+        stopped.get("droppedFrames").and_then(Value::as_i64),
+        Some(7),
+        "the player's dropped-frame count survives a stop"
+    );
+    assert_eq!(
+        stopped
+            .get("videoDecoder")
+            .and_then(|decoder| decoder.get("name"))
+            .and_then(Value::as_str),
+        Some("h264")
+    );
+
+    // The player's own idle report takes the same path.
+    let again = receiver.report_state(&json!({ "idle": true }));
+    assert_eq!(again.get("droppedFrames").and_then(Value::as_i64), Some(7));
+    assert!(again.get("videoDecoder").is_some(), "{again:?}");
+
+    receiver.close().await;
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 // ---------------------------------------------------------------- the loopback player
 
 fn http_get(port: u16, path: &str) -> (u16, String) {
@@ -1011,11 +1195,16 @@ async fn the_loopback_port_answers_only_its_own_player() {
 }
 
 #[test]
-fn the_cast_lan_topic_is_the_hashed_service_name() {
-    assert_eq!(
-        cast_lan_topic(),
-        peeroxide::discovery_key(b"peartube-cast/v1")
-    );
+fn the_cast_lan_topic_is_the_apps_hash_of_the_service_name() {
+    // `hypercoreCrypto.hash(b4a.from('peartube-cast/v1'))` in the app's `src/cast.js`: the value
+    // itself, not the same derivation this crate calls.
+    let hex = "6b07c8030f3a71a7a492b564d31085649c6c3ffd7e08a4384a004899959204ca";
+    let app: [u8; 32] = (0..32)
+        .map(|i| u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16).expect("hex"))
+        .collect::<Vec<_>>()
+        .try_into()
+        .expect("32 bytes");
+    assert_eq!(cast_lan_topic(), app);
 }
 
 // Keep the shared state helpers honest until the live interop run covers them.

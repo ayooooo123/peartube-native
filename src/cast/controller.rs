@@ -240,26 +240,14 @@ impl Inner {
             return Err(cast_error("P2P node is not started"));
         };
         node.join_lan_topic("cast", cast_lan_topic());
-        // LAN discovery may replace the link to the receiver between `connectPeer` resolving and
-        // the channel opening: the channel then closes with its connection before the remote can
-        // answer. One retry on the link that is left, as the app does while a session is set up.
-        let mut retried = false;
-        loop {
-            let conn = node
-                .connect_peer(public_key, lan.clone(), Duration::from_secs(30))
-                .await?;
-            let transport = if conn.is_lan() { "lan" } else { "p2p" };
-            match open_control(&conn.mux(), handlers.clone(), DEFAULT_TIMEOUT).await {
-                Ok(control) => return Ok((control, transport)),
-                Err(error) => {
-                    let gone = conn.destroyed() || conn.mux().is_destroyed();
-                    if retried || !gone {
-                        return Err(error);
-                    }
-                    retried = true;
-                }
-            }
-        }
+        // `connectReceiver`: one `connectPeer`, one channel on it. The only retry in a setup is
+        // `startSession`'s, one connection later; a connection that went away here is an error.
+        let conn = node
+            .connect_peer(public_key, lan.clone(), Duration::from_secs(30))
+            .await?;
+        let transport = if conn.is_lan() { "lan" } else { "p2p" };
+        let control = open_control(&conn.mux(), handlers, DEFAULT_TIMEOUT).await?;
+        Ok((control, transport))
     }
 
     fn close_active_transport(&self) {
@@ -410,8 +398,8 @@ impl Inner {
                     && !self.closing.load(Ordering::Acquire) =>
             {
                 // A LAN link can replace a DHT link under setup: retry once on the new connection.
-                self.close_active_transport();
-                let mine = self.attempt.load(Ordering::Acquire);
+                // The retry keeps the outer `mine`: `attempt` only moves for a newer cast or a
+                // stop, and one of those must win over this session (`claim` refuses it).
                 let session = self
                     .attempt_session(receiver_id, &target, command, timeout)
                     .await?;

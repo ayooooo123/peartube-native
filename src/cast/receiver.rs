@@ -128,6 +128,32 @@ struct Inner {
     stop_serving: Mutex<Option<Box<dyn Fn() + Send + Sync>>>,
 }
 
+/// The advertisement `refreshMdns` publishes, or `None` when the receiver has no LAN host to
+/// name: the app returns without advertising then (`h` falls back to `127.0.0.1` only for an
+/// adapter a host injects). `lp` stays `0` when the node's LAN DHT did not start.
+fn advertise_info(
+    identity: &ReceiverIdentity,
+    public_key: &str,
+    host: Option<&str>,
+    lan_port: u16,
+    open_auth: bool,
+) -> Option<AdvertiseInfo> {
+    let host = host.filter(|host| !host.is_empty())?;
+    Some(AdvertiseInfo {
+        name: mdns::instance_name(&identity.name, &identity.device_id),
+        host: host.parse().ok()?,
+        port: if lan_port > 0 { lan_port } else { RECEIVER_PORT },
+        txt: mdns::advertisement_txt(
+            &identity.device_id,
+            &identity.name,
+            Some(host),
+            public_key,
+            lan_port,
+            open_auth,
+        ),
+    })
+}
+
 impl Inner {
     fn state(&self) -> CastState {
         lock(&self.state).clone()
@@ -424,12 +450,9 @@ impl Inner {
             if let Some(on_command) = self.on_command.as_ref() {
                 on_command(full);
             }
-            let idle = state::idle(now_ms());
-            {
-                let mut state = lock(&self.state);
-                *state = idle.clone();
-            }
-            self.broadcast_state();
+            // `updateState(idleCastState())`: a spread over the old state, so the keys only the
+            // player reports (`videoDecoder`, `droppedFrames`) survive the reset.
+            let idle = self.update_state(state::idle(now_ms()).into_iter().collect());
             return Ok(idle);
         }
         let state::Plan::Patch(patch) = state::plan_command(&self.state(), cmd)? else {
@@ -670,33 +693,18 @@ impl Inner {
         if let Some(previous) = previous {
             previous.stop();
         }
-        if self.closing.load(Ordering::Acquire) || (host.is_none() && !self.mdns) {
+        if self.closing.load(Ordering::Acquire) || !self.mdns {
             return;
         }
-        // The service names the node's LAN endpoint. A receiver whose LAN DHT did not start still
-        // advertises (`lp=0`), as the app does: it stays listable, and a sender pairs by key.
         let lan_port = lan.as_ref().map_or(0, |lan| lan.port);
-        let advertise_host = host
-            .clone()
-            .or_else(|| lan.as_ref().map(|lan| lan.host.clone()))
-            .filter(|host| !host.is_empty())
-            .unwrap_or_else(|| "127.0.0.1".to_owned());
-        let txt = mdns::advertisement_txt(
-            &self.identity.device_id,
-            &self.identity.name,
-            Some(&advertise_host),
+        let Some(info) = advertise_info(
+            &self.identity,
             &self.public_key,
+            host.as_deref(),
             lan_port,
             self.open_auth,
-        );
-        let host_ip: std::net::IpAddr = advertise_host
-            .parse()
-            .unwrap_or(std::net::IpAddr::V4(std::net::Ipv4Addr::new(127, 0, 0, 1)));
-        let info = AdvertiseInfo {
-            name: mdns::instance_name(&self.identity.name, &self.identity.device_id),
-            host: host_ip,
-            port: if lan_port > 0 { lan_port } else { RECEIVER_PORT },
-            txt,
+        ) else {
+            return;
         };
         if let Ok(handle) = mdns::advertise(info) {
             *lock(&self.ad) = Some(handle);
@@ -963,10 +971,10 @@ impl Receiver {
         }
         if patch.get("idle").is_some_and(truthy) {
             *lock(&self.inner.active) = None;
-            let idle = state::idle(now_ms());
-            *lock(&self.inner.state) = idle.clone();
-            self.inner.broadcast_state();
-            return idle;
+            // `updateState(idleCastState())` again: a spread, not a replacement.
+            return self
+                .inner
+                .update_state(state::idle(now_ms()).into_iter().collect());
         }
         let Some(patch) = report_patch(&self.inner.state(), patch) else {
             return self.inner.state();
@@ -1039,12 +1047,38 @@ mod tests {
     use super::*;
     use crate::cast::records::{DiscoveredReceiver, SavedReceiver, SavedReceivers};
 
+    /// `refreshMdns` returns without an advertisement when the receiver has no LAN host; the
+    /// `h` fallback to `127.0.0.1` belongs to an injected adapter, which this port's host does
+    /// not pass.
     #[test]
-    fn the_cast_lan_topic_is_the_hashed_service_name() {
-        assert_eq!(
-            cast_lan_topic(),
-            peeroxide::discovery_key(b"peartube-cast/v1")
-        );
+    fn a_receiver_without_a_lan_host_does_not_advertise() {
+        let identity = ReceiverIdentity {
+            device_id: "0123456789abcdef0123456789abcdef".into(),
+            name: "Kitchen TV".into(),
+            seed: "ab".repeat(32),
+            pair_token: "cd".repeat(16),
+            pair_code: "ABC123".into(),
+        };
+        let key = "ee".repeat(32);
+        assert!(advertise_info(&identity, &key, None, 0, false).is_none());
+        assert!(advertise_info(&identity, &key, Some(""), 0, false).is_none());
+
+        let info = advertise_info(&identity, &key, Some("192.168.1.9"), 40_000, true)
+            .expect("a LAN host is advertised");
+        let txt: std::collections::HashMap<_, _> = info.txt.into_iter().collect();
+        assert_eq!(info.host.to_string(), "192.168.1.9");
+        assert_eq!(info.port, 40_000);
+        assert_eq!(txt["h"], "192.168.1.9");
+        assert_eq!(txt["lp"], "40000");
+        assert_eq!(txt["auth"], "open");
+        assert_eq!(txt["pk"], key.as_str());
+
+        // A receiver whose LAN DHT did not start keeps `lp=0` and the receiver's own port.
+        let info = advertise_info(&identity, &key, Some("192.168.1.9"), 0, false)
+            .expect("still advertised");
+        let txt: std::collections::HashMap<_, _> = info.txt.into_iter().collect();
+        assert_eq!(info.port, RECEIVER_PORT);
+        assert_eq!(txt["lp"], "0");
     }
 
     #[test]
