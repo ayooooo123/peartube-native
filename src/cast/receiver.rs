@@ -142,7 +142,11 @@ fn advertise_info(
     Some(AdvertiseInfo {
         name: mdns::instance_name(&identity.name, &identity.device_id),
         host: host.parse().ok()?,
-        port: if lan_port > 0 { lan_port } else { RECEIVER_PORT },
+        port: if lan_port > 0 {
+            lan_port
+        } else {
+            RECEIVER_PORT
+        },
         txt: mdns::advertisement_txt(
             &identity.device_id,
             &identity.name,

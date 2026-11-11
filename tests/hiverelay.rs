@@ -422,8 +422,14 @@ mod live {
             }),
         );
         let recorded = js.call("requests", json!({ "pubkey": pubkey }));
-        let js_http = tail(recorded["http"].as_array().expect("http"), mark["http"].as_u64().unwrap_or(0) as usize);
-        let js_p2p = tail(recorded["p2p"].as_array().expect("p2p"), mark["p2p"].as_u64().unwrap_or(0) as usize);
+        let js_http = tail(
+            recorded["http"].as_array().expect("http"),
+            mark["http"].as_u64().unwrap_or(0) as usize,
+        );
+        let js_p2p = tail(
+            recorded["p2p"].as_array().expect("p2p"),
+            mark["p2p"].as_u64().unwrap_or(0) as usize,
+        );
         js.call("stop", json!({ "name": "js" }));
         js.call("close", json!({ "name": "js" }));
         assert_eq!(

@@ -469,9 +469,7 @@ impl Relay {
                     let node = cast.upgrade()?.api.node()?;
                     Some(Arc::new(NodePeer::new(node)) as Arc<dyn CastPeer>)
                 }),
-                get_lan_host: Arc::new(move || {
-                    host.upgrade()?.cast_host.lock().unwrap().clone()
-                }),
+                get_lan_host: Arc::new(move || host.upgrade()?.cast_host.lock().unwrap().clone()),
                 mdns: true,
                 on_change: Some(Arc::new(move || {
                     if let Some(inner) = change.upgrade() {

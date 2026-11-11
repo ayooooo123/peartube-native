@@ -193,8 +193,7 @@ fn seed_identity(dir: &std::path::Path) {
 }
 
 async fn receiver_on(bootstrap: &Value, dir: &std::path::Path) -> Arc<CoreNode> {
-    let key_pair =
-        peartube_native::cast::receiver::receiver_key_pair_json(dir).expect("key pair");
+    let key_pair = peartube_native::cast::receiver::receiver_key_pair_json(dir).expect("key pair");
     create_node(serde_json::json!({
         "storage": dir.join("peer").to_string_lossy(),
         "bootstrap": bootstrap,
@@ -347,7 +346,11 @@ async fn guard_mode_runs_a_guard_writes_no_storage_and_refuses_content_flags() {
     let expected = peartube_native::private_overlay::to_hex(
         &hypercore::crypto::KeyPair::from_seed(&[0x11; 32]).public_key,
     );
-    assert_eq!(ready["publicKey"], expected.as_str(), "the seeded guard key");
+    assert_eq!(
+        ready["publicKey"],
+        expected.as_str(),
+        "the seeded guard key"
+    );
     assert_eq!(ready["host"], "127.0.0.1");
     assert!(ready["port"].as_u64().unwrap_or(0) > 0, "{ready}");
     assert!(

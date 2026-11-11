@@ -781,7 +781,8 @@ async fn a_hash_checkpoint_never_runs_ahead_of_the_core() {
         "video:fixture-checkpoint",
     );
     meta.expected_size = Some(Some(size as u64));
-    let source = CheckpointSource::new(payload.clone(), h.store.clone(), "video:fixture-checkpoint");
+    let source =
+        CheckpointSource::new(payload.clone(), h.store.clone(), "video:fixture-checkpoint");
     let checks = source.checks.clone();
     let states = source.states.clone();
     let announce = h.blobs.put(meta, source).await.expect("put");
@@ -801,7 +802,11 @@ async fn a_hash_checkpoint_never_runs_ahead_of_the_core() {
         let mut resumed = Sha256State::from_bytes(&state).expect("a libsodium state");
         assert_eq!(resumed.bytes(), bytes);
         resumed.update(&payload[bytes as usize..]);
-        let digest: String = resumed.finalize().iter().map(|b| format!("{b:02x}")).collect();
+        let digest: String = resumed
+            .finalize()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
         assert_eq!(digest, announce.sha256, "state at {bytes} resumes");
     }
 }
@@ -838,7 +843,11 @@ async fn the_final_hash_checkpoint_is_released_after_the_pipeline() {
     assert_eq!(bytes, size as u64, "it covers the whole film");
     let resumed = Sha256State::from_bytes(&state).expect("a libsodium state");
     assert_eq!(resumed.bytes(), bytes);
-    let digest: String = resumed.finalize().iter().map(|b| format!("{b:02x}")).collect();
+    let digest: String = resumed
+        .finalize()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
     assert_eq!(digest, announce.sha256, "the whole film resumes from it");
 }
 
@@ -898,7 +907,8 @@ async fn a_state_ahead_of_the_core_is_discarded() {
     meta.expected_size = Some(Some(payload.len() as u64));
     meta.extra
         .insert("hashState".into(), json!(base64_encode(&state.to_bytes())));
-    meta.extra.insert("hashBytes".into(), json!((2 * BLOCK) as u64));
+    meta.extra
+        .insert("hashBytes".into(), json!((2 * BLOCK) as u64));
     let announce = h
         .blobs
         .put(meta, BufferSource::new(payload.clone()))
@@ -914,7 +924,9 @@ async fn a_state_ahead_of_the_core_is_discarded() {
 
 fn app_dir() -> Option<std::path::PathBuf> {
     let app = std::env::var_os("PEARTUBE_APP").map(std::path::PathBuf::from)?;
-    app.join("node_modules/sodium-native").is_dir().then_some(app)
+    app.join("node_modules/sodium-native")
+        .is_dir()
+        .then_some(app)
 }
 
 fn run_node_script(script: &str, args: &[&str], app: &std::path::Path) -> Value {
@@ -964,7 +976,10 @@ async fn a_dropped_named_core_can_be_ingested_again() {
         .expect("the retry opens the same name");
     assert_eq!(announce.size, payload.len() as u64);
     assert_eq!(announce.sha256, digest(&payload));
-    assert_eq!(announce.blob.block_length, 2, "both blocks came from the retry");
+    assert_eq!(
+        announce.blob.block_length, 2,
+        "both blocks came from the retry"
+    );
 }
 
 /// A private core on disk whose per-job key is missing cannot be read or stitched: `put` purges it and
@@ -1001,7 +1016,8 @@ async fn a_private_core_without_its_key_is_purged_not_resumed() {
     assert_eq!(purged.length(), 0, "the unreadable half is gone");
     purged.close();
 
-    meta.extra.insert("storeKey".into(), json!(hex(&[0x64; 32])));
+    meta.extra
+        .insert("storeKey".into(), json!(hex(&[0x64; 32])));
     let announce = h
         .blobs
         .put(meta, BufferSource::new(payload.clone()))
@@ -1060,11 +1076,7 @@ async fn a_js_sha256_state_resumes_here() {
         let mut own = Sha256State::new();
         own.update(&payload[..bytes]);
         let own_bytes = own.to_bytes();
-        assert_eq!(
-            &own_bytes[..40],
-            &state[..40],
-            "words and count at {bytes}"
-        );
+        assert_eq!(&own_bytes[..40], &state[..40], "words and count at {bytes}");
         assert_eq!(
             &own_bytes[40..40 + bytes % 64],
             &state[40..40 + bytes % 64],
@@ -1082,8 +1094,14 @@ async fn a_js_sha256_state_resumes_here() {
     .expect("write states");
     let digests = run_node_script(script, &[input.to_str().expect("path")], &app);
     let digests = digests.as_array().expect("digests");
-    assert_eq!(digests.len(), fixture["points"].as_array().expect("points").len());
-    for (digest, point) in digests.iter().zip(fixture["points"].as_array().expect("points")) {
+    assert_eq!(
+        digests.len(),
+        fixture["points"].as_array().expect("points").len()
+    );
+    for (digest, point) in digests
+        .iter()
+        .zip(fixture["points"].as_array().expect("points"))
+    {
         assert_eq!(digest["bytes"], point["bytes"]);
         assert_eq!(
             digest["digest"].as_str(),
@@ -2019,10 +2037,7 @@ async fn a_busy_claim_counts_only_from_a_peer_that_served_blocks() {
 
     let stranger_claim = claim(&far, 1).await;
     tokio::time::sleep(Duration::from_millis(200)).await;
-    assert!(
-        !gate.peers_busy(),
-        "a stranger's claim does not count"
-    );
+    assert!(!gate.peers_busy(), "a stranger's claim does not count");
     let serving_claim = claim(&ma, 1).await;
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     while !gate.peers_busy() {

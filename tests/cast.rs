@@ -264,7 +264,10 @@ impl CastPeer for FakePeer {
         self.conns.lock().expect("conns").clone()
     }
     fn on_connection(&self, callback: Listener) -> Box<dyn Fn() + Send + Sync> {
-        self.listeners.lock().expect("listeners").push(callback.clone());
+        self.listeners
+            .lock()
+            .expect("listeners")
+            .push(callback.clone());
         if self.replay_on_listen.load(Ordering::Acquire) {
             for conn in self.conns.lock().expect("conns").clone() {
                 callback(conn);
@@ -686,9 +689,13 @@ async fn a_connection_served_twice_still_takes_casts() {
     let sender_peer = FakePeer::new(SENDER_KEY);
     link(&sender_peer, &Arc::clone(&receiver_peer), true);
     let receiver = start_receiver(&dir, receiver_peer.clone(), false).await;
-    let control = open_control(&sender_conn(&sender_peer).mux(), ControlHandlers::default(), DEFAULT_TIMEOUT)
-        .await
-        .expect("channel opens");
+    let control = open_control(
+        &sender_conn(&sender_peer).mux(),
+        ControlHandlers::default(),
+        DEFAULT_TIMEOUT,
+    )
+    .await
+    .expect("channel opens");
     let paired = pair(&control, PAIR_CODE).await.expect("paired");
     assert_eq!(paired["token"], PAIR_TOKEN);
     control.close();
@@ -814,7 +821,10 @@ async fn a_load_hands_the_player_a_loopback_url_and_state_pushes_follow() {
     let command = rx.recv().await.expect("load command reaches the player");
     assert_eq!(command["action"], "load");
     assert_eq!(command["startPositionMs"], 5000);
-    assert!(command.get("token").is_none(), "the pair token never reaches the player");
+    assert!(
+        command.get("token").is_none(),
+        "the pair token never reaches the player"
+    );
     assert!(command.get("type").is_none());
     let stream_url = command["streamUrl"].as_str().expect("stream url");
     assert!(

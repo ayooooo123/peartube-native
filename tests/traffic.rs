@@ -699,7 +699,10 @@ async fn a_paused_connection_receives_no_new_blocks_until_resumed() {
     // Let the transfer get going: its bytes are what the gate measures.
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     while reader.core().count_local(0, blocks_len) < 8 {
-        assert!(tokio::time::Instant::now() < deadline, "the transfer starts");
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the transfer starts"
+        );
         tokio::time::sleep(Duration::from_millis(5)).await;
     }
     clock.advance(250);

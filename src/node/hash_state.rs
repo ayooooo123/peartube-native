@@ -253,7 +253,20 @@ mod tests {
 
     #[test]
     fn digests_match_sha2() {
-        for size in [0usize, 1, 3, 55, 56, 63, 64, 65, 127, 128, 1000, 512 * 1024 + 7] {
+        for size in [
+            0usize,
+            1,
+            3,
+            55,
+            56,
+            63,
+            64,
+            65,
+            127,
+            128,
+            1000,
+            512 * 1024 + 7,
+        ] {
             let data: Vec<u8> = (0..size).map(|i| (i * 31 + 7) as u8).collect();
             let mut state = Sha256State::new();
             // fed in awkward pieces, as a network stream arrives

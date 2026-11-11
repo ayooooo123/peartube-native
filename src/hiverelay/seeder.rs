@@ -100,10 +100,7 @@ fn parse_config(
                 Some(eq) if eq > 0 => {
                     // `apiKey || null`: `url=` names no key, and the default does not apply to it.
                     let key = text[eq + 1..].trim();
-                    (
-                        &text[..eq],
-                        (!key.is_empty()).then(|| key.to_owned()),
-                    )
+                    (&text[..eq], (!key.is_empty()).then(|| key.to_owned()))
                 }
                 _ => (text, default_api_key.map(str::to_owned)),
             };
@@ -188,9 +185,7 @@ async fn request_json(
     };
     let response = match tokio::time::timeout(timeout, CLIENT.request(request)).await {
         Err(_) => {
-            return JsonReply::failed(format!(
-                "HiveRelay HTTP timeout ({method} {url})"
-            ));
+            return JsonReply::failed(format!("HiveRelay HTTP timeout ({method} {url})"));
         }
         Ok(Err(error)) => return JsonReply::failed(error.to_string()),
         Ok(Ok(response)) => response,
@@ -205,7 +200,9 @@ async fn request_json(
             None => break,
             Some(Err(error)) => return JsonReply::failed(error.to_string()),
             Some(Ok(frame)) => {
-                let Ok(data) = frame.into_data() else { continue };
+                let Ok(data) = frame.into_data() else {
+                    continue;
+                };
                 if collected.len() + data.len() > 1024 * 1024 {
                     drop(body);
                     return JsonReply::failed("HiveRelay response exceeded 1 MiB");
@@ -418,11 +415,7 @@ impl HiverelaySeeder {
         config: HiverelayConfig,
         onchange: Option<Arc<dyn Fn() + Send + Sync>>,
     ) -> Self {
-        let parsed = parse_config(
-            &config.relays,
-            config.api_key.as_deref(),
-            config.discover,
-        );
+        let parsed = parse_config(&config.relays, config.api_key.as_deref(), config.discover);
         let publisher = publisher_key(&seed_material(&node));
         Self(Arc::new(Inner {
             node,
@@ -578,8 +571,12 @@ impl HiverelaySeeder {
                     http_pinned += 1;
                     continue;
                 }
-                let request =
-                    seed_core_request(&target.url, target.api_key.as_deref(), &core.key, core.byte_length);
+                let request = seed_core_request(
+                    &target.url,
+                    target.api_key.as_deref(),
+                    &core.key,
+                    core.byte_length,
+                );
                 let reply = self.post_seed_core(&request).await;
                 if reply.status == 200 && js_truthy(&reply.data["ok"]) {
                     self.0
@@ -751,15 +748,19 @@ impl HiverelaySeeder {
         }
         if self.0.detach.lock().expect("detach").is_none() {
             let inner = self.0.clone();
-            let register = self.0.node.on_connection(Box::new(move |conn: ConnectionHandle| {
-                HiverelaySeeder(inner.clone()).attach(conn);
-            }));
+            let register = self
+                .0
+                .node
+                .on_connection(Box::new(move |conn: ConnectionHandle| {
+                    HiverelaySeeder(inner.clone()).attach(conn);
+                }));
             *self.0.detach.lock().expect("detach") = Some(register);
             for conn in self.0.node.peer_connections() {
                 self.attach(conn);
             }
         }
-        if self.0.discover.load(Ordering::SeqCst) && !self.0.topics.lock().expect("topics").discovery
+        if self.0.discover.load(Ordering::SeqCst)
+            && !self.0.topics.lock().expect("topics").discovery
         {
             self.0.topics.lock().expect("topics").discovery = true;
             join_topic(self.0.node.net().swarm(), super::discovery_topic());
@@ -780,9 +781,7 @@ impl HiverelaySeeder {
 
     /// `syncEpochTopics`: keep the current and next epoch's topics joined.
     fn sync_epoch_topics(&self) {
-        if self.closed()
-            || !self.0.discover.load(Ordering::SeqCst)
-            || self.0.node.private_routing()
+        if self.closed() || !self.0.discover.load(Ordering::SeqCst) || self.0.node.private_routing()
         {
             return;
         }
@@ -813,7 +812,11 @@ impl HiverelaySeeder {
     }
 
     fn is_bulk_peer(&self, remote: &str) -> bool {
-        self.0.accepted.lock().expect("accepted").contains_key(remote)
+        self.0
+            .accepted
+            .lock()
+            .expect("accepted")
+            .contains_key(remote)
             || self
                 .0
                 .url_pubkeys
@@ -1177,7 +1180,11 @@ impl HiverelaySeeder {
             .get(url)
             .cloned();
         if pubkey.is_none() {
-            for suffix in ["/.well-known/hiverelay.json", "/api/capabilities", "/status"] {
+            for suffix in [
+                "/.well-known/hiverelay.json",
+                "/api/capabilities",
+                "/status",
+            ] {
                 let reply = request_json(
                     "GET",
                     &format!("{url}{suffix}"),
@@ -1282,7 +1289,8 @@ impl HiverelaySeeder {
         out.insert("beaconDriveKey".into(), json!(beacon_drive));
         out.insert("httpPinnedCores".into(), json!(pinned.len()));
         out.insert("configuredRelays".into(), Value::Array(configured));
-        if let Value::Object(fields) = serde_json::to_value(self.0.traffic.info()).unwrap_or_default()
+        if let Value::Object(fields) =
+            serde_json::to_value(self.0.traffic.info()).unwrap_or_default()
         {
             for (key, value) in fields {
                 out.insert(key, value);
@@ -1474,7 +1482,10 @@ mod tests {
         let parsed = parse_config(&["http://one:1=".to_owned()], Some("default"), false);
         assert_eq!(parsed.targets, vec![target("http://one:1", None)]);
         let parsed = parse_config(&["http://one:1".to_owned()], Some("default"), false);
-        assert_eq!(parsed.targets, vec![target("http://one:1", Some("default"))]);
+        assert_eq!(
+            parsed.targets,
+            vec![target("http://one:1", Some("default"))]
+        );
         let parsed = parse_config(&["http://one:1 =  ".to_owned()], Some("default"), false);
         assert_eq!(
             parsed.targets,
@@ -1516,9 +1527,15 @@ mod tests {
         accepted_map.insert("bb".repeat(32), accepted(0));
         accepted_map.insert("aa".repeat(32), accepted(1));
         let rows = accepted_list(&accepted_map);
-        let order: Vec<&str> = rows.iter().map(|row| row["pubkey"].as_str().unwrap()).collect();
+        let order: Vec<&str> = rows
+            .iter()
+            .map(|row| row["pubkey"].as_str().unwrap())
+            .collect();
         assert_eq!(order, vec!["bb".repeat(32), "aa".repeat(32)]);
-        assert!(rows[0].get("cores").is_none(), "cores stay private: {rows:?}");
+        assert!(
+            rows[0].get("cores").is_none(),
+            "cores stay private: {rows:?}"
+        );
 
         // A denial for another core of the same relay takes the first row's place, with the last
         // denial's fields (`new Map(values.map(...)).values()`).
@@ -1604,7 +1621,10 @@ mod tests {
             .await
             .expect("requestJson stops reading at the cap")
         });
-        assert_eq!(reply.error.as_deref(), Some("HiveRelay response exceeded 1 MiB"));
+        assert_eq!(
+            reply.error.as_deref(),
+            Some("HiveRelay response exceeded 1 MiB")
+        );
         assert_eq!(reply.status, 0);
     }
 }

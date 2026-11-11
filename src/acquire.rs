@@ -2168,7 +2168,12 @@ where
         }
     }
 
-    fn set_response(&self, total: Option<u64>, etag: Option<String>, last_modified: Option<String>) {
+    fn set_response(
+        &self,
+        total: Option<u64>,
+        etag: Option<String>,
+        last_modified: Option<String>,
+    ) {
         if let Some(inner) = self.inner.upgrade() {
             inner.with_job(&self.job_id, |job| {
                 job.total = Some(total);

@@ -329,10 +329,9 @@ impl Media {
         }
         // Register the new range before the old one is dropped, so no block request falls between.
         let registered = core.download(first, Some(end), true);
-        let range: Pin<Box<dyn Future<Output = ()> + Send>> =
-            Box::pin(async move {
-                let _ = registered.await;
-            });
+        let range: Pin<Box<dyn Future<Output = ()> + Send>> = Box::pin(async move {
+            let _ = registered.await;
+        });
         *self.window.lock().expect("cast window") = Some(DownloadWindow {
             start: first,
             end,
@@ -849,11 +848,14 @@ mod tests {
     }
 
     async fn fetch(reader: &Core, index: u64) {
-        timeout(Duration::from_secs(10), reader.get(index, Default::default()))
-            .await
-            .unwrap_or_else(|_| panic!("block {index} arrives"))
-            .expect("get")
-            .expect("a block");
+        timeout(
+            Duration::from_secs(10),
+            reader.get(index, Default::default()),
+        )
+        .await
+        .unwrap_or_else(|_| panic!("block {index} arrives"))
+        .expect("get")
+        .expect("a block");
     }
 
     #[tokio::test]
@@ -930,11 +932,29 @@ mod tests {
         let (tx, _rx) = mpsc::channel(8);
         // Blocks 32..48 are 2 s of film: enough once the reader has taken a cushion.
         let started = Instant::now();
-        assert!(hold_for(&tx, &media, 32 * BS as u64, true, Duration::from_millis(400)).await);
+        assert!(
+            hold_for(
+                &tx,
+                &media,
+                32 * BS as u64,
+                true,
+                Duration::from_millis(400)
+            )
+            .await
+        );
         assert!(started.elapsed() < Duration::from_millis(200));
         // Before its first cushion the same reader needs 10 s, so it waits out the caller's limit.
         let started = Instant::now();
-        assert!(hold_for(&tx, &media, 32 * BS as u64, false, Duration::from_millis(400)).await);
+        assert!(
+            hold_for(
+                &tx,
+                &media,
+                32 * BS as u64,
+                false,
+                Duration::from_millis(400)
+            )
+            .await
+        );
         assert!(started.elapsed() >= Duration::from_millis(400));
     }
 
@@ -980,7 +1000,10 @@ mod tests {
         let three_windows = (3.0 * high_rate * READ_AHEAD_SECONDS as f64) as u64;
         assert!(evict_plan(three_windows, high_rate, 0).is_some());
         let long_ago = Instant::now() - Duration::from_secs(EVICT_EVERY_MS / 1000 + 1);
-        assert!(trim_due(STREAM_FLOOR_BYTES, long_ago), "a tight disk waits 3 s");
+        assert!(
+            trim_due(STREAM_FLOOR_BYTES, long_ago),
+            "a tight disk waits 3 s"
+        );
         assert!(trim_due(64 * 1024 * 1024 * 1024, long_ago));
         assert!(!trim_due(64 * 1024 * 1024 * 1024, Instant::now()));
     }

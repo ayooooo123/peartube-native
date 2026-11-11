@@ -391,8 +391,7 @@ impl Landings {
 
     /// `close()`: every landing goes.
     pub async fn close(&self) {
-        let open: Vec<Arc<LandingSlot>> =
-            lock(&self.open).drain().map(|(_, slot)| slot).collect();
+        let open: Vec<Arc<LandingSlot>> = lock(&self.open).drain().map(|(_, slot)| slot).collect();
         for slot in open {
             let session = lock(&slot.state).session.take();
             if let Some(session) = session {

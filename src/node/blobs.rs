@@ -937,9 +937,7 @@ where
                 };
                 match event {
                     CoreEvent::Download {
-                        byte_length,
-                        from,
-                        ..
+                        byte_length, from, ..
                     } => {
                         let blobs = Blobs::from_inner(inner.clone());
                         if let Some(peer) = from {

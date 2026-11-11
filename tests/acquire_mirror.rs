@@ -1306,7 +1306,12 @@ async fn an_announcing_job_restores_and_finishes() {
         "sha256": "a".repeat(64), "blobs": "AAAA",
         "blob": {"blockOffset": 0, "blockLength": 1, "byteOffset": 0, "byteLength": 4}
     });
-    let mut job = seeded_job("cccccccc-0000-4000-8000-000000000003", "announcing", "video:announced", false);
+    let mut job = seeded_job(
+        "cccccccc-0000-4000-8000-000000000003",
+        "announcing",
+        "video:announced",
+        false,
+    );
     job["source"] = Value::Null;
     job["announce"] = announce.clone();
     let harness = Harness::with_jobs(AcquirePath::Acquirer, Some(json!([job])));
@@ -1316,7 +1321,10 @@ async fn an_announcing_job_restores_and_finishes() {
 
     let trace = harness.trace();
     let calls = trace["calls"].as_array().expect("calls");
-    let appends: Vec<&Value> = calls.iter().filter(|call| call["method"] == "append").collect();
+    let appends: Vec<&Value> = calls
+        .iter()
+        .filter(|call| call["method"] == "append")
+        .collect();
     assert_eq!(appends.len(), 1, "the saved announce is appended once");
     assert_eq!(appends[0]["op"], announce);
     assert!(
@@ -1335,7 +1343,12 @@ async fn an_announcing_job_restores_and_finishes() {
 /// not leave the acquirer waiting on it.
 #[tokio::test]
 async fn a_job_with_no_source_and_no_announce_fails_instead_of_hanging() {
-    let mut job = seeded_job("cccccccc-0000-4000-8000-000000000004", "running", "video:orphan", false);
+    let mut job = seeded_job(
+        "cccccccc-0000-4000-8000-000000000004",
+        "running",
+        "video:orphan",
+        false,
+    );
     job["source"] = Value::Null;
     let harness = Harness::with_jobs(AcquirePath::Acquirer, Some(json!([job])));
     tokio::time::timeout(Duration::from_secs(10), settle(&harness))
@@ -1407,7 +1420,9 @@ async fn a_legacy_private_job_gets_a_key_before_its_first_attempt() {
             true
         )])),
     );
-    harness.http.plan(vec![reply(200, &[("content-length", "3")], &["abc"])]);
+    harness
+        .http
+        .plan(vec![reply(200, &[("content-length", "3")], &["abc"])]);
     settle(&harness).await;
 
     let trace = harness.trace();
@@ -1443,7 +1458,9 @@ async fn cancelling_a_queued_job_drops_its_core() {
     let harness = Harness::new(AcquirePath::Acquirer);
     let gate = Arc::new(tokio::sync::Semaphore::new(0));
     *harness.node.put_gate.lock().unwrap() = Some(gate.clone());
-    harness.http.plan(vec![reply(200, &[("content-length", "3")], &["abc"])]);
+    harness
+        .http
+        .plan(vec![reply(200, &[("content-length", "3")], &["abc"])]);
     add_film(
         &harness,
         "imdb:tt6666666",
