@@ -183,6 +183,8 @@ pub trait Node: Send + Sync + 'static {
     fn stream_url(&self, entry: &Announce) -> impl Future<Output = String> + Send;
     fn http_viewing(&self) -> impl Future<Output = bool> + Send;
     fn mark_bulk_peer(&self, key: &str, on: bool) -> impl Future<Output = ()> + Send;
+    /// `node.isSourcePeer(hex)`: this peer has sent this node verified blocks.
+    fn is_source_peer(&self, key: &str) -> impl Future<Output = bool> + Send;
     fn set_lan(
         &self,
         lan: Option<Self::Lan>,
@@ -196,6 +198,7 @@ pub mod catalog;
 pub mod channel;
 pub mod core;
 pub mod factory;
+pub mod hash_state;
 pub mod network;
 pub mod sources;
 pub mod storage;

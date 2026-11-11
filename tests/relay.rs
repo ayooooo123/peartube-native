@@ -303,3 +303,76 @@ async fn cast_routes(bootstrap: &Value, dir: &std::path::Path) {
     let _ = node.close().await;
     let _ = std::fs::remove_dir_all(dir);
 }
+
+// ------------------------------------------------------------------------------- guard mode
+
+/// `PEARTUBE_PRIVATE_RELAY`: a standalone guard forwarder with no Corestore and no storage folder,
+/// refusing every channel or content flag, as `bin/relay.js` does.
+#[tokio::test(flavor = "multi_thread")]
+async fn guard_mode_runs_a_guard_writes_no_storage_and_refuses_content_flags() {
+    use peartube_native::private_overlay::dht::DhtOptions;
+    use peartube_native::private_overlay::peeroxide::open_dht;
+
+    let dir = tempfile::tempdir().unwrap();
+    let storage = dir.path().join("data");
+    // A bootstrap node of its own, so the guard's announce completes without the public DHT.
+    let bootstrap = open_dht(DhtOptions {
+        host: Some("127.0.0.1".into()),
+        port: 0,
+        bootstrap: Vec::new(),
+    })
+    .await
+    .expect("bootstrap dht");
+    let bootstrap = bootstrap
+        .address()
+        .map(|addr| format!("127.0.0.1:{}", addr.port()))
+        .unwrap_or_else(|| "127.0.0.1:9".into());
+
+    let mut env: HashMap<String, String> = HashMap::new();
+    env.insert("PEARTUBE_PRIVATE_RELAY".into(), "1".into());
+    env.insert("PEARTUBE_PRIVATE_RELAY_PORT".into(), "0".into());
+    env.insert("PEARTUBE_STORAGE".into(), storage.display().to_string());
+    env.insert("PEARTUBE_BOOTSTRAP".into(), bootstrap);
+    env.insert("PEARTUBE_GUARD_SEED".into(), "11".repeat(32));
+    assert!(peartube_native::relay::guard_mode(&env));
+
+    let guard = tokio::time::timeout(
+        Duration::from_secs(120),
+        peartube_native::relay::start_standalone_guard(&env),
+    )
+    .await
+    .expect("the guard starts")
+    .expect("the guard is up");
+    let ready = guard.ready();
+    let expected = peartube_native::private_overlay::to_hex(
+        &hypercore::crypto::KeyPair::from_seed(&[0x11; 32]).public_key,
+    );
+    assert_eq!(ready["publicKey"], expected.as_str(), "the seeded guard key");
+    assert_eq!(ready["host"], "127.0.0.1");
+    assert!(ready["port"].as_u64().unwrap_or(0) > 0, "{ready}");
+    assert!(
+        !storage.exists(),
+        "guard mode creates no storage folder: {ready}"
+    );
+    assert!(guard.heartbeat().get("registeredRoutes").is_some());
+    guard.close().await;
+    assert!(!storage.exists(), "still nothing written on close");
+
+    env.insert("PEARTUBE_CHANNEL".into(), "ab".repeat(32));
+    let error = peartube_native::relay::start_standalone_guard(&env)
+        .await
+        .err()
+        .expect("a channel flag is refused");
+    assert!(
+        error.contains("cannot be combined with channel or content flags"),
+        "{error}"
+    );
+    assert!(!storage.exists());
+
+    // An empty variable is unset, as JS truthiness has it.
+    let mut empty: HashMap<String, String> = HashMap::new();
+    empty.insert("PEARTUBE_PRIVATE_RELAY".into(), String::new());
+    assert!(!peartube_native::relay::guard_mode(&empty));
+    empty.insert("PEARTUBE_PRIVATE_RELAY_PORT".into(), "0".into());
+    assert!(peartube_native::relay::guard_mode(&empty));
+}

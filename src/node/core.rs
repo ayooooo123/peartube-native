@@ -4,11 +4,13 @@
 //! pool and the catalog, in the reference's opening order, and closes them in the reference's
 //! closing order.
 
+use std::collections::HashSet;
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, Weak};
+use std::time::Duration;
 
 use autobee::Autobee;
 use corestore::Corestore;
@@ -417,12 +419,6 @@ impl BlobHost for Host {
         })
     }
 
-    fn mark_stored(&self, discovery_key: [u8; 32]) {
-        if let Some(shared) = self.0.upgrade() {
-            shared.storage.mark_stored(discovery_key);
-        }
-    }
-
     fn db_disk_bytes(&self) -> u64 {
         self.0.upgrade().map_or(0, |shared| {
             dir_bytes(&shared.storage.path().join("corestore"))
@@ -558,6 +554,14 @@ impl CoreNode {
                     node.blobs().mark_bulk_peer(key, on);
                 }
             })),
+            is_source_peer: {
+                let source = Arc::downgrade(self);
+                Some(Arc::new(move |key: &str| {
+                    source
+                        .upgrade()
+                        .is_some_and(|node| node.blobs().is_source_peer(key))
+                }))
+            },
             ..Options::default()
         });
         let net = self.net();
@@ -701,7 +705,12 @@ impl CoreNode {
                 _ => (8, 24),
             }
         };
-        net.set_inflight_range(next);
+        // Status is polled every few seconds; pushing an unchanged window would walk every open
+        // core for nothing.
+        let current = net.inflight_range();
+        if current != Some(next) {
+            net.set_inflight_range(next);
+        }
         let ratio = if rx > 0 {
             ((tx as f64 / rx as f64) * 100.0).round() / 100.0
         } else if tx > 0 {
@@ -745,66 +754,105 @@ impl CoreNode {
     }
 
     /// `seedableCores({ includeCached })`.
-    pub fn seedable_cores_value(&self, include_cached: bool) -> Vec<SeedableCore> {
+    pub async fn seedable_cores_value(&self, include_cached: bool) -> Vec<SeedableCore> {
         let channel = self.channel();
         let blobs = self.blobs();
         let mut out = Vec::new();
-        let (length, byte_length) = channel.bootstrap_len();
-        if length > 0 && (channel.has_entries() || !blobs.owned_blobs().is_empty()) {
+        let mut seen: HashSet<String> = HashSet::new();
+        let mut push = |out: &mut Vec<SeedableCore>,
+                        key: String,
+                        kind: &str,
+                        length: u64,
+                        byte_length: u64| {
+            if length == 0 || !seen.insert(key.clone()) {
+                return;
+            }
             out.push(SeedableCore {
-                key: channel.primary_key(),
-                kind: "channel".to_owned(),
+                key,
+                kind: kind.to_owned(),
                 length,
                 byte_length,
             });
+        };
+        let (length, byte_length) = channel.bootstrap_len();
+        if length > 0 && (channel.has_entries() || !blobs.owned_blobs().is_empty()) {
+            push(
+                &mut out,
+                channel.primary_key(),
+                "channel",
+                length,
+                byte_length,
+            );
+            // Once past Autobee's 16-flush fast-forward threshold, pin the stamped system and view
+            // cores so cold followers land offline. Their byte length is estimated from their block
+            // count (a view core's length * 4096), never read back out of the store's internals.
+            if channel.flushes() >= 16 {
+                let owner = channel.local_key() == channel.primary_key()
+                    || lock(&self.inner.vault)
+                        .as_ref()
+                        .is_some_and(|vault| vault.channel_key == channel.primary_key());
+                if owner {
+                    for (key, length) in channel.view_cores().await {
+                        push(
+                            &mut out,
+                            hex(&key),
+                            "channel",
+                            length,
+                            length.saturating_mul(4096),
+                        );
+                    }
+                }
+                for key in channel.landings().open_keys() {
+                    if let Some(length) = channel.landings().open_len(&key) {
+                        push(
+                            &mut out,
+                            hex(&key),
+                            "channel",
+                            length,
+                            length.saturating_mul(4096),
+                        );
+                    }
+                }
+            }
         }
         for hex in channel.writer_core_keys() {
-            if let Some((length, byte_length)) = channel.writer_core_len(&hex)
-                && length > 0
-            {
-                out.push(SeedableCore {
-                    key: hex,
-                    kind: "channel".to_owned(),
-                    length,
-                    byte_length,
-                });
+            if let Some((length, byte_length)) = channel.writer_core_len(&hex) {
+                push(&mut out, hex, "channel", length, byte_length);
             }
         }
         for (key, meta) in blobs.owned_blobs() {
-            if meta.length > 0 {
-                out.push(SeedableCore {
-                    key: hex(&key),
-                    kind: "blobs".to_owned(),
-                    length: meta.length,
-                    byte_length: meta.byte_length,
-                });
-            }
+            push(&mut out, hex(&key), "blobs", meta.length, meta.byte_length);
         }
         for key in blobs.slot_keys() {
             if let Some(meta) = blobs.owned(&key)
-                && meta.length > 0
                 && blobs.local_blocks(&key) > 0
             {
-                out.push(SeedableCore {
-                    key: hex(&key),
-                    kind: "blobs".to_owned(),
-                    length: meta.length,
-                    byte_length: meta.byte_length,
-                });
+                push(&mut out, hex(&key), "blobs", meta.length, meta.byte_length);
             }
         }
         if include_cached {
+            for key in blobs.open_core_keys() {
+                let Some(core) = blobs.open_core(&key) else {
+                    continue;
+                };
+                let length = core.length();
+                if blobs.is_owned_blob(&key) || length == 0 || core.byte_length() == 0 {
+                    continue;
+                }
+                if blobs.local_blocks(&key) >= length {
+                    push(&mut out, hex(&key), "blobs", length, core.byte_length());
+                }
+            }
             for (key, meta) in blobs.cached_blobs() {
-                if blobs.is_owned_blob(&key) || meta.length == 0 || meta.byte_length == 0 {
+                if blobs.open_core(&key).is_some()
+                    || blobs.is_owned_blob(&key)
+                    || meta.length == 0
+                    || meta.byte_length == 0
+                {
                     continue;
                 }
                 if meta.blocks >= meta.length {
-                    out.push(SeedableCore {
-                        key: hex(&key),
-                        kind: "blobs".to_owned(),
-                        length: meta.length,
-                        byte_length: meta.byte_length,
-                    });
+                    push(&mut out, hex(&key), "blobs", meta.length, meta.byte_length);
                 }
             }
         }
@@ -1028,29 +1076,34 @@ pub async fn create_node(options: Value) -> Result<Arc<CoreNode>, NodeError> {
     let primary_hex = hex_encode(&primary);
 
     let channel_slot: Arc<Mutex<Option<Arc<Channel>>>> = Arc::new(Mutex::new(None));
-    let writer_slot = channel_slot.clone();
-    let mirror_slot = weak.clone();
-    let apply = Apply::new(primary_hex.clone())
-        .on_writer_change(Arc::new(move |writer, added| {
-            if let Some(channel) = lock(&writer_slot).clone() {
-                channel.writer_changed(writer, added);
-            }
-        }))
-        .with_mirror(Mirror::new(
-            Arc::new(move |core_key| {
-                if let Some(shared) = mirror_slot.upgrade() {
-                    land_core(&shared, core_key);
-                }
-            }),
+    let apply_mirror = weak.clone();
+    let apply_writer_sync = weak.clone();
+    let apply = Apply::new(primary_hex.clone()).with_mirror(Mirror::new(
+        Arc::new(move |changes| {
+            // `update: (view, changes) => { mirrorLanding(changes); syncWriterCores(); ctx.update() }`
+            let Some(shared) = apply_mirror.upgrade() else {
+                return;
+            };
+            let Some(channel) = shared.channel.get().cloned() else {
+                return;
+            };
+            let hex = channel.primary_key();
+            channel.landings().mirror_landing(changes, &hex);
+            if let Some(shared) = apply_writer_sync.upgrade()
+                && let Some(channel) = shared.channel.get().cloned()
             {
-                let mirror = weak.clone();
-                Arc::new(move || {
-                    if let Some(shared) = mirror.upgrade() {
-                        shared.changed();
-                    }
-                })
-            },
-        ));
+                tokio::spawn(async move { channel.sync_writer_cores().await });
+            }
+        }) as Arc<dyn Fn(autobee::updates::Changes) + Send + Sync>,
+        {
+            let mirror = weak.clone();
+            Arc::new(move || {
+                if let Some(shared) = mirror.upgrade() {
+                    shared.changed();
+                }
+            })
+        },
+    ));
     let hooks = Hooks {
         update: {
             let weak = weak.clone();
@@ -1145,6 +1198,9 @@ pub async fn create_node(options: Value) -> Result<Arc<CoreNode>, NodeError> {
         .and_then(Value::as_str)
         .and_then(parse_hex32);
     let private_routing = options.get("privateRouting").is_some_and(js_truthy);
+    // A relay's job (bin/relay.js): announce the complete copies this node caches, not only
+    // what it published.
+    let announce_cache = options.get("announceCache").is_some_and(js_truthy);
     let allowed_peers = options
         .get("allowedPeers")
         .and_then(Value::as_array)
@@ -1163,6 +1219,7 @@ pub async fn create_node(options: Value) -> Result<Arc<CoreNode>, NodeError> {
         relay_through,
         allowed_peers,
         private_routing,
+        announce_cache,
         closing.clone(),
         key_pair,
     )
@@ -1202,6 +1259,16 @@ pub async fn create_node(options: Value) -> Result<Arc<CoreNode>, NodeError> {
     let bound = blobs.start_server(addr, window).await?;
     let _ = shared.blob_server.set(bound);
     let _ = shared.blobs.set(blobs.clone());
+    // `createNetwork` reads `ctx.blobs`: what this node published is announced at open, and a
+    // relay's complete cached copies rotate past the cap.
+    net.install_content_index(Arc::new(BlobIndex(weak.clone())));
+    net.prime_content();
+    // `network.js` `trackConn`: a peer's source record is forgotten with its last connection.
+    // The node lives as long as the network, so its unsubscribe is never needed.
+    let _unsubscribe = {
+        let forget = blobs.clone();
+        net.on_disconnect(Arc::new(move |peer| forget.forget_source_peer(&peer)))
+    };
 
     let sources = Sources::new(
         Arc::new(SourcesDeps {
@@ -1254,13 +1321,19 @@ pub async fn create_node(options: Value) -> Result<Arc<CoreNode>, NodeError> {
             make_apply: {
                 let weak = weak.clone();
                 Arc::new(move |channel_hex: &str| {
-                    let mirror = weak.clone();
+                    let shared_for_changes = weak.clone();
+                    let changes_hex = channel_hex.to_owned();
                     Apply::new(channel_hex.to_owned()).with_mirror(Mirror::new(
-                        Arc::new(move |core_key| {
-                            if let Some(shared) = mirror.upgrade() {
-                                land_core(&shared, core_key);
+                        Arc::new(move |changes| {
+                            // `update: (view, changes) => { ctx.channel.mirrorLanding(changes, k); ... }`
+                            let Some(shared) = shared_for_changes.upgrade() else {
+                                return;
+                            };
+                            if let Some(channel) = shared.channel.get().cloned() {
+                                channel.landings().mirror_landing(changes, &changes_hex);
                             }
-                        }),
+                        })
+                            as Arc<dyn Fn(autobee::updates::Changes) + Send + Sync>,
                         {
                             let update = weak.clone();
                             Arc::new(move || {
@@ -1270,6 +1343,44 @@ pub async fn create_node(options: Value) -> Result<Arc<CoreNode>, NodeError> {
                             })
                         },
                     ))
+                })
+            },
+            flush: {
+                let weak = weak.clone();
+                Arc::new(move || {
+                    let weak = weak.clone();
+                    let future: Pin<Box<dyn Future<Output = ()> + Send>> = Box::pin(async move {
+                        // Private routing never announces or looks up on the public DHT, so there
+                        // is nothing to flush there (`sources.js`: `!ctx.net.dht`).
+                        let Some(net) = weak.upgrade().and_then(|shared| shared.net.get().cloned())
+                        else {
+                            return;
+                        };
+                        if net.private_routing() {
+                            return;
+                        }
+                        net.flush(Duration::from_secs(3)).await;
+                    });
+                    future
+                })
+            },
+            release_landing: {
+                let weak = weak.clone();
+                Arc::new(move |channel_hex: String, purge: bool| {
+                    let weak = weak.clone();
+                    let future: Pin<Box<dyn Future<Output = ()> + Send>> = Box::pin(async move {
+                        let Some(channel) = weak
+                            .upgrade()
+                            .and_then(|shared| shared.channel.get().cloned())
+                        else {
+                            return;
+                        };
+                        channel
+                            .landings()
+                            .release_landing(&channel_hex, purge)
+                            .await;
+                    });
+                    future
                 })
             },
             cache_file: PathBuf::from(&storage_path).join("catalog-cache.json"),
@@ -1312,6 +1423,16 @@ pub async fn create_node(options: Value) -> Result<Arc<CoreNode>, NodeError> {
 
     // A primary channel is hydrated once the update that follows the swarm's join has run.
     if channel.use_primary() {
+        // `network.js`: the tracker's own `findingPeers` is held until the swarm's flush answers
+        // (3 s cap, public routing only), so its first update does not conclude with no peer.
+        if !net.private_routing() {
+            let done = channel.finding_peers();
+            let net = net.clone();
+            tokio::spawn(async move {
+                net.flush(Duration::from_secs(3)).await;
+                done.release();
+            });
+        }
         let bee = channel.auto().clone();
         let blobs = blobs.clone();
         let closing = closing.clone();
@@ -1334,19 +1455,62 @@ pub async fn create_node(options: Value) -> Result<Arc<CoreNode>, NodeError> {
     Ok(node)
 }
 
-fn land_core(shared: &Arc<Shared>, key: [u8; 32]) {
-    let hex = hex_encode(&key);
-    if shared.catalog.get().is_none() && shared.net.get().is_none() {
-        return;
-    }
-    let store = shared.storage.store().clone();
-    tokio::spawn(async move {
-        let Ok(session) = store.get(corestore::GetOptions::key(key)).await else {
-            return;
+/// `createNetwork` reading `ctx.blobs.ownedBlobs`/`cachedBlobs`: the announcement rotation's list.
+struct BlobIndex(Weak<Shared>);
+
+impl super::network::ContentIndex for BlobIndex {
+    fn owned(&self) -> Vec<[u8; 32]> {
+        let Some(blobs) = self
+            .0
+            .upgrade()
+            .and_then(|shared| shared.blobs.get().cloned())
+        else {
+            return Vec::new();
         };
-        let _ = session.download(0, None, false).await;
-        drop(hex);
-    });
+        let mut out = Vec::new();
+        for key in blobs.slot_keys() {
+            if blobs.local_blocks(&key) > 0 {
+                out.push(key);
+            }
+        }
+        for (key, meta) in blobs.owned_blobs() {
+            if meta.length > 0 {
+                out.push(key);
+            }
+        }
+        out
+    }
+
+    fn complete_cached(&self) -> Vec<[u8; 32]> {
+        let Some(blobs) = self
+            .0
+            .upgrade()
+            .and_then(|shared| shared.blobs.get().cloned())
+        else {
+            return Vec::new();
+        };
+        let mut out: Vec<[u8; 32]> = blobs
+            .open_core_keys()
+            .into_iter()
+            .filter(|key| {
+                !blobs.is_owned_blob(key)
+                    && blobs.open_core(key).is_some_and(|core| {
+                        core.length() > 0 && blobs.local_blocks(key) >= core.length()
+                    })
+            })
+            .collect();
+        for (key, meta) in blobs.cached_blobs() {
+            if !out.contains(&key)
+                && blobs.open_core(&key).is_none()
+                && !blobs.is_owned_blob(&key)
+                && meta.length > 0
+                && meta.blocks >= meta.length
+            {
+                out.push(key);
+            }
+        }
+        out
+    }
 }
 
 /// The blob operations the catalog asks for.
@@ -1396,17 +1560,44 @@ impl CatalogBlobs for BlobOps {
         self.blobs().map_or(*blob, |blobs| blobs.blob_disc(blob))
     }
 
-    fn stored(&self, discovery: &[u8; 32]) -> bool {
-        self.0
-            .upgrade()
-            .is_some_and(|shared| shared.storage.has_stored(discovery))
+    fn infos(&self, discovery: &[[u8; 32]]) -> Option<Vec<Option<(u64, u64)>>> {
+        let shared = self.0.upgrade()?;
+        let infos = shared.storage.store().storage_infos(discovery).ok()?;
+        Some(
+            infos
+                .into_iter()
+                .map(|info| info.map(|head| (head.length, head.byte_length)))
+                .collect(),
+        )
     }
 
-    fn open_core_session(&self, blob: &[u8; 32]) -> Option<Arc<Session>> {
-        self.blobs().and_then(|blobs| blobs.open_core(blob))
+    fn mark_absent(&self, discovery: &[u8; 32]) {
+        if let Some(blobs) = self.blobs() {
+            blobs.mark_absent(discovery);
+        }
     }
 
-    fn probe<'a>(&'a self, blob: &'a [u8; 32]) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
+    fn record_probe(&self, blob: [u8; 32], length: u64, byte_length: u64, blocks: u64) {
+        if let Some(blobs) = self.blobs() {
+            blobs.record_cached(blob, length, byte_length, blocks);
+        }
+    }
+
+    fn blob_core<'a>(
+        &'a self,
+        blob: &'a [u8; 32],
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
+        Box::pin(async move {
+            if let Some(blobs) = self.blobs() {
+                let _ = blobs.blob_core(blob).await;
+            }
+        })
+    }
+
+    fn probe_blocks<'a>(
+        &'a self,
+        blob: &'a [u8; 32],
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
         Box::pin(async move {
             let Some(shared) = self.0.upgrade() else {
                 return;
@@ -1414,16 +1605,7 @@ impl CatalogBlobs for BlobOps {
             let Some(blobs) = shared.blobs.get() else {
                 return;
             };
-            let discovery = blobs.blob_disc(blob);
-            let exists = shared
-                .storage
-                .store()
-                .storage_infos(&[discovery])
-                .ok()
-                .and_then(|infos| infos.into_iter().next().flatten())
-                .is_some();
-            if !exists {
-                shared.storage.forget_stored(&discovery);
+            if blobs.cached_blobs().contains_key(blob) {
                 return;
             }
             let mut opts = corestore::GetOptions::key(*blob);
@@ -1468,13 +1650,32 @@ impl CatalogBlobs for BlobOps {
             .is_some_and(|blobs| blobs.resolve_video_key(entry).is_some())
     }
 
-    fn join_content(&self, blob: &[u8; 32], evict: bool) {
-        let _ = evict;
+    fn offer_copy(&self, blob: &[u8; 32]) {
         if let Some(shared) = self.0.upgrade()
             && let Some(net) = shared.net.get()
+            && let Some(blobs) = shared.blobs.get()
         {
-            net.join_content(*blob);
+            net.offer_copy(*blob, blobs.holds_all(blob));
         }
+    }
+
+    fn private_routing(&self) -> bool {
+        self.0
+            .upgrade()
+            .and_then(|shared| shared.net.get().cloned())
+            .is_some_and(|net| net.private_routing())
+    }
+
+    fn leave_source_swarm(&self, source: &[u8; 32]) {
+        let Some(net) = self
+            .0
+            .upgrade()
+            .and_then(|shared| shared.net.get().cloned())
+        else {
+            return;
+        };
+        let id = format!("source-swarm:{}", hex(source));
+        tokio::spawn(async move { net.leave_overlay_topic(&id).await });
     }
 
     fn join_source_swarm(&self, source: &[u8; 32]) {
@@ -1591,7 +1792,7 @@ impl Node for CoreNode {
     }
 
     async fn seedable_cores(&self, include_cached: bool) -> Result<Vec<SeedableCore>, Self::Error> {
-        Ok(self.seedable_cores_value(include_cached))
+        Ok(self.seedable_cores_value(include_cached).await)
     }
 
     async fn has_lan(&self) -> bool {
@@ -1885,6 +2086,10 @@ impl Node for CoreNode {
 
     async fn mark_bulk_peer(&self, key: &str, on: bool) {
         self.blobs().mark_bulk_peer(key, on);
+    }
+
+    async fn is_source_peer(&self, key: &str) -> bool {
+        self.blobs().is_source_peer(key)
     }
 
     async fn set_lan(&self, lan: Option<Self::Lan>) -> Result<(), Self::Error> {

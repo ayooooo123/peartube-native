@@ -398,10 +398,10 @@ fn late_browsers_receive_every_advertisement_shard() {
     use sha2::{Digest, Sha256};
 
     let app = std::env::var("PEARTUBE_APP").unwrap_or_else(|_| {
-        format!(
-            "{}/projects/peartube",
-            std::env::var("HOME").unwrap_or_default()
-        )
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../peartube")
+            .to_string_lossy()
+            .into_owned()
     });
     assert!(
         PathBuf::from(&app).join("src/lan.js").is_file(),

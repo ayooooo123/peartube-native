@@ -12,11 +12,12 @@
 //!
 //! Deliberate differences from the JS:
 //!
-//! - No checkpointed SHA-256 state (`sodium-native`'s exportable state). A resumed ingest re-reads
-//!   the committed prefix off the core and folds it into the hasher before the tail arrives, which
-//!   is the same byte order without the state blob, so `PutSource::on_hash_state` is never called.
-//! - `PutSource` errors carry no `restart` flag: a named core is always kept across a failed ingest
-//!   and an unnamed one is always purged. A caller that must drop a named core calls `drop_store`.
+//! - Checkpointed SHA-256 is byte-compatible with the app's: the state is libsodium's
+//!   `crypto_hash_sha256_state` as [`hash_state`] exports it, offered to the job every 64 MiB once the
+//!   core has committed past it, so a job begun by either side can be finished by the other.
+//! - `PutSource` errors carry no `restart` flag; the acquirer sees its own `AcquireError::Restart` (a
+//!   rotated encode) and drops the named core, so the next attempt starts from zero. Any other failed
+//!   ingest keeps the named core and purges an unnamed one.
 //! - hypercore-rs has no `upload` event, so serving-driven read-ahead (`warmAhead`, `bulkPeers`
 //!   filtering) has no trigger; `mark_bulk_peer`/`set_player_active` keep their shape.
 //! - The HTTP resolver receives only a key, so `info.head`/`info.range`-driven warmth and
@@ -37,7 +38,6 @@ use hyperbee::{Bee, RangeOptions};
 use hyperblobs::{BlobId, Blobs as Hyperblobs};
 use hypercore::{CoreError, CoreEvent, GetOptions, RequestBag, Session};
 use serde_json::{Map, Value, json};
-use sha2::{Digest, Sha256};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 
 use crate::mnemonic::{unwrap_video_key, wrap_video_key};
@@ -46,6 +46,7 @@ use crate::node::api::{
     Announce, Blob, CacheCeiling, CacheCleared, Published, PutMeta, RechunkResult, StorageGc,
     SyncResult,
 };
+use crate::node::hash_state::{SHA256_STATE_BYTES, Sha256State, base64_decode};
 use crate::protocol::{
     BLOB_BLOCK_SIZE, BlobSize, clean_text, decode_op, format_watch_uri, is_hex64,
     is_system_view_key, is_uniform_512,
@@ -63,6 +64,9 @@ const MAX_OPEN_CORES_WORKLET: usize = 6;
 /// Sessions kept for owned cores answering HTTP, and how long each lingers.
 const MAX_HTTP_OWNED: usize = 4;
 const HTTP_OWNED_TTL: Duration = Duration::from_secs(30);
+/// Bytes between SHA-256 checkpoints offered to an ingest's job: the gap re-read on resume is at most this
+/// plus one write batch.
+const HASH_CHECKPOINT: u64 = 64 * 1024 * 1024;
 /// Recency of a film still considered "being watched" when the ceiling runs without a keep hint.
 const RECENT_WINDOW_MS: u64 = 10 * 60 * 1000;
 /// Debounce for persisting the LRU ledger (one file write per burst, not per block).
@@ -118,6 +122,10 @@ pub enum BlobsError {
         hashed: u64,
         size: u64,
     },
+    /// A private core on disk whose per-video key the job does not carry: it cannot be read or stitched.
+    PrivateKeyMissing {
+        id: String,
+    },
     InvalidAnnounce,
     Sha256Mismatch {
         id: String,
@@ -153,6 +161,9 @@ impl std::fmt::Display for BlobsError {
             Self::MissingLocalBlock => write!(f, "Missing local block during rechunk"),
             Self::HashOutOfStep { id, hashed, size } => {
                 write!(f, "Hash is out of step for {id}: {hashed} of {size} bytes")
+            }
+            Self::PrivateKeyMissing { id } => {
+                write!(f, "Cannot resume private {id} without its key")
             }
             Self::InvalidAnnounce => write!(f, "Invalid channel announce payload"),
             Self::Sha256Mismatch { id, expected, got } => {
@@ -227,8 +238,6 @@ pub trait BlobHost: Send + Sync {
     fn ephemeral_announces(&self) -> SendFuture<'_, Vec<Announce>>;
     /// Walk the whole catalog once, so a cache pass sees blocks that survived a restart.
     fn refresh_catalog(&self) -> SendFuture<'_, ()>;
-    /// `ctx.storage.storedDisc.add(hex)`.
-    fn mark_stored(&self, discovery_key: [u8; 32]);
     fn db_disk_bytes(&self) -> u64;
     /// Bytes the filesystem can spare, or `None` when unknown (unbounded).
     fn free_bytes(&self) -> Option<u64>;
@@ -261,14 +270,17 @@ pub trait ChannelView: Send + Sync {
     /// `channel.view.createReadStream()`: every view key and value, newest first.
     fn entries(&self) -> SendFuture<'_, Result<ViewEntries, Self::Error>>;
     fn append(&self, op: &Value) -> SendFuture<'_, Result<(), Self::Error>>;
-    fn add_secondary_writer(&self, writer_hex: &str);
     fn mark_has_entries(&self);
     fn sync_writer_cores(&self) -> SendFuture<'_, ()>;
 }
 
 /// Blob swarm membership and the replication window, as `ctx.net` exposes them.
 pub trait ContentSwarm: Send + Sync {
-    fn join(&self, key: [u8; 32]);
+    /// `announceContent`: this node published the video (or holds it whole as a relay).
+    fn announce(&self, key: [u8; 32]);
+    /// `wantContent`: a title about to be read; `owned`/`holds_all` decide announce or lookup.
+    fn want(&self, key: [u8; 32], owned: bool, holds_all: bool);
+    /// `leaveContent`: forget both the announcement and the lookup.
     fn leave(&self, key: [u8; 32]);
     fn down_bps(&self) -> f64;
     fn up_bps(&self) -> f64;
@@ -452,6 +464,9 @@ struct Inner<C: ChannelView, S: ContentSwarm, H: BlobHost> {
     ceilings: Mutex<Ceilings>,
     warm: Mutex<Warm>,
     block_counts: Mutex<HashMap<[u8; 32], Arc<BlockCounter>>>,
+    /// `sourcePeers`: peers that have sent this node verified blocks, forgotten with the peer's
+    /// last connection. Only their `peartube/bulk-busy` claims count.
+    source_peers: Mutex<HashSet<[u8; 32]>>,
     http_owned: Mutex<HashMap<[u8; 32], HttpOwned>>,
     http_generation: AtomicU64,
     evicted_to: Mutex<HashMap<[u8; 32], u64>>,
@@ -530,6 +545,7 @@ where
             ceilings: Mutex::new(Ceilings::default()),
             warm: Mutex::new(Warm::default()),
             block_counts: Mutex::new(HashMap::new()),
+            source_peers: Mutex::new(HashSet::new()),
             http_owned: Mutex::new(HashMap::new()),
             http_generation: AtomicU64::new(0),
             evicted_to: Mutex::new(HashMap::new()),
@@ -632,6 +648,11 @@ where
 
     pub fn clear_absent_disc(&self, discovery_key: &[u8; 32]) {
         lock(&self.inner.ledger).absent.remove(discovery_key);
+    }
+
+    /// `absentDisc.add`: the catalog proved this discovery key is not stored here.
+    pub fn mark_absent(&self, discovery_key: &[u8; 32]) {
+        lock(&self.inner.ledger).absent.insert(*discovery_key);
     }
 
     pub fn blob_disc(&self, key: &[u8; 32]) -> [u8; 32] {
@@ -763,6 +784,14 @@ where
         } else {
             ledger.cached_by_discovery.remove(&disc);
         }
+    }
+
+    /// `holdsAll`: this node has every block of a video's core, as the cache ledger counts them.
+    pub fn holds_all(&self, key: &[u8; 32]) -> bool {
+        lock(&self.inner.ledger)
+            .cached
+            .get(key)
+            .is_some_and(|meta| meta.length > 0 && meta.blocks >= meta.length)
     }
 
     /// `resolveVideoKey`: unwraps and remembers a video's key from its announce.
@@ -907,10 +936,19 @@ where
                     Err(_) => break,
                 };
                 match event {
-                    CoreEvent::Download { byte_length, .. } => {
+                    CoreEvent::Download {
+                        byte_length,
+                        from,
+                        ..
+                    } => {
+                        let blobs = Blobs::from_inner(inner.clone());
+                        if let Some(peer) = from {
+                            // `sourcePeers.add(from.remotePublicKey)`: this peer served blocks,
+                            // so a `peartube/bulk-busy` claim from it counts.
+                            blobs.remember_source_peer(peer);
+                        }
                         counter.blocks.fetch_add(1, Ordering::Relaxed);
                         lock(&counter.slices).clear();
-                        let blobs = Blobs::from_inner(inner.clone());
                         blobs.record_cached(
                             key,
                             listener.length(),
@@ -982,8 +1020,6 @@ where
     /// `hydrateOwned`: registers every core this writer announced that is already on disk.
     pub async fn hydrate_owned(&self) -> Result<(), BlobsError> {
         let channel = &self.inner.channel;
-        let primary = channel.primary_key();
-        let primary_hex = hex(&primary);
         let writer_hex = hex(&channel.local_writer());
         let mut candidates: Vec<[u8; 32]> = Vec::new();
         let mut seen = HashSet::new();
@@ -993,12 +1029,6 @@ where
             .map_err(|e| BlobsError::Channel(e.to_string()))?
         {
             let key = String::from_utf8_lossy(&raw_key).into_owned();
-            if let Some(w) = key.strip_prefix("writer/") {
-                if w != primary_hex {
-                    channel.add_secondary_writer(w);
-                }
-                continue;
-            }
             if key.starts_with("source/") {
                 channel.mark_has_entries();
                 continue;
@@ -1058,7 +1088,6 @@ where
             return;
         }
         let disc = *core.discovery_key();
-        self.inner.host.mark_stored(disc);
         // Corestore already keeps cores with peers alive; a session here would prevent GC.
         lock(&self.inner.ledger).absent.remove(&disc);
     }
@@ -1335,6 +1364,22 @@ where
         Ok(false)
     }
 
+    /// `purgeBeacon` on video removal: a HiveRelay's beacon core is named by alias, and it is
+    /// purged by the discovery key the alias points at, never by hashing the alias name again.
+    /// The purge is forced, as in `blobs.js`: a beacon core another session still holds goes too.
+    fn purge_beacon(&self, key: &[u8; 32]) {
+        let store = self.inner.store.clone();
+        let alias = hypercore::storage::Alias {
+            namespace: *store.namespace_key(),
+            name: format!("hiverelay-beacon-{}", &hex(key)[..16]),
+        };
+        tokio::spawn(async move {
+            if let Ok(Some(discovery)) = store.storage().get_alias(&alias) {
+                let _ = store.purge_with(&discovery, true).await;
+            }
+        });
+    }
+
     /// Drops a per-video core no entry points at any more, or clears a slot's span.
     pub async fn gc_unreferenced_slot_blob(&self, entry: &Announce) -> Result<(), BlobsError> {
         let Some(key) = parse_hex32(&entry.blobs) else {
@@ -1357,6 +1402,7 @@ where
             let victim = self.open_key(key, true).await?;
             self.inner.store.purge(victim.discovery_key()).await?;
             victim.close();
+            self.purge_beacon(&key);
             self.gc_storage(false, false).await;
             return Ok(());
         }
@@ -1922,6 +1968,25 @@ where
         let session = self.inner.store.get(opts).await?;
         let started = {
             let start = if named { content_bytes(&session) } else { 0 };
+            if private
+                && start > 0
+                && meta
+                    .extra
+                    .get("storeKey")
+                    .and_then(Value::as_str)
+                    .and_then(parse_hex32)
+                    .is_none()
+            {
+                // The half on disk was written under the key the job carried; another key reads it as garbage,
+                // and two halves under two keys never stitch. Only purging the core is safe here.
+                let error = BlobsError::PrivateKeyMissing {
+                    id: meta.id.clone(),
+                };
+                let discovery = *session.discovery_key();
+                session.close();
+                self.inner.store.purge_with(&discovery, true).await?;
+                return Err(error);
+            }
             self.ingest(&session, &meta, &mut source, start).await
         };
         match started {
@@ -1948,7 +2013,7 @@ where
                     ledger.unlocked.insert(key, video_key);
                 }
                 session.close();
-                self.inner.swarm.join(key);
+                self.inner.swarm.announce(key);
                 let mut announce = announce;
                 if video_key.is_some() {
                     announce.epoch = Some(epoch);
@@ -1976,18 +2041,50 @@ where
         start: u64,
     ) -> Result<Announce, BlobsError> {
         let id = meta.id.clone();
-        // Appends are durable, so a named core holds every block an earlier attempt wrote; the
-        // hasher re-reads that prefix instead of trusting an external SHA-256 state blob.
+        // Appends are durable, so a named core holds every block an earlier attempt wrote. A job's checkpointed
+        // state covers the prefix it already folded; only the gap between that and the committed core is re-read.
         let resumed = start > 0;
         let mut expected = meta.expected_size.flatten();
         let complete = resumed && expected == Some(start);
         let core = session.core().clone();
         let blobs = Hyperblobs::new(core.clone(), BLOB_BLOCK_SIZE as usize);
-        let mut sha = Sha256::new();
+        let mut sha = Sha256State::new();
         let mut size = start;
         let mut hashed = 0u64;
-        if start > 0 {
-            hashed = hash_committed(session, &mut sha, start).await?;
+        let mut checkpoint = 0u64;
+        if let Some((state, bytes)) = saved_hash_state(meta)
+            && bytes > 0
+            && bytes <= start
+        {
+            sha = state;
+            hashed = bytes;
+            checkpoint = bytes;
+        }
+        let block = BLOB_BLOCK_SIZE as usize;
+        // Fold committed bytes the checkpoint does not cover BEFORE the tail streams in, so the state stays in
+        // byte order. The fold checkpoints as it goes, so a restart during it continues from there.
+        while hashed < start {
+            let data = session
+                .get(
+                    hashed / BLOB_BLOCK_SIZE,
+                    GetOptions {
+                        wait: false,
+                        ..Default::default()
+                    },
+                )
+                .await?
+                .ok_or(BlobsError::MissingLocalBlock)?;
+            let skip = (hashed % BLOB_BLOCK_SIZE) as usize;
+            if skip >= data.len() {
+                return Err(BlobsError::MissingLocalBlock);
+            }
+            let take = ((data.len() - skip) as u64).min(start - hashed) as usize;
+            sha.update(&data[skip..skip + take]);
+            hashed += take as u64;
+            if hashed - checkpoint >= HASH_CHECKPOINT {
+                checkpoint = hashed;
+                source.on_hash_state(&sha.to_bytes(), hashed);
+            }
         }
         if !complete {
             let mut source_meta = meta.clone();
@@ -2000,7 +2097,10 @@ where
             let mut writer = blobs.writer().await;
             let mut pending = BytesMut::with_capacity(BLOB_BLOCK_SIZE as usize + 8192);
             let mut chunk = vec![0u8; 256 * 1024];
-            let block = BLOB_BLOCK_SIZE as usize;
+            // hyperblobs acks a batch it has not committed yet, so a snapshot taken at the hasher can sit ahead of
+            // the core's byte length; a resume discards such a state and re-reads the film. Hold the newest
+            // snapshot until the core has committed past it, so every state handed out covers bytes the core holds.
+            let mut held: Option<([u8; SHA256_STATE_BYTES], u64)> = None;
             loop {
                 let read = reader.read(&mut chunk).await.map_err(BlobsError::Io)?;
                 if read == 0 {
@@ -2013,6 +2113,17 @@ where
                 pending.extend_from_slice(&chunk[..read]);
                 while pending.len() >= block {
                     writer.write(pending.split_to(block).freeze()).await?;
+                }
+                if hashed - checkpoint >= HASH_CHECKPOINT {
+                    checkpoint = hashed;
+                    held = Some((sha.to_bytes(), hashed));
+                }
+                if held
+                    .as_ref()
+                    .is_some_and(|(_, bytes)| content_bytes(session) >= *bytes)
+                {
+                    let (state, bytes) = held.take().expect("checked above");
+                    source.on_hash_state(&state, bytes);
                 }
             }
             if !pending.is_empty() {
@@ -2054,7 +2165,9 @@ where
         })
     }
 
-    /// `dropStore`: purges a half-written core when its job is cancelled or dead-lettered.
+    /// `dropStore`: drops a half-written core when its job is cancelled, dead-lettered or restarted, so its
+    /// blocks leave the disk. The name's alias goes with the core, so the next attempt opens the same name as
+    /// an empty core, and any session still on it is closed first (`store.purge(key, { force: true })`).
     pub async fn drop_store(&self, name: &str) -> Result<(), BlobsError> {
         if name.is_empty() {
             return Ok(());
@@ -2062,8 +2175,9 @@ where
         let mut opts = StoreGetOptions::name(name.as_bytes());
         opts.inactive = true;
         let session = self.inner.store.get(opts).await?;
-        self.inner.store.purge(session.discovery_key()).await?;
+        let discovery = *session.discovery_key();
         session.close();
+        self.inner.store.purge_with(&discovery, true).await?;
         Ok(())
     }
 
@@ -2111,9 +2225,10 @@ where
             }
         };
         self.append_op(&op).await?;
-        self.inner
-            .swarm
-            .join(parse_hex32(&op.blobs).unwrap_or_default());
+        let blobs = parse_hex32(&op.blobs).unwrap_or_default();
+        if self.is_owned_blob(&blobs) {
+            self.inner.swarm.announce(blobs);
+        }
         Ok(self.published(op))
     }
 
@@ -2208,7 +2323,7 @@ where
             self.append_op(&announce).await?;
             self.inner
                 .swarm
-                .join(parse_hex32(&announce.blobs).unwrap_or_default());
+                .announce(parse_hex32(&announce.blobs).unwrap_or_default());
             existing.insert(slice);
             backfilled += 1;
         }
@@ -2464,7 +2579,9 @@ where
         if entry.blob.block_length == 0 && entry.blob.byte_length == 0 {
             return Ok(());
         }
-        self.inner.swarm.join(key);
+        let owned = self.is_owned_blob(&key);
+        let holds_all = self.holds_all(&key);
+        self.inner.swarm.want(key, owned, holds_all);
         let core = self.blob_core(&key).await?;
         let tag = format!("{}:{}", entry.blobs, entry.blob.block_offset);
         {
@@ -2535,6 +2652,22 @@ where
         }
     }
 
+    /// `isSourcePeer(hex)`: this peer has served this node verified blocks. The claim gate in
+    /// `traffic.rs` honours a `peartube/bulk-busy` message only from such a peer.
+    pub fn is_source_peer(&self, key_hex: &str) -> bool {
+        parse_hex32(key_hex).is_some_and(|key| lock(&self.inner.source_peers).contains(&key))
+    }
+
+    fn remember_source_peer(&self, key: [u8; 32]) {
+        lock(&self.inner.source_peers).insert(key);
+    }
+
+    /// A peer's last connection closed: forget what it served (JS `network.js` drops the key
+    /// when no live connection keeps it).
+    pub fn forget_source_peer(&self, key: &[u8; 32]) {
+        lock(&self.inner.source_peers).remove(key);
+    }
+
     pub fn mark_bulk_peer(&self, key: &str, on: bool) {
         let mut peers = lock(&self.inner.bulk_peers);
         if on {
@@ -2600,7 +2733,9 @@ where
         if encrypted && encryption_key.is_none() {
             return None;
         }
-        self.inner.swarm.join(key);
+        let owned = self.is_owned_blob(&key);
+        let holds_all = self.holds_all(&key);
+        self.inner.swarm.want(key, owned, holds_all);
         self.inner
             .last_http_view_at
             .store(self.inner.host.now_ms(), Ordering::Relaxed);
@@ -2805,30 +2940,15 @@ async fn slot_has_blocks(slot: &Session, entry: &Announce) -> bool {
     (entry.blob.block_offset..end).all(|index| slot.has(index))
 }
 
-async fn hash_committed(
-    session: &Session,
-    sha: &mut Sha256,
-    bytes: u64,
-) -> Result<u64, BlobsError> {
-    let mut remaining = bytes;
-    let mut index = 0u64;
-    while remaining > 0 {
-        let block = session
-            .get(
-                index,
-                GetOptions {
-                    wait: false,
-                    ..Default::default()
-                },
-            )
-            .await?
-            .ok_or(BlobsError::MissingLocalBlock)?;
-        let take = remaining.min(block.len() as u64) as usize;
-        sha.update(&block[..take]);
-        remaining -= take as u64;
-        index += 1;
-    }
-    Ok(bytes)
+/// The running SHA-256 state a job carries (`hashState` base64, `hashBytes`), or nothing when the job has none.
+fn saved_hash_state(meta: &PutMeta) -> Option<(Sha256State, u64)> {
+    let text = meta.extra.get("hashState")?.as_str()?;
+    let bytes = meta
+        .extra
+        .get("hashBytes")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    Some((Sha256State::from_bytes(&base64_decode(text)?)?, bytes))
 }
 
 fn announce_from_op(op: &Value) -> Option<Announce> {

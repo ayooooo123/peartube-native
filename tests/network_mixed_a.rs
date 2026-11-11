@@ -6,7 +6,7 @@
 //! redirect auth, Range resume, 403 dead-letter (11) — each in both directions. The assertions are
 //! the ones the JS suite makes: exact bytes, job state, request counts and the durable job file.
 //!
-//! Needs `node`, the app checkout (`PEARTUBE_APP`, else `~/projects/peartube`) and its installed
+//! Needs `node`, the app checkout (`PEARTUBE_APP`, else the sibling `../peartube`) and its installed
 //! modules; `#[ignore]` so `cargo test` stays offline.
 
 use std::io::{BufRead, BufReader, Read, Write};
@@ -29,8 +29,10 @@ const HARNESS: &str = "tests/js/network-mixed.mjs";
 
 fn app_dir() -> String {
     std::env::var("PEARTUBE_APP").unwrap_or_else(|_| {
-        let home = std::env::var("HOME").unwrap_or_default();
-        format!("{home}/projects/peartube")
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../peartube")
+            .to_string_lossy()
+            .into_owned()
     })
 }
 

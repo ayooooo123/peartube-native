@@ -1,10 +1,17 @@
+// Generates hiverelay-reference.json from the app's own src/hiverelay.js encodings and signature, using the
+// app's installed libraries so every byte is what the app itself writes.
 import { writeFileSync } from 'node:fs'
-import c from 'compact-encoding'
-import sodium from 'sodium-native'
-import { encodeHyperdriveHeader, encodeHyperdriveSingleRootNode, seedRequestEncoding, seedAcceptEncoding, unseedRequestEncoding, seedDenyEncoding, signSeedRequest, computeBoundBytes, blake2bTopic, SEED_HANDSHAKE } from './hiverelay.js'
 import net from 'node:net'
-import SecretStream from '@hyperswarm/secret-stream'
-import Protomux from 'protomux'
+import { appRequire, load, outFile } from './app.mjs'
+
+const c = appRequire('compact-encoding')
+const sodium = appRequire('sodium-native')
+const SecretStream = appRequire('@hyperswarm/secret-stream')
+const Protomux = appRequire('protomux')
+const {
+  encodeHyperdriveHeader, encodeHyperdriveSingleRootNode, seedRequestEncoding, seedAcceptEncoding,
+  unseedRequestEncoding, seedDenyEncoding, signSeedRequest, computeBoundBytes, blake2bTopic, SEED_HANDSHAKE
+} = await load('src/hiverelay.js')
 
 const hex = b => Buffer.from(b).toString('hex')
 const unhex = s => Buffer.from(s, 'hex')
@@ -58,5 +65,6 @@ if (process.argv[2] === '--peer') {
     deny: hex(c.encode(seedDenyEncoding, { appKey, relayPubkey, reasonCode: 'capacity', detail: 'full', relaySignature }))
   }
   const reference = { handshake: hex(SEED_HANDSHAKE), topic: hex(blake2bTopic('hiverelay-discovery-v1')), epoch: hex(blake2bTopic('hiverelay-discovery-v1-epoch-123')), publisher: hex(kp.publicKey), signature: hex(request.publisherSignature), request: hex(c.encode(seedRequestEncoding, request)), emptyRequest: hex(c.encode(seedRequestEncoding, empty)), messages, beacons, http, bounds: [0, 1, 16777216, 134217728, 2000000000].map(n => [n, computeBoundBytes(n)]) }
-  writeFileSync(new URL('../hiverelay-reference.json', import.meta.url), JSON.stringify(reference, null, 2) + '\n')
+  writeFileSync(outFile('hiverelay-reference.json'), JSON.stringify(reference, null, 2) + '\n')
+  console.log(`wrote ${outFile('hiverelay-reference.json')}`)
 }

@@ -382,6 +382,9 @@ mod fake {
             false
         }
         async fn mark_bulk_peer(&self, _key: &str, _on: bool) {}
+        async fn is_source_peer(&self, _key: &str) -> bool {
+            false
+        }
         async fn set_lan(&self, lan: Option<()>) -> Result<(), FakeError> {
             *self.lan.lock().unwrap_or_else(|e| e.into_inner()) = lan.is_some();
             Ok(())

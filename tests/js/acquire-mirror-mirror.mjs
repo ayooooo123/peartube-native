@@ -1,24 +1,26 @@
-// Runs the app's own `src/mirror.js` (copied to fixtures/gen/mirror.js) against a scripted node, an in-memory
-// filesystem and scripted feed replies. Prints one JSON trace that tests/acquire_mirror.rs must reproduce.
+// Runs the app's own `src/mirror.js` (PEARTUBE_APP, else the sibling `../peartube`) against a scripted node,
+// an in-memory filesystem and scripted feed replies. Prints one JSON trace that tests/acquire_mirror.rs must
+// reproduce.
 //
 // `p2p-replicate` and `hiverelay-seed` are registered by the app but not ported, so `list()` is filtered to the
 // five shared plugins before comparing.
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import { dirname, join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import * as fsStub from './acquire-mirror-stubs.mjs'
 import * as cryptoStub from './acquire-mirror-crypto.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
+const APP = process.env.PEARTUBE_APP || resolve(here, '../../../peartube')
 const gen = join(here, '.gen')
 mkdirSync(gen, { recursive: true })
 
 const stub = name => `"${pathToFileURL(join(here, name)).href}"`
-const gen_url = name => `"${pathToFileURL(join(here, '..', '..', 'fixtures', 'gen', name)).href}"`
+const app_url = path => `"${pathToFileURL(join(APP, path)).href}"`
 
 function load (file, rewrites, out) {
-  let text = readFileSync(join(here, '..', '..', 'fixtures', 'gen', file), 'utf8')
+  let text = readFileSync(join(APP, file), 'utf8')
   for (const [from, to] of Object.entries(rewrites)) {
     if (!text.includes(`from ${from}`)) throw new Error(`unstubbed import ${from}`)
     text = text.split(`from ${from}`).join(`from ${to}`)
@@ -40,14 +42,14 @@ const acquireRewrites = {
 
 const mirrorRewrites = {
   "'node:fs'": stub('acquire-mirror-stubs.mjs'),
-  "'./protocol.js'": gen_url('protocol.js'),
+  "'./protocol.js'": app_url('src/protocol.js'),
   "'./hiverelay.js'": stub('acquire-mirror-plants.mjs'),
   "'./traffic.js'": stub('acquire-mirror-plants.mjs'),
   "'./art.js'": stub('acquire-mirror-plants.mjs')
 }
 
-const { createAcquirer } = await load('acquire.js', acquireRewrites, 'mirror-acquire.mjs')
-const { createMirrorHost } = await load('mirror.js', mirrorRewrites, 'mirror-host.mjs')
+const { createAcquirer } = await load('src/acquire.js', acquireRewrites, 'mirror-acquire.mjs')
+const { createMirrorHost } = await load('src/mirror.js', mirrorRewrites, 'mirror-host.mjs')
 
 const NOW = 1_700_000_000_000
 Date.now = () => NOW

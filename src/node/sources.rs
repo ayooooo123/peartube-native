@@ -7,6 +7,7 @@
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::path::PathBuf;
+use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
@@ -14,12 +15,43 @@ use std::time::Duration;
 use autobee::Autobee;
 use autobee::types::Key;
 use corestore::Corestore;
+use hyperbee::Bee;
 use protomux_wakeup::WakeupSwarm;
 use serde_json::{Value, json};
 
 use super::api::{DiscoveredSource, Removed, Source, SourceSpec};
 use super::apply::Apply;
 use crate::protocol::{clean_text, decode_op, is_system_view_key};
+
+/// A view read waits at most this long for one block (`createReadStream({ timeout: 5_000 })`).
+/// A landed view can be sparse where nobody serves its blocks: the read ends instead of letting
+/// `search()` or the rotation tick wait for a block that never arrives.
+const SCAN_TIMEOUT: Duration = Duration::from_secs(5);
+/// `swarm.flush()` races this cap, so a refresh never waits on a topic nobody answers.
+const FLUSH_TIMEOUT: Duration = Duration::from_secs(3);
+/// A forced refresh flushes the swarm at most this often, across every channel.
+const FLUSH_INTERVAL_MS: u64 = 10_000;
+
+/// `swarm.flush()` raced with a 3 s cap; `None` for private routing, whose channels are not
+/// announced or looked up on the public DHT.
+pub type FlushHook = Arc<dyn Fn() -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>;
+
+/// `ctx.channel.releaseLanding(channelHex, { purge })`.
+pub type ReleaseLandingHook =
+    Arc<dyn Fn(String, bool) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>;
+
+/// A channel-view scan's failure: a block that never arrived keeps the previous snapshot.
+#[derive(Debug)]
+pub enum ScanError {
+    Timeout,
+    Bee(hyperbee::Error),
+}
+
+impl From<hyperbee::Error> for ScanError {
+    fn from(error: hyperbee::Error) -> Self {
+        Self::Bee(error)
+    }
+}
 
 fn lock<T>(cell: &Mutex<T>) -> MutexGuard<'_, T> {
     cell.lock().unwrap_or_else(|error| error.into_inner())
@@ -158,6 +190,8 @@ pub struct SourcesDeps {
     pub leave_topic: Arc<dyn Fn(String) + Send + Sync>,
     pub attach_wakeup: Arc<dyn Fn(Arc<Autobee>) + Send + Sync>,
     pub make_apply: Arc<dyn Fn(&str) -> Apply + Send + Sync>,
+    pub flush: FlushHook,
+    pub release_landing: ReleaseLandingHook,
     pub cache_file: PathBuf,
     pub worklet: bool,
     pub cap: usize,
@@ -172,6 +206,8 @@ pub struct Sources {
     clock: AtomicU64,
     dirty: AtomicBool,
     saved: Mutex<HashMap<String, Value>>,
+    /// `lastSwarmFlushAt`: a forced refresh pays one flush at most every 10 s, node-wide.
+    last_flush_at: AtomicU64,
 }
 
 impl Sources {
@@ -194,6 +230,7 @@ impl Sources {
             clock: AtomicU64::new(0),
             dirty: AtomicBool::new(false),
             saved: Mutex::new(saved.into_iter().collect()),
+            last_flush_at: AtomicU64::new(0),
         });
         for spec in initial {
             sources.ensure(spec, false);
@@ -374,6 +411,16 @@ impl Sources {
         lock(&record.cache).cached_rev = -1;
         (self.deps.join_topic)(&format!("channel:{}", record.key));
         (self.deps.attach_wakeup)(bee.clone());
+        // `sources.js`: hold this namespace's `findingPeers` while the topic lookups answer, so
+        // the bee's first `update()` waits for a peer instead of concluding against whatever
+        // spoke last. The flush is bounded so an unanswerable topic costs nothing, and private
+        // routing's flush returns at once, releasing the guard with it.
+        let done = namespace.finding_peers();
+        let flush = (self.deps.flush)();
+        tokio::spawn(async move {
+            let _ = tokio::time::timeout(FLUSH_TIMEOUT, flush).await;
+            done.release();
+        });
         Some(bee)
     }
 
@@ -400,17 +447,25 @@ impl Sources {
         }
     }
 
-    /// `hibernateSource(src)`.
+    /// `hibernateSource(src, { purge })`.
     pub async fn hibernate(&self, record: &Arc<SourceRecord>) {
-        if record.bee().is_none() {
-            return;
-        }
+        self.hibernate_with(record, false).await;
+    }
+
+    async fn hibernate_with(&self, record: &Arc<SourceRecord>, purge: bool) {
         let old = lock(&record.bee).take();
-        lock(&self.active).remove(&record.key);
-        if let Some(bee) = old {
+        if old.is_some() {
+            lock(&self.active).remove(&record.key);
             (self.deps.leave_topic)(format!("channel:{}", record.key));
-            let _ = bee.close().await;
+            if let Some(bee) = old {
+                let _ = bee.close().await;
+            }
         }
+        // The landing follows the Autobee: a sleeping channel keeps its landed cores only until
+        // they are whole, and an unfollowed one purges them (the view and system cores go back to
+        // the peers that serve them).
+        let release = (self.deps.release_landing)(record.key.clone(), purge);
+        release.await;
     }
 
     /// `scanChannelView(view, viaKey)`.
@@ -418,44 +473,8 @@ impl Sources {
         &self,
         record: &Arc<SourceRecord>,
         bee: &Arc<Autobee>,
-    ) -> (Vec<Item>, Vec<DiscoveredSource>) {
-        let mut entries = Vec::new();
-        let mut discovered = Vec::new();
-        let view = bee.view.view().clone();
-        let mut stream = view.range(hyperbee::RangeOptions::default());
-        loop {
-            let next = stream.next().await;
-            let Ok(Some(node)) = next else {
-                break;
-            };
-            let sub = String::from_utf8_lossy(&node.key).into_owned();
-            if sub.starts_with("source/") {
-                if let Some(op) = decode_op(node.value)
-                    && op.get("type").and_then(Value::as_str) == Some("source")
-                {
-                    let source_key = op
-                        .get("sourceKey")
-                        .and_then(Value::as_str)
-                        .unwrap_or_default()
-                        .to_owned();
-                    discovered.push(DiscoveredSource {
-                        key: source_key.clone(),
-                        kind: "channel".to_owned(),
-                        title: clean_text(
-                            op.get("title").and_then(Value::as_str),
-                            &source_key[..source_key.len().min(12)],
-                        ),
-                        via: record.key.clone(),
-                    });
-                }
-            } else if !is_system_view_key(&sub)
-                && let Some(op) = decode_op(node.value)
-                && op.get("type").and_then(Value::as_str) == Some("announce")
-            {
-                entries.push(Item { sub, entry: op });
-            }
-        }
-        (entries, discovered)
+    ) -> Result<(Vec<Item>, Vec<DiscoveredSource>), ScanError> {
+        scan_view(bee.view.view(), &record.key).await
     }
 
     /// `refreshSourceCache(src)`.
@@ -474,12 +493,34 @@ impl Sources {
             if record.hydrated() {
                 record.touch(&self.clock);
             }
+            // A channel we already hold is a refresh: let the topic lookups answer first, or
+            // `update()` returns at once against whatever peer spoke last. This is throttled
+            // across the node — paying it per channel would stall rotating a large library.
+            let now = now_ms();
+            let last = self.last_flush_at.load(Ordering::Acquire);
+            if record.hydrated() && now.saturating_sub(last) > FLUSH_INTERVAL_MS {
+                self.last_flush_at.store(now, Ordering::Release);
+                let flush = (self.deps.flush)();
+                let _ = tokio::time::timeout(FLUSH_TIMEOUT, flush).await;
+            }
+            // Autobee goes quiet once a writer looks whole against the first hint it heard, and
+            // the publisher's coupler skips announcing a core this peer already has open — so a
+            // follower that met a partial peer first stays partial forever. Asking again makes
+            // the publisher answer with its real length, which reactivates the writer.
             bee.wakeup.request_lookup();
             let _ = tokio::time::timeout(Duration::from_secs(2), bee.update()).await;
         } else {
             let _ = tokio::time::timeout(Duration::from_secs(1), bee.update()).await;
         }
-        let (entries, discovered) = self.scan(&record, &bee).await;
+        let (entries, discovered) = match self.scan(&record, &bee).await {
+            Ok(scan) => scan,
+            Err(_) => {
+                // A sparse landing ends at the read timeout: keep what this record already holds
+                // and mark it for a rescan instead of clearing a cache this scan cannot replace.
+                lock(&record.cache).cached_rev = -1;
+                return None;
+            }
+        };
         let changed = record.index(&entries, &discovered, true);
         {
             let mut cache = lock(&record.cache);
@@ -569,7 +610,8 @@ impl Sources {
         };
         lock(&self.saved).remove(&key);
         self.dirty.store(true, Ordering::Release);
-        self.hibernate(&record).await;
+        // An unfollowed channel's landing goes back to the peers that serve it.
+        self.hibernate_with(&record, true).await;
         (self.deps.leave_topic)(format!("channel:{key}"));
         (self.deps.update)();
         Removed { removed: true }
@@ -690,6 +732,55 @@ impl Sources {
         }
         self.wake(&key, true).await.is_some()
     }
+}
+
+/// `scanChannelView(view, viaKey)`: one pass over a channel view.
+///
+/// Every block read waits at most [`SCAN_TIMEOUT`]: a landed view can be sparse where nobody
+/// serves its blocks, and the scan ends instead of letting `search()` or the rotation tick hang.
+pub async fn scan_view(
+    view: &Bee,
+    via: &str,
+) -> Result<(Vec<Item>, Vec<DiscoveredSource>), ScanError> {
+    let mut entries = Vec::new();
+    let mut discovered = Vec::new();
+    let mut stream = view.range(hyperbee::RangeOptions::default());
+    loop {
+        let next = match tokio::time::timeout(SCAN_TIMEOUT, stream.next()).await {
+            Ok(next) => next?,
+            Err(_) => return Err(ScanError::Timeout),
+        };
+        let Some(node) = next else {
+            break;
+        };
+        let sub = String::from_utf8_lossy(&node.key).into_owned();
+        if sub.starts_with("source/") {
+            if let Some(op) = decode_op(node.value)
+                && op.get("type").and_then(Value::as_str) == Some("source")
+            {
+                let source_key = op
+                    .get("sourceKey")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_owned();
+                discovered.push(DiscoveredSource {
+                    key: source_key.clone(),
+                    kind: "channel".to_owned(),
+                    title: clean_text(
+                        op.get("title").and_then(Value::as_str),
+                        &source_key[..source_key.len().min(12)],
+                    ),
+                    via: via.to_owned(),
+                });
+            }
+        } else if !is_system_view_key(&sub)
+            && let Some(op) = decode_op(node.value)
+            && op.get("type").and_then(Value::as_str) == Some("announce")
+        {
+            entries.push(Item { sub, entry: op });
+        }
+    }
+    Ok((entries, discovered))
 }
 
 /// `Apply` as a `Handlers`, for a followed channel.

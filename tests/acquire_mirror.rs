@@ -1,9 +1,9 @@
 //! The Rust acquirer and mirror host must reproduce the app's own calls and JSON for the same scripted sources.
 //!
 //! The oracles are `tests/js/acquire-mirror-acquire.mjs` and `tests/js/acquire-mirror-mirror.mjs`, which run the
-//! copied app modules (`fixtures/gen/acquire.js`, `fixtures/gen/mirror.js`) against a scripted node, an in-memory
-//! filesystem, scripted HTTP feeds and a fake `ubit`. Here the same scenarios drive fake implementations of every
-//! seam; the two traces are compared as JSON.
+//! app's own `src/acquire.js` and `src/mirror.js` (from `PEARTUBE_APP`, else the sibling `../peartube`) against a
+//! scripted node, an in-memory filesystem, scripted HTTP feeds and a fake `ubit`. Here the same scenarios drive fake
+//! implementations of every seam; the two traces are compared as JSON.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::io;
@@ -489,6 +489,9 @@ struct FakeRechunkOptions {
 struct FakeNode {
     calls: Arc<Mutex<Vec<Value>>>,
     put_plan: Mutex<VecDeque<PutPlan>>,
+    /// Held after the source's first response (where the job's validators are saved) so a test can read
+    /// `jobs.json` mid-transfer.
+    put_gate: Mutex<Option<Arc<tokio::sync::Semaphore>>>,
     entries: Mutex<Vec<Value>>,
     backfill: Mutex<SyncResult>,
     rechunk_progress: Mutex<Vec<Value>>,
@@ -502,6 +505,7 @@ impl FakeNode {
         Arc::new(Self {
             calls: Arc::new(Mutex::new(Vec::new())),
             put_plan: Mutex::new(VecDeque::new()),
+            put_gate: Mutex::new(None),
             entries: Mutex::new(Vec::new()),
             backfill: Mutex::new(SyncResult {
                 backfilled: 0,
@@ -677,6 +681,10 @@ impl Node for FakeNode {
             source.on_hash_state(b"checkpoint", hash);
         }
         let mut reader = source.open(plan.start, &mut meta).await?;
+        let gate = self.put_gate.lock().unwrap().clone();
+        if let Some(gate) = gate {
+            let _permit = gate.acquire().await;
+        }
         let mut bytes = Vec::new();
         let mut progress = Vec::new();
         let mut chunk = vec![0u8; 65536];
@@ -925,6 +933,10 @@ impl Node for FakeNode {
     }
 
     async fn mark_bulk_peer(&self, _key: &str, _on: bool) {}
+
+    async fn is_source_peer(&self, _key: &str) -> bool {
+        false
+    }
 
     async fn set_lan(&self, _lan: Option<Self::Lan>) -> Result<(), Self::Error> {
         Ok(())
@@ -1243,6 +1255,361 @@ async fn acquirer_matches_the_app() {
     compare(&Value::Object(traces), &oracle);
 }
 
+// ---------------------------------------------------------------- restore, durability, cancellation
+
+async fn until(mut check: impl FnMut() -> bool) {
+    for _ in 0..100_000 {
+        if check() {
+            return;
+        }
+        tokio::task::yield_now().await;
+    }
+    panic!("condition never held");
+}
+
+fn saved_jobs(harness: &Harness) -> Vec<Value> {
+    harness
+        .files
+        .read("/work/jobs.json")
+        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+        .and_then(|value| value.as_array().cloned())
+        .unwrap_or_default()
+}
+
+fn seeded_job(job_id: &str, status: &str, store: &str, private: bool) -> Value {
+    json!({
+        "jobId": job_id,
+        "id": "imdb:tt4444444",
+        "title": "Seeded",
+        "plugin": "http-acquire",
+        "channel": false,
+        "private": private,
+        "status": status,
+        "created": NOW,
+        "store": store,
+        "source": {"url": "http://source.test/film.mp4", "headers": {}, "page": false},
+        "total": 10,
+        "bytes": 4,
+        "etag": "\"v1\"",
+        "lastModified": null,
+        "hashState": null,
+        "hashBytes": 0
+    })
+}
+
+/// A job left `announcing` (its announce saved, its source dropped) re-appends and finishes instead of reading
+/// through the missing source.
+#[tokio::test]
+async fn an_announcing_job_restores_and_finishes() {
+    let announce = json!({
+        "type": "announce", "id": "imdb:tt4444444", "title": "Seeded", "size": 4,
+        "sha256": "a".repeat(64), "blobs": "AAAA",
+        "blob": {"blockOffset": 0, "blockLength": 1, "byteOffset": 0, "byteLength": 4}
+    });
+    let mut job = seeded_job("cccccccc-0000-4000-8000-000000000003", "announcing", "video:announced", false);
+    job["source"] = Value::Null;
+    job["announce"] = announce.clone();
+    let harness = Harness::with_jobs(AcquirePath::Acquirer, Some(json!([job])));
+    tokio::time::timeout(Duration::from_secs(10), settle(&harness))
+        .await
+        .expect("an announcing job must not block startup");
+
+    let trace = harness.trace();
+    let calls = trace["calls"].as_array().expect("calls");
+    let appends: Vec<&Value> = calls.iter().filter(|call| call["method"] == "append").collect();
+    assert_eq!(appends.len(), 1, "the saved announce is appended once");
+    assert_eq!(appends[0]["op"], announce);
+    assert!(
+        calls.iter().all(|call| call["method"] != "put"),
+        "no source is read"
+    );
+    assert!(trace["http"].as_array().expect("http").is_empty());
+    assert_eq!(trace["list"][0]["status"], "done");
+    assert_eq!(trace["saved"][0]["status"], "done");
+    assert_eq!(trace["saved"][0]["sha256"], "a".repeat(64));
+    assert_eq!(trace["saved"][0]["hashState"], Value::Null);
+    assert_eq!(trace["saved"][0]["hashBytes"], 0);
+}
+
+/// A job with neither an announce nor a source can never run: it fails, drops its half-written core and does
+/// not leave the acquirer waiting on it.
+#[tokio::test]
+async fn a_job_with_no_source_and_no_announce_fails_instead_of_hanging() {
+    let mut job = seeded_job("cccccccc-0000-4000-8000-000000000004", "running", "video:orphan", false);
+    job["source"] = Value::Null;
+    let harness = Harness::with_jobs(AcquirePath::Acquirer, Some(json!([job])));
+    tokio::time::timeout(Duration::from_secs(10), settle(&harness))
+        .await
+        .expect("a sourceless job must not leave the acquirer busy");
+
+    let trace = harness.trace();
+    let calls = trace["calls"].as_array().expect("calls");
+    assert!(
+        calls
+            .iter()
+            .any(|call| call["method"] == "dropStore" && call["name"] == "video:orphan"),
+        "the dead job's core is dropped: {calls:?}"
+    );
+    assert_eq!(trace["list"][0]["status"], "failed");
+    assert!(trace["list"][0]["error"].is_string());
+    assert!(calls.iter().all(|call| call["method"] != "put"));
+}
+
+/// The first response's size and validators are in `jobs.json` before the transfer ends, so a crash resumes
+/// with the range and validators the source already answered with.
+#[tokio::test]
+async fn the_first_response_size_and_validators_are_durable_at_once() {
+    let harness = Harness::new(AcquirePath::Acquirer);
+    let gate = Arc::new(tokio::sync::Semaphore::new(0));
+    *harness.node.put_gate.lock().unwrap() = Some(gate.clone());
+    harness.http.plan(vec![reply(
+        200,
+        &[
+            ("content-length", "7"),
+            ("etag", "\"strong\""),
+            ("last-modified", "Wed, 01 Jan 2025 00:00:00 GMT"),
+        ],
+        &["abc", "defg"],
+    )]);
+    add_film(
+        &harness,
+        "imdb:tt5555555",
+        "Film",
+        "http://source.test/film.mp4",
+        &[],
+    );
+    until(|| {
+        saved_jobs(&harness)
+            .first()
+            .and_then(|job| job.get("etag"))
+            .is_some_and(|etag| etag.as_str() == Some("\"strong\""))
+    })
+    .await;
+    let saved = saved_jobs(&harness);
+    assert_eq!(saved[0]["total"], 7, "size persisted before the body");
+    assert_eq!(saved[0]["etag"], "\"strong\"");
+    assert_eq!(saved[0]["lastModified"], "Wed, 01 Jan 2025 00:00:00 GMT");
+    gate.add_permits(1);
+    settle(&harness).await;
+    assert_eq!(harness.trace()["list"][0]["status"], "done");
+}
+
+/// A private job written before per-job keys existed gets one before its first attempt, and no key or
+/// checkpoint shows in the public job view.
+#[tokio::test]
+async fn a_legacy_private_job_gets_a_key_before_its_first_attempt() {
+    let harness = Harness::with_jobs(
+        AcquirePath::Acquirer,
+        Some(json!([seeded_job(
+            "cccccccc-0000-4000-8000-000000000005",
+            "queued",
+            "video:legacy-private",
+            true
+        )])),
+    );
+    harness.http.plan(vec![reply(200, &[("content-length", "3")], &["abc"])]);
+    settle(&harness).await;
+
+    let trace = harness.trace();
+    let calls = trace["calls"].as_array().expect("calls");
+    let put = calls
+        .iter()
+        .find(|call| call["method"] == "put")
+        .expect("put was called");
+    let key = put["meta"]["storeKey"]
+        .as_str()
+        .expect("the private put carries a per-job key");
+    assert_eq!(key.len(), 64);
+    assert!(key.bytes().all(|b| b.is_ascii_hexdigit()));
+    assert_eq!(trace["saved"][0]["storeKey"], key, "the key is durable");
+    let public = &trace["list"][0];
+    for field in [
+        "storeKey",
+        "etag",
+        "lastModified",
+        "hashState",
+        "hashBytes",
+        "source",
+        "announce",
+    ] {
+        assert!(public.get(field).is_none(), "{field} leaks: {public}");
+    }
+}
+
+/// Cancelling a job that is not running drops its half-written core; a running one drops it in its own
+/// failure path.
+#[tokio::test]
+async fn cancelling_a_queued_job_drops_its_core() {
+    let harness = Harness::new(AcquirePath::Acquirer);
+    let gate = Arc::new(tokio::sync::Semaphore::new(0));
+    *harness.node.put_gate.lock().unwrap() = Some(gate.clone());
+    harness.http.plan(vec![reply(200, &[("content-length", "3")], &["abc"])]);
+    add_film(
+        &harness,
+        "imdb:tt6666666",
+        "Busy",
+        "http://source.test/busy.mp4",
+        &[],
+    );
+    until(|| {
+        harness
+            .node
+            .calls
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|call| call["method"] == "put")
+    })
+    .await;
+    let queued = harness
+        .acquirer
+        .as_ref()
+        .unwrap()
+        .add(AddJob {
+            id: "imdb:tt7777777".into(),
+            title: "Waiting".into(),
+            source: SourceSpec {
+                url: "http://source.test/waiting.mp4".into(),
+                headers: Vec::new(),
+                page: false,
+                private: false,
+            },
+            channel: None,
+            private: false,
+            plugin: None,
+        })
+        .expect("add");
+    let store = queued["store"].as_str().expect("store").to_owned();
+    let cancelled = harness
+        .acquirer
+        .as_ref()
+        .unwrap()
+        .cancel(queued["jobId"].as_str().expect("jobId"))
+        .expect("queued job");
+    assert_eq!(cancelled["status"], "cancelled");
+    until(|| {
+        harness
+            .node
+            .calls
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|call| call["method"] == "dropStore" && call["name"] == store.as_str())
+    })
+    .await;
+    gate.add_permits(1);
+    settle(&harness).await;
+}
+
+/// A dismissed dead-lettered job takes its half-written core with it.
+#[tokio::test]
+async fn cancelling_a_failed_job_drops_its_core() {
+    let mut job = seeded_job(
+        "cccccccc-0000-4000-8000-000000000006",
+        "failed",
+        "video:deadtail",
+        false,
+    );
+    job["source"] = Value::Null;
+    let harness = Harness::with_jobs(AcquirePath::Acquirer, Some(json!([job])));
+    tokio::time::timeout(Duration::from_secs(10), settle(&harness))
+        .await
+        .expect("a failed job is not run");
+    let removed = harness
+        .acquirer
+        .as_ref()
+        .unwrap()
+        .cancel("cccccccc-0000-4000-8000-000000000006")
+        .expect("failed job");
+    assert_eq!(removed["status"], "removed");
+    assert!(harness.acquirer.as_ref().unwrap().list().is_empty());
+    until(|| {
+        harness
+            .node
+            .calls
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|call| call["method"] == "dropStore" && call["name"] == "video:deadtail")
+    })
+    .await;
+}
+
+/// A strong ETag that rotated under a resumed core marks the bytes on disk as another encode, whatever the
+/// range says.
+#[tokio::test]
+async fn a_rotated_etag_drops_the_half_written_core() {
+    let harness = Harness::with_jobs(
+        AcquirePath::Acquirer,
+        Some(json!([seeded_job(
+            "cccccccc-0000-4000-8000-000000000008",
+            "running",
+            "video:reencoded",
+            false
+        )])),
+    );
+    harness.node.put_plan.lock().unwrap().push_back(PutPlan {
+        start: 4,
+        hash: None,
+    });
+    harness.http.plan(vec![reply(
+        206,
+        &[("content-range", "bytes 4-9/10"), ("etag", "\"v2\"")],
+        &["abcdefghij"],
+    )]);
+    tokio::time::timeout(Duration::from_secs(10), settle(&harness))
+        .await
+        .expect("the restart path settles");
+    let trace = harness.trace();
+    let calls = trace["calls"].as_array().expect("calls");
+    assert!(
+        calls
+            .iter()
+            .any(|call| call["method"] == "dropStore" && call["name"] == "video:reencoded"),
+        "the other encode's core is dropped: {calls:?}"
+    );
+    assert_eq!(trace["list"][0]["status"], "failed");
+}
+
+/// A source that changed under a resumed core (here a Content-Range that does not start where the core ends)
+/// drops the bytes of the other encode and retries from zero, rather than resuming on top of them forever.
+#[tokio::test]
+async fn a_changed_source_drops_the_half_written_core() {
+    let harness = Harness::with_jobs(
+        AcquirePath::Acquirer,
+        Some(json!([seeded_job(
+            "cccccccc-0000-4000-8000-000000000007",
+            "running",
+            "video:rotated",
+            false
+        )])),
+    );
+    harness.node.put_plan.lock().unwrap().push_back(PutPlan {
+        start: 4,
+        hash: None,
+    });
+    harness.http.plan(vec![reply(
+        206,
+        &[("content-range", "bytes 0-9/10"), ("etag", "\"v1\"")],
+        &["abcdefghij"],
+    )]);
+    tokio::time::timeout(Duration::from_secs(10), settle(&harness))
+        .await
+        .expect("the restart path settles");
+    let trace = harness.trace();
+    let calls = trace["calls"].as_array().expect("calls");
+    assert!(
+        calls
+            .iter()
+            .any(|call| call["method"] == "dropStore" && call["name"] == "video:rotated"),
+        "the other encode's core is dropped: {calls:?}"
+    );
+    assert_eq!(trace["list"][0]["status"], "failed");
+    let request = &trace["http"][0]["headers"];
+    assert_eq!(request["range"], "bytes=4-");
+    assert_eq!(request["if-range"], "\"v1\"");
+}
+
 fn compare(rust: &Value, js: &Value) {
     let rust = rust.as_object().unwrap();
     for (name, expected) in js.as_object().unwrap() {
@@ -1382,6 +1749,7 @@ impl MirrorHarness {
             Arc::new(Factory),
             Arc::new(RechunkFactory),
             feeds,
+            Vec::new(),
             MirrorOptions {
                 storage: "/data".to_owned(),
                 mirror_channel: false,

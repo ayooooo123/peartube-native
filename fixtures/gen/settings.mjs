@@ -1,13 +1,12 @@
-// Generates ../settings-reference.json from the app's own settings.js/app-settings.js copies in this folder.
+// Generates settings-reference.json from the app's own src/settings.js and src/app-settings.js.
 // `node settings.mjs verify <cases.json>` loads settings files the Rust side wrote and checks their views.
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { basename, dirname, join } from 'node:path'
+import { basename, join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { fileURLToPath } from 'node:url'
-import { createSettings } from './settings.js'
-import { APP_SETTINGS_DEFAULTS, nodeOptions, normalizeAppSettings } from './app-settings.js'
+import { load, outFile } from './app.mjs'
 
-const here = dirname(fileURLToPath(import.meta.url))
+const { createSettings } = await load('src/settings.js')
+const { APP_SETTINGS_DEFAULTS, nodeOptions, normalizeAppSettings } = await load('src/app-settings.js')
 
 if (process.argv[2] === 'verify') {
   const cases = JSON.parse(readFileSync(process.argv[3], 'utf8'))
@@ -426,8 +425,8 @@ fileCase('reload written file', {
 })
 
 const fixtures = { appSettingsDefaults: defaults, appSettings, nodeOptions: nodeOptionsCases, settingsFiles }
-writeFileSync(join(here, '..', 'settings-reference.json'), JSON.stringify(fixtures, null, 2) + '\n')
-console.log('wrote settings-reference.json')
+writeFileSync(outFile('settings-reference.json'), JSON.stringify(fixtures, null, 2) + '\n')
+console.log(`wrote ${outFile('settings-reference.json')}`)
 for (const [key, value] of Object.entries(fixtures)) {
   if (Array.isArray(value)) console.log(` ${key}: ${value.length}`)
 }

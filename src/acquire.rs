@@ -207,15 +207,28 @@ pub fn header<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a str
         .map(|(_, value)| value.as_str())
 }
 
-/// The offset a `content-range: bytes N-...` header answers with.
+/// The strong ETag a reply carries: a weak one (`W/`) cannot prove two halves are the same bytes.
+fn strong_etag(headers: &[(String, String)]) -> Option<String> {
+    header(headers, "etag")
+        .filter(|etag| !etag.starts_with("W/"))
+        .map(str::to_owned)
+}
+
+/// The offset a `content-range: bytes N-...` header answers with, the app's `/^bytes\s+(\d+)-/i`.
 pub fn content_range_start(value: &str) -> Option<u64> {
-    let value = value.trim_start();
-    let rest = value.get(..5)?;
-    if !rest.eq_ignore_ascii_case("bytes") {
+    let head = value.get(..5)?;
+    if !head.eq_ignore_ascii_case("bytes") {
         return None;
     }
-    let rest = value[5..].trim_start();
+    let spaced = &value[5..];
+    let rest = spaced.trim_start_matches(char::is_whitespace);
+    if rest.len() == spaced.len() {
+        return None;
+    }
     let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+    if digits.is_empty() || !rest[digits.len()..].starts_with('-') {
+        return None;
+    }
     digits.parse().ok()
 }
 
@@ -894,6 +907,19 @@ mod header_tests {
         }
     }
 
+    /// A range resume accepts only the app's shape: `bytes N-...`, with the space and the dash.
+    #[test]
+    fn content_range_start_matches_the_app_regex() {
+        assert_eq!(content_range_start("bytes 4-9/10"), Some(4));
+        assert_eq!(content_range_start("BYTES 0-"), Some(0));
+        assert_eq!(content_range_start("bytes  12-13/20"), Some(12));
+        assert_eq!(content_range_start("bytes4-9/10"), None);
+        assert_eq!(content_range_start("bytes"), None);
+        assert_eq!(content_range_start("bytes -9/10"), None);
+        assert_eq!(content_range_start("bytes 4"), None);
+        assert_eq!(content_range_start("items 4-9/10"), None);
+    }
+
     /// A user header replaces the default case-insensitively, as the app's `mergeHeaders` lowercases keys.
     #[test]
     fn a_user_header_replaces_the_default_case_insensitively() {
@@ -1296,8 +1322,8 @@ pub trait JobSink: Send + Sync {
     /// The source's own failure, so a backend error that loses it still dead-letters a 404.
     fn on_source_error(&self, error: &AcquireError);
     fn on_hash_state(&self, state: &[u8], bytes: u64);
-    fn set_total(&self, total: Option<u64>);
-    fn set_validators(&self, etag: Option<String>, last_modified: Option<String>);
+    /// The first response's size and validators, when a transfer starts from zero.
+    fn set_response(&self, total: Option<u64>, etag: Option<String>, last_modified: Option<String>);
 }
 
 enum StreamKind {
@@ -1452,10 +1478,13 @@ impl<E: From<AcquireError> + Send> JobSource<E> {
                         header(&first.headers, "etag").is_some_and(|value| value != etag)
                     });
                     if rotated || first.status != 206 || start != Some(offset) {
-                        return Err(E::from(AcquireError::Restart(format!(
+                        let error = AcquireError::Restart(format!(
                             "Source changed while resuming {}",
                             self.job_id
-                        ))));
+                        ));
+                        // The job must drop the core holding the other encode: keeping it fails every retry.
+                        self.sink.on_source_error(&error);
+                        return Err(E::from(error));
                     }
                     self.sink.on_bytes(offset);
                     Ok(Box::new(Resumable::new(
@@ -1464,7 +1493,9 @@ impl<E: From<AcquireError> + Send> JobSource<E> {
                             url: spec.url,
                             base_headers,
                             total: meta.expected_size.flatten(),
-                            etag: self.etag.clone(),
+                            // As `readResumable`, a reconnect revalidates with the reply's own strong ETag, not the
+                            // one the job last saved: a rotated encode must fail the resume, not pass it.
+                            etag: strong_etag(&first.headers),
                             offset,
                             cancel: self.cancel.clone(),
                             closed: self.closed.clone(),
@@ -1501,13 +1532,12 @@ impl<E: From<AcquireError> + Send> JobSource<E> {
                                 && *n <= 9_007_199_254_740_991.0
                         })
                         .map(|n| n as u64);
-                    self.sink.set_total(total);
-                    self.sink.on_bytes(0);
-                    let etag = header(&first.headers, "etag")
-                        .filter(|etag| !etag.starts_with("W/"))
-                        .map(str::to_owned);
+                    let etag = strong_etag(&first.headers);
                     let last_modified = header(&first.headers, "last-modified").map(str::to_owned);
-                    self.sink.set_validators(etag.clone(), last_modified);
+                    // Durable at once, together with the zero progress: a crash before the first hash checkpoint
+                    // resumes with the response it saw.
+                    self.sink.on_bytes(0);
+                    self.sink.set_response(total, etag.clone(), last_modified);
                     meta.expected_size = Some(total);
                     Ok(Box::new(Resumable::new(
                         ResumableConfig {
@@ -1715,6 +1745,14 @@ where
         })
     }
 
+    /// `node.dropStore(store)` for a job that will never run again; its failure is the store's business.
+    fn drop_core(self: &Arc<Self>, store: String) {
+        let inner = self.clone();
+        tokio::spawn(async move {
+            let _ = inner.node.drop_store(&store).await;
+        });
+    }
+
     /// Start every job that fits. The synchronous head of the app's `run` (durable store, status, error) happens
     /// here so `add` reports the same status the app does.
     fn next(self: &Arc<Self>) {
@@ -1744,6 +1782,11 @@ where
                 let job = &mut jobs[index];
                 if job.source.as_ref().is_some_and(|source| !source.page) && job.store.is_none() {
                     job.store = Some(self.new_store());
+                }
+                // A private job from before per-job keys existed gets one now, or a restart would reopen its
+                // core under a second key.
+                if job.private && job.store.is_some() && job.store_key.is_none() {
+                    job.store_key = Some(hex(&self.random.bytes(32)));
                 }
                 job.status = if job.announce.is_some() {
                     JobStatus::Announcing
@@ -1794,10 +1837,16 @@ where
         cancel: &Arc<Cancel>,
     ) -> Result<(), AcquireError> {
         if loaded.announce.is_none() {
-            if loaded.source.as_ref().is_some_and(|source| source.page) {
-                self.transfer_page(id, loaded, cancel).await?;
-            } else {
-                self.transfer_http(id, loaded, cancel).await?;
+            match &loaded.source {
+                Some(source) if source.page => {
+                    self.transfer_page(id, loaded, cancel).await?;
+                }
+                Some(_) => {
+                    self.transfer_http(id, loaded, cancel).await?;
+                }
+                // A job with nothing left to fetch and no announce can never run: fail it instead of reading
+                // through a missing source, which would panic the task and leave it in `running` forever.
+                None => return Err(AcquireError::Message("Job has no source".into())),
             }
             if self
                 .snapshot(id)
@@ -1854,7 +1903,9 @@ where
         job: &Job,
         cancel: &Arc<Cancel>,
     ) -> Result<(), AcquireError> {
-        let source = job.source.clone().expect("http job has a source");
+        let Some(source) = job.source.clone() else {
+            return Err(AcquireError::Message("Job has no source".into()));
+        };
         let mut extra = Map::new();
         extra.insert(
             "hashState".into(),
@@ -1917,7 +1968,9 @@ where
         job: &Job,
         cancel: &Arc<Cancel>,
     ) -> Result<(), AcquireError> {
-        let source = job.source.clone().expect("page job has a source");
+        let Some(source) = job.source.clone() else {
+            return Err(AcquireError::Message("Job has no source".into()));
+        };
         let tmp_dir = self.files.make_temp_dir().map_err(AcquireError::Message)?;
         let result = self
             .transfer_page_inner(id, job, &source, &tmp_dir, cancel)
@@ -2044,9 +2097,11 @@ where
                 job.clone()
             })
             .unwrap_or_else(|| loaded.clone());
-        // A job that will never run again must not leave a half-written core on the array.
+        // A job that will never run again must not leave a half-written core on the array, and a source that
+        // changed under a resumed core leaves bytes of another encode that the next attempt must not stitch onto.
         if (job.status == JobStatus::Cancelled
-            || (job.status == JobStatus::Failed && job.source.is_none()))
+            || (job.status == JobStatus::Failed && job.source.is_none())
+            || error.restart())
             && let Some(store) = &job.store
         {
             let _ = self.node.drop_store(store).await;
@@ -2086,8 +2141,13 @@ impl JobSink for NoopSink {
     fn on_bytes(&self, _bytes: u64) {}
     fn on_source_error(&self, _error: &AcquireError) {}
     fn on_hash_state(&self, _state: &[u8], _bytes: u64) {}
-    fn set_total(&self, _total: Option<u64>) {}
-    fn set_validators(&self, _etag: Option<String>, _last_modified: Option<String>) {}
+    fn set_response(
+        &self,
+        _total: Option<u64>,
+        _etag: Option<String>,
+        _last_modified: Option<String>,
+    ) {
+    }
 }
 
 /// `JobSink` for one job; holds the acquirer weakly so the stream never keeps it alive.
@@ -2126,18 +2186,15 @@ where
         }
     }
 
-    fn set_total(&self, total: Option<u64>) {
-        if let Some(inner) = self.inner.upgrade() {
-            inner.with_job(&self.job_id, |job| job.total = Some(total));
-        }
-    }
-
-    fn set_validators(&self, etag: Option<String>, last_modified: Option<String>) {
+    fn set_response(&self, total: Option<u64>, etag: Option<String>, last_modified: Option<String>) {
         if let Some(inner) = self.inner.upgrade() {
             inner.with_job(&self.job_id, |job| {
+                job.total = Some(total);
                 job.etag = Some(etag.map_or(Value::Null, Value::String));
                 job.last_modified = Some(last_modified.map_or(Value::Null, Value::String));
             });
+            // Durable at once: a crash before the first hash checkpoint resumes with the response it saw.
+            inner.save();
         }
     }
 }
@@ -2239,27 +2296,40 @@ where
     /// `cancel`: stop a queued or running job; a finished/failed one is dismissed from the list.
     pub fn cancel(&self, job_id: &str) -> Option<Value> {
         let inner = &self.inner;
-        let status = {
-            let jobs = inner.jobs.lock().expect("acquirer jobs");
-            jobs.iter()
-                .find(|job| job.job_id == job_id)
-                .map(|job| job.status)?
+        // The status is read and acted on under one lock: a run finishing in between must not be clobbered
+        // with `cancelled`, and a job that is no longer running has nobody else to drop its core.
+        let (status, running_cancel, drop_store) = {
+            let mut jobs = inner.jobs.lock().expect("acquirer jobs");
+            let index = jobs.iter().position(|job| job.job_id == job_id)?;
+            let status = jobs[index].status;
+            if status == JobStatus::Queued || status == JobStatus::Running {
+                jobs[index].status = JobStatus::Cancelled;
+                jobs[index].source = None;
+                let running = inner
+                    .running
+                    .lock()
+                    .expect("acquirer running")
+                    .get(job_id)
+                    .cloned();
+                let job = &jobs[index];
+                // A running job drops its half-written core in `run`'s failure path; a queued one has nobody
+                // else to do it.
+                let drop_store = (running.is_none() && job.announce.is_none())
+                    .then(|| job.store.clone())
+                    .flatten();
+                (status, running, drop_store)
+            } else {
+                (status, None, None)
+            }
         };
         if status == JobStatus::Queued || status == JobStatus::Running {
-            inner.with_job(job_id, |job| {
-                job.status = JobStatus::Cancelled;
-                job.source = None;
-            });
-            if let Some(cancel) = inner
-                .running
-                .lock()
-                .expect("acquirer running")
-                .get(job_id)
-                .cloned()
-            {
+            if let Some(cancel) = running_cancel {
                 cancel.abort();
             }
             inner.save();
+            if let Some(store) = drop_store {
+                inner.drop_core(store);
+            }
         } else if status != JobStatus::Announcing {
             let removed = {
                 let mut jobs = inner.jobs.lock().expect("acquirer jobs");
@@ -2269,6 +2339,12 @@ where
                 job
             };
             inner.save();
+            // A dismissed job that never announced leaves no core behind.
+            if removed.announce.is_none()
+                && let Some(store) = removed.store.clone()
+            {
+                inner.drop_core(store);
+            }
             return Some(removed.public_json());
         }
         inner.snapshot(job_id).map(|job| job.public_json())

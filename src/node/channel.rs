@@ -104,6 +104,220 @@ pub struct Hooks {
     pub join_topic: Option<JoinTopicHook>,
 }
 
+/// One landed core of a fast-forward view: which core, and whether the channel still holds it.
+struct Landing {
+    hex: [u8; 32],
+    held: bool,
+}
+
+/// `mirrorLanding`/`releaseLanding`/`closeWhenWhole` from `channel.js`.
+///
+/// Fast-forward lands only on views stamped by the channel owner; a landing leaves those cores
+/// sparse here, so they are kept whole and live: this node can then hand the landing on when the
+/// owner is unreachable, and never stalls on a block only the owner holds. Landings are held per
+/// channel: a channel that lands again on new keys closes its old cores, a sleeping channel keeps
+/// its landed cores open only until they are whole, and an unfollowed channel purges them.
+pub struct Landings {
+    store: Corestore,
+    closing: Arc<AtomicBool>,
+    /// Channel hex -> `system`/`view` landing.
+    by_channel: Mutex<HashMap<String, HashMap<&'static str, Landing>>>,
+    /// Core hex -> the open session, the flat view the relay seeds from and the node closes.
+    open: Mutex<HashMap<[u8; 32], Arc<Session>>>,
+}
+
+impl Landings {
+    pub fn new(store: Corestore, closing: Arc<AtomicBool>) -> Arc<Self> {
+        Arc::new(Self {
+            store,
+            closing,
+            by_channel: Mutex::new(HashMap::new()),
+            open: Mutex::new(HashMap::new()),
+        })
+    }
+
+    /// The landed cores currently held open, as the relay seeds them.
+    pub fn open_keys(&self) -> Vec<[u8; 32]> {
+        lock(&self.open).keys().copied().collect()
+    }
+
+    /// The landed core's length, for the seedable-cores list.
+    pub fn open_len(&self, hex: &[u8; 32]) -> Option<u64> {
+        lock(&self.open).get(hex).map(|core| core.length())
+    }
+
+    fn held_elsewhere(&self, hex: &[u8; 32], channel_hex: &str) -> bool {
+        let by_channel = lock(&self.by_channel);
+        Self::held_elsewhere_in(&by_channel, hex, channel_hex)
+    }
+
+    fn held_elsewhere_in(
+        by_channel: &HashMap<String, HashMap<&'static str, Landing>>,
+        hex: &[u8; 32],
+        channel_hex: &str,
+    ) -> bool {
+        by_channel.iter().any(|(channel, recs)| {
+            channel != channel_hex && recs.values().any(|rec| rec.held && &rec.hex == hex)
+        })
+    }
+
+    fn open_landing(self: &Arc<Self>, hex: [u8; 32]) {
+        if self.closing.load(Ordering::Acquire) || lock(&self.open).contains_key(&hex) {
+            return;
+        }
+        let landings = Arc::clone(self);
+        let store = self.store.clone();
+        tokio::spawn(async move {
+            let Ok(session) = store.get(StoreGetOptions::key(hex)).await else {
+                return;
+            };
+            let session = Arc::new(session);
+            {
+                let mut open = lock(&landings.open);
+                if landings.closing.load(Ordering::Acquire) || open.contains_key(&hex) {
+                    session.close();
+                    return;
+                }
+                open.insert(hex, Arc::clone(&session));
+            }
+            let _ = session.download(0, None, false).await;
+        });
+    }
+
+    fn drop_landing(&self, hex: &[u8; 32]) -> Option<Arc<Session>> {
+        lock(&self.open).remove(hex)
+    }
+
+    fn close_when_whole(self: &Arc<Self>, hex: [u8; 32]) {
+        let Some(core) = lock(&self.open).get(&hex).cloned() else {
+            return;
+        };
+        let landings = Arc::clone(self);
+        tokio::spawn(async move {
+            let length = core.length();
+            if !core.has_range(0, length) {
+                let _ = core.download(0, Some(length), false).await;
+            }
+            let still_open = lock(&landings.open)
+                .get(&hex)
+                .is_some_and(|current| Arc::ptr_eq(current, &core));
+            if still_open
+                && !landings.held_elsewhere(&hex, "")
+                && let Some(core) = landings.drop_landing(&hex)
+            {
+                core.close();
+            }
+        });
+    }
+
+    /// `mirrorLanding(changes, channelHex)`.
+    pub fn mirror_landing(self: &Arc<Self>, changes: Changes, channel_hex: &str) {
+        let mut newly_held: Vec<[u8; 32]> = Vec::new();
+        let mut superseded: Vec<[u8; 32]> = Vec::new();
+        {
+            let mut by_channel = lock(&self.by_channel);
+            {
+                let recs = by_channel.entry(channel_hex.to_owned()).or_default();
+                // An update means the channel is awake: a landing it let close while asleep
+                // follows the owner again.
+                for rec in recs.values_mut() {
+                    if !rec.held {
+                        rec.held = true;
+                        newly_held.push(rec.hex);
+                    }
+                }
+            }
+            for name in ["system", "view"] {
+                let Some(change) = changes.get(name) else {
+                    continue;
+                };
+                if change.incremental {
+                    continue;
+                }
+                let Some(hex) = change.to.and_then(|to| to.key) else {
+                    continue;
+                };
+                let previous = by_channel
+                    .get(channel_hex)
+                    .and_then(|recs| recs.get(name))
+                    .map(|rec| rec.hex);
+                if previous == Some(hex) {
+                    continue;
+                }
+                let held_elsewhere = previous.is_some_and(|previous| {
+                    Self::held_elsewhere_in(&by_channel, &previous, channel_hex)
+                });
+                newly_held.push(hex);
+                by_channel
+                    .entry(channel_hex.to_owned())
+                    .or_default()
+                    .insert(name, Landing { hex, held: true });
+                if let Some(previous) = previous
+                    && !held_elsewhere
+                {
+                    superseded.push(previous);
+                }
+            }
+        }
+        for hex in newly_held {
+            self.open_landing(hex);
+        }
+        for hex in superseded {
+            if let Some(core) = self.drop_landing(&hex) {
+                core.close();
+            }
+        }
+    }
+
+    /// `releaseLanding(channelHex, { purge })`: a hibernating channel closes its landing once it
+    /// is whole; an unfollowed one closes and purges it now.
+    pub async fn release_landing(self: &Arc<Self>, channel_hex: &str, purge: bool) {
+        let recs: Vec<[u8; 32]> = {
+            let mut by_channel = lock(&self.by_channel);
+            if purge {
+                by_channel
+                    .remove(channel_hex)
+                    .map(|recs| recs.values().map(|rec| rec.hex).collect())
+                    .unwrap_or_default()
+            } else {
+                match by_channel.get_mut(channel_hex) {
+                    Some(recs) => recs
+                        .values_mut()
+                        .map(|rec| {
+                            rec.held = false;
+                            rec.hex
+                        })
+                        .collect(),
+                    None => Vec::new(),
+                }
+            }
+        };
+        for hex in recs {
+            if self.held_elsewhere(&hex, channel_hex) {
+                continue;
+            }
+            if !purge {
+                self.close_when_whole(hex);
+                continue;
+            }
+            if let Some(core) = self.drop_landing(&hex) {
+                core.close();
+            }
+            let discovery = hypercore::crypto::discovery_key(&hex);
+            let _ = self.store.purge(&discovery).await;
+        }
+    }
+
+    /// `close()`: every landing goes.
+    pub async fn close(&self) {
+        let open: Vec<Arc<Session>> = lock(&self.open).drain().map(|(_, core)| core).collect();
+        for core in open {
+            core.close();
+        }
+        lock(&self.by_channel).clear();
+    }
+}
+
 /// The apply handlers plus the founder key pair, which `Apply` itself does not carry.
 struct ChannelHandlers {
     apply: Apply,
@@ -155,7 +369,9 @@ pub struct Channel {
     primary_key: String,
     primary_buf: [u8; 32],
     writer_cores: Mutex<HashMap<String, Session>>,
-    secondary_writers: Mutex<HashSet<String>>,
+    /// Reconcile runs one at a time, as `writerSync` chains them.
+    writer_sync: tokio::sync::Mutex<()>,
+    landings: Arc<Landings>,
     use_primary: AtomicBool,
     has_entries: AtomicBool,
     authority: Mutex<Option<Arc<dyn AppendAuthority>>>,
@@ -190,12 +406,14 @@ impl Channel {
         });
         let auto = Autobee::open_with_wakeup(&tracker, target, handlers, wakeup).await?;
         let primary_key = hex_encode(&primary);
+        let landings = Landings::new(store.clone(), closing.clone());
         Ok(Arc::new(Self {
             auto,
             primary_key,
             primary_buf: primary,
             writer_cores: Mutex::new(HashMap::new()),
-            secondary_writers: Mutex::new(HashSet::new()),
+            writer_sync: tokio::sync::Mutex::new(()),
+            landings,
             use_primary: AtomicBool::new(target.is_some()),
             has_entries: AtomicBool::new(false),
             authority: Mutex::new(None),
@@ -204,6 +422,18 @@ impl Channel {
             closing,
             worklet,
         }))
+    }
+
+    /// `ctx.channel.findingPeers`: the primary tracker's namespace holds its cores' update
+    /// until the swarm flush answers (`network.js`).
+    pub fn finding_peers(&self) -> corestore::FindingPeers {
+        self.tracker.finding_peers()
+    }
+
+    /// `ctx.channel.landings`: `mirrorLanding`/`releaseLanding`, shared with every followed
+    /// channel's apply hook.
+    pub fn landings(&self) -> Arc<Landings> {
+        self.landings.clone()
     }
 
     /// Installs the vault-backed authority once identity exists.
@@ -268,32 +498,32 @@ impl Channel {
         self.has_entries.store(true, Ordering::Release);
     }
 
-    pub fn secondary_writers(&self) -> Vec<String> {
-        lock(&self.secondary_writers).iter().cloned().collect()
-    }
-
-    /// `onWriterChange(wHex, added)`.
-    pub fn writer_changed(&self, writer: &str, added: bool) {
-        if writer == self.primary_key {
-            return;
-        }
-        let mut writers = lock(&self.secondary_writers);
-        if added {
-            writers.insert(writer.to_owned());
-        } else {
-            writers.remove(writer);
-        }
-    }
-
     /// `applied(bee)`: race the update against a one-second cap.
     pub async fn applied(&self) {
         let update = self.auto.update();
         let _ = tokio::time::timeout(APPLIED_TIMEOUT, update).await;
     }
 
-    /// `syncWriterCores`: hold an inactive core per secondary writer.
+    /// `syncWriterCores`: hold an inactive core per linked device, straight from the
+    /// authoritative `writer/*` view prefix so the apply handler stays pure.
     pub async fn sync_writer_cores(&self) {
-        let wanted: HashSet<String> = lock(&self.secondary_writers).clone();
+        let _serial = self.writer_sync.lock().await;
+        if self.closing.load(Ordering::Acquire) {
+            return;
+        }
+        let wanted: HashSet<String> = match self.view_prefix("writer/").await {
+            Ok(entries) => entries
+                .into_iter()
+                .filter_map(|(full, _)| {
+                    let writer = full.strip_prefix("writer/")?.to_owned();
+                    (is_hex64(&writer) && writer != self.primary_key).then_some(writer)
+                })
+                .collect(),
+            Err(_) => return,
+        };
+        if self.closing.load(Ordering::Acquire) {
+            return;
+        }
         let stale: Vec<Session> = {
             let mut cores = lock(&self.writer_cores);
             let stale: Vec<String> = cores
@@ -310,6 +540,9 @@ impl Channel {
             core.close();
         }
         for hex in wanted {
+            if self.closing.load(Ordering::Acquire) {
+                break;
+            }
             if lock(&self.writer_cores).contains_key(&hex) {
                 continue;
             }
@@ -691,7 +924,24 @@ impl Channel {
         for (_, core) in cores {
             core.close();
         }
+        self.landings.close().await;
         let _ = self.auto.close().await;
+    }
+
+    /// `channel.flushes`: Autobee's fast-forward stamp count, the threshold the seedable list
+    /// uses to pin the owner's system and view cores.
+    pub fn flushes(&self) -> u64 {
+        self.auto.flushes()
+    }
+
+    /// `channel.views().slice(0, 2)`: the local system and view cores `(key, length)`.
+    pub async fn view_cores(&self) -> [([u8; 32], u64); 2] {
+        let system_core = {
+            let system = self.auto.system.lock().await;
+            (system.bee.key(), system.bee.length())
+        };
+        let view = self.auto.working_view.view();
+        [system_core, (view.key(), view.length())]
     }
 
     /// The channel's seedable core record, for HiveRelays.
@@ -767,10 +1017,6 @@ impl ChannelView for Arc<Channel> {
         Box::pin(async move { Channel::append(self, op).await })
     }
 
-    fn add_secondary_writer(&self, writer_hex: &str) {
-        self.writer_changed(writer_hex, true);
-    }
-
     fn mark_has_entries(&self) {
         Channel::mark_has_entries(self);
     }
@@ -823,15 +1069,101 @@ impl ChannelView for Channel {
         Box::pin(async move { Channel::append(self, op).await })
     }
 
-    fn add_secondary_writer(&self, writer_hex: &str) {
-        self.writer_changed(writer_hex, true);
-    }
-
     fn mark_has_entries(&self) {
         Channel::mark_has_entries(self);
     }
 
     fn sync_writer_cores(&self) -> SendFuture<'_, ()> {
         Box::pin(Channel::sync_writer_cores(self))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use autobee::types::Head;
+
+    fn landing(system: Option<[u8; 32]>, view: Option<[u8; 32]>) -> Changes {
+        let change = |key: Option<[u8; 32]>| {
+            key.map(|key| autobee::updates::Change {
+                flushes: 16,
+                from: None,
+                to: Some(Head {
+                    key: Some(key),
+                    length: 0,
+                }),
+                incremental: false,
+            })
+        };
+        Changes {
+            system: change(system),
+            view: change(view),
+        }
+    }
+
+    async fn wait_open(landings: &Arc<Landings>, expected: usize) {
+        for _ in 0..200 {
+            if landings.open_keys().len() == expected {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        panic!(
+            "expected {expected} open landed cores, have {:?}",
+            landings.open_keys()
+        );
+    }
+
+    /// `mirrorLanding`/`releaseLanding` (`channel.js`): a landing is held per channel, a new
+    /// landing supersedes the old cores, a hibernating channel keeps a landing only until it is
+    /// whole and reopens it on the next update, and an unfollowed one purges it.
+    #[tokio::test]
+    async fn landings_follow_the_owner_across_hibernate_and_unfollow() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Corestore::open(dir.path()).unwrap();
+        let landings = Landings::new(store, Arc::new(AtomicBool::new(false)));
+        let channel = "aa".repeat(32);
+        let (first, second, third) = ([1u8; 32], [2u8; 32], [3u8; 32]);
+
+        landings.mirror_landing(landing(Some(first), Some(second)), &channel);
+        wait_open(&landings, 2).await;
+        assert!(landings.open_keys().contains(&first));
+
+        // The same update again changes nothing.
+        landings.mirror_landing(landing(Some(first), Some(second)), &channel);
+        assert_eq!(landings.open_keys().len(), 2);
+
+        // A re-landing supersedes the old system core and keeps the view that did not move.
+        landings.mirror_landing(landing(Some(third), Some(second)), &channel);
+        wait_open(&landings, 2).await;
+        let open = landings.open_keys();
+        assert!(open.contains(&third) && open.contains(&second), "{open:?}");
+        assert!(!open.contains(&first), "the superseded core is closed");
+
+        // A hibernating channel keeps its landing only until it is whole; an empty core is whole
+        // at once, so it closes.
+        landings.release_landing(&channel, false).await;
+        wait_open(&landings, 0).await;
+
+        // An update on the woken channel reopens the recorded landing.
+        landings.mirror_landing(landing(None, None), &channel);
+        wait_open(&landings, 2).await;
+
+        // Another awake channel holding the same core keeps it open for this one.
+        let other = "bb".repeat(32);
+        landings.mirror_landing(landing(Some(third), None), &other);
+        wait_open(&landings, 2).await;
+        landings.release_landing(&channel, false).await;
+        wait_open(&landings, 1).await;
+        assert_eq!(
+            landings.open_keys(),
+            vec![third],
+            "held elsewhere stays open"
+        );
+
+        // Unfollowing closes and purges the landing outright.
+        landings.release_landing(&other, true).await;
+        wait_open(&landings, 0).await;
+        assert!(landings.open_keys().is_empty());
     }
 }

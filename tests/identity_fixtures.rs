@@ -306,15 +306,16 @@ fn identity_files_match_byte_for_byte() {
 #[test]
 fn rust_written_identity_files_load_in_js() {
     let generator = Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/gen/identity.mjs");
-    if !generator
-        .parent()
-        .expect("gen")
-        .join("node_modules")
-        .is_dir()
-    {
-        eprintln!("skipping: fixtures/gen/node_modules is missing");
+    let Some(app) = std::env::var_os("PEARTUBE_APP")
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            let sibling = Path::new(env!("CARGO_MANIFEST_DIR")).join("../peartube");
+            sibling.is_dir().then_some(sibling)
+        })
+    else {
+        eprintln!("skipping: set PEARTUBE_APP to the app checkout");
         return;
-    }
+    };
     let fixtures = fixtures();
     let root = temp_root().with_extension("js");
     let _ = fs::remove_dir_all(&root);
@@ -342,6 +343,7 @@ fn rust_written_identity_files_load_in_js() {
         .arg(&generator)
         .arg("verify")
         .arg(&request)
+        .env("PEARTUBE_APP", app)
         .output()
         .expect("node");
     assert!(

@@ -54,6 +54,7 @@ async fn network(storage: &std::path::Path, private_routing: bool) -> Arc<Networ
         None,
         None,
         private_routing,
+        false,
         Arc::new(AtomicBool::new(false)),
     )
     .await
@@ -68,7 +69,7 @@ async fn private_routing_announces_nothing_public_or_lan() {
     let blob = [9u8; 32];
 
     net.join_overlay_topic("channel:test", channel);
-    net.join_content(blob);
+    net.announce_content(blob);
     let lan = Arc::new(SpyLan::default());
     net.set_lan(Some(lan.clone())).await.expect("set lan");
 
@@ -114,7 +115,7 @@ async fn public_routing_still_joins_its_topics() {
     let lan = Arc::new(SpyLan::default());
     net.set_lan(Some(lan.clone())).await.expect("set lan");
     net.join_overlay_topic("channel:test", [7u8; 32]);
-    net.join_content([9u8; 32]);
+    net.announce_content([9u8; 32]);
 
     assert_eq!(net.overlay_topic_count(), 1);
     assert_eq!(net.content_topics().len(), 1);

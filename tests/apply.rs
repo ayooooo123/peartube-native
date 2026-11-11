@@ -1,7 +1,7 @@
 //! Replays `fixtures/apply-reference.json`: `fixtures/gen/apply.mjs` drives the app's own apply.js
-//! through a stub view/host that records put/del/flush, addWriter/removeWriter and onWriterChange.
-//! Every scenario runs here against the Rust handler on a real hyperbee, and both the recorded host
-//! calls and the bytes that landed in the view must match.
+//! through a stub view/host that records put/del/flush and addWriter/removeWriter. Every scenario
+//! runs here against the Rust handler on a real hyperbee, and both the recorded host calls and the
+//! bytes that landed in the view must match.
 
 use std::sync::{Arc, Mutex};
 
@@ -196,17 +196,7 @@ async fn apply_fixtures() {
             .iter()
             .map(node_of)
             .collect();
-        let calls = recorder.calls.clone();
-        let mut handler = Apply::new(&channel);
-        {
-            let calls = calls.clone();
-            handler = handler.on_writer_change(Arc::new(move |writer: &str, added: bool| {
-                calls
-                    .lock()
-                    .unwrap()
-                    .push(json!({ "t": "writerChange", "writer": writer, "added": added }));
-            }));
-        }
+        let handler = Apply::new(&channel);
         let host = ApplyCalls::new(&recorder, Some(&nodes));
         handler
             .apply(&nodes, &bee, &host)
@@ -281,6 +271,10 @@ async fn is_trusted_fixtures() {
 
 #[tokio::test]
 async fn update_fixtures() {
+    // `update(view, changes)` now hands the whole change set to the channel's landing manager
+    // (`channel.rs::Landings`), then bumps the node once. The landing decisions themselves are
+    // covered by `landings_follow_the_owner_across_hibernate_and_unfollow` in channel.rs; here
+    // the fixture's steps prove every change set reaches the channel unaltered.
     let fixtures = fixture();
     let channel = fixtures["channel"].as_str().unwrap().to_string();
     let dir = tempfile::tempdir().unwrap();
@@ -288,18 +282,11 @@ async fn update_fixtures() {
     for scenario in fixtures["update"].as_array().unwrap() {
         let name = scenario["name"].as_str().unwrap();
         let calls = Arc::new(Mutex::new(Vec::new()));
-        let landed = Arc::new(Mutex::new(Vec::new()));
+        let forwarded = Arc::new(Mutex::new(Vec::new()));
         let mirror = Mirror::new(
             {
-                let calls = calls.clone();
-                let landed = landed.clone();
-                Arc::new(move |key: Key| {
-                    landed.lock().unwrap().push(hex(&key));
-                    calls
-                        .lock()
-                        .unwrap()
-                        .push(json!({ "t": "mirror", "key": hex(&key) }));
-                })
+                let forwarded = forwarded.clone();
+                Arc::new(move |changes: Changes| forwarded.lock().unwrap().push(changes))
             },
             {
                 let calls = calls.clone();
@@ -307,17 +294,20 @@ async fn update_fixtures() {
             },
         );
         let handler = Apply::new(&channel).with_mirror(mirror);
+        let mut expected = Vec::new();
         for step in scenario["steps"].as_array().unwrap() {
             let changes = Changes {
                 view: change_of(&step["view"]),
                 system: change_of(&step["system"]),
             };
+            expected.push(changes);
             handler.update(&bee, &changes).await;
         }
+        assert_eq!(*forwarded.lock().unwrap(), expected, "{name}");
         assert_eq!(
-            calls.lock().unwrap().clone(),
-            scenario["calls"].as_array().unwrap().clone(),
-            "{name}"
+            calls.lock().unwrap().len(),
+            expected.len(),
+            "{name}: one update per change set"
         );
     }
 }

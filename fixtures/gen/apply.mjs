@@ -1,15 +1,14 @@
-// Generates ../apply-reference.json from the app's own apply.js copy in this folder, driven through a stub
-// view/host that records put/del/flush, addWriter/removeWriter and onWriterChange. `node apply.mjs` writes the
+// Generates apply-reference.json from the app's own src/apply.js, driven through a stub
+// view/host that records put/del/flush and addWriter/removeWriter. `node apply.mjs` writes the
 // reference; tests/apply.rs replays every case against the Rust handler and compares the two call sequences.
 import { createHash } from 'node:crypto'
 import { writeFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
-import { fileURLToPath } from 'node:url'
-import b4a from 'b4a'
-import { makeApply, makeIsTrusted } from './apply.js'
-import { deriveIdentity, entropyToMnemonic } from './mnemonic.js'
+import { appRequire, load, outFile } from './app.mjs'
 
-const here = dirname(fileURLToPath(import.meta.url))
+const b4a = appRequire('b4a')
+const { makeApply, makeIsTrusted } = await load('src/apply.js')
+const { deriveIdentity, entropyToMnemonic } = await load('src/mnemonic.js')
+
 const hex = b => b4a.toString(b, 'hex')
 const sha = (...parts) => {
   const h = createHash('sha256')
@@ -91,10 +90,7 @@ async function runApply (scenario) {
       calls.push({ t: 'removeWriter', key: hex(key) })
     }
   }
-  const apply = makeApply(
-    () => CHANNEL,
-    (writer, added) => calls.push({ t: 'writerChange', writer, added })
-  )
+  const apply = makeApply(() => CHANNEL)
   const nodes = scenario.nodes.map(n => ({ key: b4a.from(n.key, 'hex'), value: b4a.from(n.value, 'hex') }))
   await apply(nodes, view, host)
   const out = [...view.map]
@@ -382,5 +378,5 @@ const fixture = {
   isTrusted: await Promise.all(trustedScenarios.map(isTrusted)),
   update: updateScenarios.map(runUpdates)
 }
-writeFileSync(join(here, '..', 'apply-reference.json'), `${JSON.stringify(fixture, null, 1)}\n`)
+writeFileSync(outFile('apply-reference.json'), `${JSON.stringify(fixture, null, 1)}\n`)
 console.log(`ok: ${fixture.apply.length} apply, ${fixture.isTrusted.length} isTrusted, ${fixture.update.length} update scenarios`)

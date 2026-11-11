@@ -1,6 +1,8 @@
-// Cross-check: unwraps boxes produced by the Rust `wrap_video_key` with the JS reference.
+// Cross-check: unwraps boxes produced by the Rust `wrap_video_key` with the app's own src/mnemonic.js.
 import { readFileSync } from 'node:fs'
-import { unwrapVideoKey } from './mnemonic.js'
+import { load } from './app.mjs'
+
+const { unwrapVideoKey } = await load('src/mnemonic.js')
 
 const file = process.argv[2]
 if (!file) throw new Error('usage: node verify-rust.mjs <cases.json>')

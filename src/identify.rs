@@ -537,17 +537,23 @@ fn disposition_star(disposition: &str) -> Option<String> {
     (!value[..end].is_empty()).then(|| value[..end].to_owned())
 }
 
-/// `filename="…"` from a content disposition.
-fn disposition_quoted(disposition: &str) -> Option<String> {
-    let start = find_ci(disposition, "filename=\"")? + "filename=\"".len();
+/// `filename="…"` or the bare token many CDNs send (`filename=film.mkv`) from a content disposition.
+fn disposition_name(disposition: &str) -> Option<String> {
+    let start = find_ci(disposition, "filename=")? + "filename=".len();
     let value = disposition.get(start..)?;
-    let end = value.find('"')?;
-    (!value[..end].is_empty()).then(|| value[..end].to_owned())
+    if let Some(quoted) = value.strip_prefix('"') {
+        let end = quoted.find('"')?;
+        return (!quoted[..end].is_empty()).then(|| quoted[..end].to_owned());
+    }
+    let end = value.find(';').unwrap_or(value.len());
+    let token = value[..end].trim();
+    (!token.is_empty()).then(|| token.to_owned())
 }
 
 /// `fileName`: the media name a reply carries, preferring the query, then the disposition, then the path.
 ///
-/// A bad link and a malformed escape are errors, exactly as in the app.
+/// A bad link is an error; a path whose escapes are malformed keeps its raw segment, as `decodeURIComponent`
+/// is only a convenience there — an opaque id like `/dl/100%` is still a link worth identifying.
 pub fn file_name(raw: &str, headers: &[(String, String)]) -> Result<String, IdentifyError> {
     let url = Url::parse(raw).map_err(|_| IdentifyError::new("Invalid URL"))?;
     let disposition = header_of(headers, "content-disposition").unwrap_or("");
@@ -557,9 +563,8 @@ pub fn file_name(raw: &str, headers: &[(String, String)]) -> Result<String, Iden
         .find(|(key, _)| key == "filename")
         .map(|(_, value)| value.into_owned());
     let path = url.path().rsplit('/').next().unwrap_or("");
-    let from_path =
-        decode_uri_component(path).ok_or_else(|| IdentifyError::new("URI malformed"))?;
-    Ok([from_query, named, disposition_quoted(disposition)]
+    let from_path = decode_uri_component(path).unwrap_or_else(|| path.to_owned());
+    Ok([from_query, named, disposition_name(disposition)]
         .into_iter()
         .flatten()
         .find(|name| crate::protocol::is_media_file(name))
