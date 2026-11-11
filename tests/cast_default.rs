@@ -458,7 +458,7 @@ fn default_backends_cast_a_local_blob_over_lan() {
 fn app_dir() -> PathBuf {
     std::env::var("PEARTUBE_APP")
         .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../peartube"))
+        .unwrap_or_else(|_| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../peartube"))
 }
 
 fn has_app() -> bool {

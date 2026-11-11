@@ -1643,7 +1643,7 @@ mod interop {
             return true;
         }
         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../peartube/src/private-overlay.js")
+            .join("../peartube/src/private-overlay.js")
             .exists()
     }
 

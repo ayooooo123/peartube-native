@@ -210,6 +210,16 @@ fn settings_files_match_byte_for_byte() {
 #[test]
 #[ignore = "needs node and `npm install` in fixtures/gen"]
 fn rust_written_settings_load_in_js() {
+    let Some(app) = std::env::var_os("PEARTUBE_APP")
+        .map(PathBuf::from)
+        .or_else(|| {
+            let sibling = Path::new(env!("CARGO_MANIFEST_DIR")).join("../peartube");
+            sibling.is_dir().then_some(sibling)
+        })
+    else {
+        eprintln!("skipping: set PEARTUBE_APP to the app checkout");
+        return;
+    };
     let (root, entries) = rust_written_cases(&fixtures());
     let request = root.join("cases.json");
     fs::write(&request, serde_json::to_string(&entries).expect("json")).expect("cases.json");
@@ -220,6 +230,7 @@ fn rust_written_settings_load_in_js() {
         ))
         .arg("verify")
         .arg(&request)
+        .env("PEARTUBE_APP", app)
         .output()
         .expect("node");
     assert!(

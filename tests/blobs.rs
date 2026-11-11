@@ -968,7 +968,10 @@ async fn http_stream_survives_cache_ceiling() {
         .env(
             "PEARTUBE_APP",
             std::env::var("PEARTUBE_APP").unwrap_or_else(|_| {
-                format!("{}/projects/peartube", std::env::var("HOME").unwrap())
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("../peartube")
+                    .to_string_lossy()
+                    .into_owned()
             }),
         )
         .env("HOME", dir.path())

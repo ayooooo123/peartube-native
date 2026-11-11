@@ -1,13 +1,12 @@
-// Generates ../identity-reference.json from the app's own identity.js/mnemonic.js copies in this folder.
+// Generates identity-reference.json from the app's own src/node/identity.js and src/mnemonic.js.
 // `node identity.mjs verify <cases.json>` loads identity.json files the Rust side wrote and checks their views.
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { fileURLToPath } from 'node:url'
-import { createIdentity } from './identity.js'
-import { deriveIdentity } from './mnemonic.js'
+import { load, outFile } from './app.mjs'
 
-const here = dirname(fileURLToPath(import.meta.url))
+const { createIdentity } = await load('src/node/identity.js')
+const { deriveIdentity } = await load('src/mnemonic.js')
 
 // The slice of ctx.channel identity.js reads, with the appended ops recorded.
 function channelOf (config = {}) {
@@ -536,6 +535,6 @@ await fileCase('identity before and after a save', {
 })
 
 const fixture = { identityFiles: files }
-writeFileSync(join(here, '..', 'identity-reference.json'), JSON.stringify(fixture, null, 2) + '\n')
-console.log('wrote identity-reference.json')
+writeFileSync(outFile('identity-reference.json'), JSON.stringify(fixture, null, 2) + '\n')
+console.log(`wrote ${outFile('identity-reference.json')}`)
 console.log(` identityFiles: ${files.length}`)

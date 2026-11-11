@@ -7,7 +7,7 @@
 //! (c) two Rust nodes
 //! (d) the `lan.js` rules the port has to keep: token gating, smaller-key-dials-first, redial
 //!
-//! Needs `node` and the app checkout (`PEARTUBE_APP`, else `~/projects/peartube`) with its modules;
+//! Needs `node` and the app checkout (`PEARTUBE_APP`, else the sibling `../peartube`) with its modules;
 //! `#[ignore]` so a plain `cargo test` stays offline. Real mDNS on this machine's LAN interface is
 //! used; when the machine has no private Wi-Fi/Ethernet address the tests say so and skip.
 
@@ -36,8 +36,10 @@ const WAIT: Duration = Duration::from_secs(180);
 
 fn app_dir() -> String {
     std::env::var("PEARTUBE_APP").unwrap_or_else(|_| {
-        let home = std::env::var("HOME").unwrap_or_default();
-        format!("{home}/projects/peartube")
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../peartube")
+            .to_string_lossy()
+            .into_owned()
     })
 }
 

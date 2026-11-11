@@ -69,8 +69,13 @@ each connection once, and per-route rates retain independent sampling state.
 ## Evidence
 
 The fixture tests replay outputs generated from app code; interop tests run the
-real JS and Rust sides together. Tests using fakes are identified below rather
-than presented as live network parity.
+real JS and Rust sides together. Both are tied to one app commit, the hash in
+[`JS_REF`](JS_REF): `fixtures/gen/*.mjs` import the app's own modules from that
+checkout (no local copies) and write the committed references, and CI regenerates
+them with `node fixtures/gen/check.mjs`, which fails when a committed reference is
+not what `JS_REF` produces. `PARITY.md` maps every app module to its Rust
+counterpart, its status and the app commit last absorbed. Tests using fakes are
+identified below rather than presented as live network parity.
 
 - `tests/js_fixtures.rs`: protocol and mnemonic reference vectors, including JS opening Rust-wrapped keys.
 - `tests/identity_fixtures.rs`, `tests/settings_fixtures.rs`: JS identity and settings results, file bytes and modes; JS reads Rust-written files.
@@ -140,24 +145,29 @@ Seeks fetch discarded blocks again. The TV app currently has no
 
 Rust 1.90 or newer, Node.js and npm are required. Clone the sibling path
 dependencies listed in `Cargo.toml` and their transitive dependencies alongside
-this repository; CI lists the required repositories. Install both JS dependency
-sets before running JS-backed tests:
+this repository; CI lists the required repositories. The app is the reference for
+every JS-backed test: check out the PearTube app at the commit in [`JS_REF`](JS_REF)
+and install its dependencies (`npm ci` in that checkout). `PEARTUBE_APP` names
+that checkout; without it the tests use the sibling `../peartube`. Fixture
+generators read the app's own modules, so `fixtures/gen` has no copies and no
+dependencies of its own; the interop harnesses need `tests/js` dependencies:
 
 ```sh
-(cd fixtures/gen && npm install)
 (cd tests/js && npm install)
-cargo test --workspace -- --include-ignored
+export PEARTUBE_APP=$PWD/../peartube   # the checkout at JS_REF
+(cd fixtures/gen && node check.mjs)    # committed references vs that checkout
+cargo test --workspace -- --include-ignored --test-threads=1
 ```
 
-Some ignored interop tests also need a PearTube app checkout with its npm
-dependencies installed. Set `PEARTUBE_APP` to that checkout; tests may report a
-skip when prerequisites are absent. LAN tests require working multicast and a
-usable interface. The mixed network slices are run individually with
+`node fixtures/gen/check.mjs` exits 1 when a committed `fixtures/*-reference.json`
+is not what the app at `JS_REF` produces. It reports every reference that differs;
+a reference is regenerated only together with the Rust port that catches up (see
+[PARITY.md](PARITY.md), "How to bump JS_REF"). Tests may report a skip when a
+prerequisite is absent. LAN tests require working multicast and a usable
+interface. The mixed network slices are run individually with
 `-- --include-ignored --test-threads=1`; slice A documents a `PEARTUBE_ACQUIRE`
 copy needed for the app's announcing-job restart bug. See
 [docs/node-api.md](docs/node-api.md) and the test sources for the harnesses.
-Fixtures are committed; regenerate the protocol/mnemonic reference with
-`(cd fixtures/gen && npm run gen)` when changing its reference inputs.
 
 `tests/blobs.rs::http_stream_survives_cache_ceiling` uses a real loopback JS
 Corestore seeder, incompressible blocks, HTTP Range playback and disk reclamation;

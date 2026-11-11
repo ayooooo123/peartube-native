@@ -149,6 +149,16 @@ fn rust_wrapping_opens_in_js() {
         eprintln!("skipped: run `npm install` in fixtures/gen to enable the JS cross-check");
         return;
     }
+    let Some(app) = std::env::var_os("PEARTUBE_APP")
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            let sibling = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../peartube");
+            sibling.is_dir().then_some(sibling)
+        })
+    else {
+        eprintln!("skipped: set PEARTUBE_APP to the app checkout");
+        return;
+    };
     let cases = fixtures();
     let mut rust_wraps = Vec::new();
     for case in arr(&cases, "wrapped") {
@@ -169,6 +179,7 @@ fn rust_wrapping_opens_in_js() {
     let status = Command::new("node")
         .arg(script)
         .arg(&path)
+        .env("PEARTUBE_APP", app)
         .status()
         .expect("node must be installed");
     let _ = std::fs::remove_file(&path);

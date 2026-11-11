@@ -1,22 +1,23 @@
-// Runs the app's own `src/acquire.js` (copied verbatim to fixtures/gen/acquire.js) against a scripted node,
+// Runs the app's own `src/acquire.js` (PEARTUBE_APP, else the sibling `../peartube`) against a scripted node,
 // in-memory fs, scripted HTTP sources and a fake `ubit`. Prints one JSON trace that tests/acquire_mirror.rs
 // must reproduce with the Rust port.
 //
-// The copy is loaded through import rewriting: every module it reaches (fs, crypto, http, b4a, streamx,
+// The module is loaded through import rewriting: every module it reaches (fs, crypto, http, b4a, streamx,
 // identify) is swapped for a stub beside this file; node:path stays real.
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import { dirname, join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import * as fsStub from './acquire-mirror-stubs.mjs'
 import * as cryptoStub from './acquire-mirror-crypto.mjs'
 import * as httpStub from './acquire-mirror-http.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
+const APP = process.env.PEARTUBE_APP || resolve(here, '../../../peartube')
 const gen = join(here, '.gen')
 mkdirSync(gen, { recursive: true })
 
-const source = readFileSync(join(here, '..', '..', 'fixtures', 'gen', 'acquire.js'), 'utf8')
+const source = readFileSync(join(APP, 'src/acquire.js'), 'utf8')
 const stub = name => `"${pathToFileURL(join(here, name)).href}"`
 const rewrites = {
   "'node:fs'": stub('acquire-mirror-stubs.mjs'),

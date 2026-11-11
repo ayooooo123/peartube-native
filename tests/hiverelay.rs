@@ -20,6 +20,16 @@ fn fixtures() -> Value {
 fn bytes(s: &Value) -> Vec<u8> {
     hex_decode(s.as_str().unwrap()).unwrap()
 }
+
+/// The app checkout the generator reads: `PEARTUBE_APP`, else this repository's sibling `../peartube`.
+fn app_checkout() -> Option<std::path::PathBuf> {
+    std::env::var_os("PEARTUBE_APP")
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            let sibling = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../peartube");
+            sibling.is_dir().then_some(sibling)
+        })
+}
 #[test]
 fn js_vectors() {
     let f = fixtures();
@@ -127,13 +137,20 @@ fn js_vectors() {
         request.publisher_signature.as_slice(),
         bytes(&f["signature"])
     );
-    let status = Command::new("node")
-        .arg("hiverelay.mjs")
-        .arg("--verify")
-        .arg(hex_encode(&request.encode()))
-        .current_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/fixtures/gen"))
-        .status()
-        .unwrap();
+    let status = match app_checkout() {
+        Some(app) => Command::new("node")
+            .arg("hiverelay.mjs")
+            .arg("--verify")
+            .arg(hex_encode(&request.encode()))
+            .current_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/fixtures/gen"))
+            .env("PEARTUBE_APP", app)
+            .status()
+            .unwrap(),
+        None => {
+            eprintln!("skipped: set PEARTUBE_APP to the app checkout to verify the signature in JS");
+            return;
+        }
+    };
     assert!(status.success());
     request.app_key[0] ^= 1;
     assert!(!request.verify());
@@ -176,10 +193,15 @@ async fn node_secret_stream_interop() {
     use std::io::{BufRead, BufReader};
     use std::process::Stdio;
     use std::time::Duration;
+    let Some(app) = app_checkout() else {
+        eprintln!("skipped: set PEARTUBE_APP to the app checkout");
+        return;
+    };
     let mut child = Command::new("node")
         .arg("hiverelay.mjs")
         .arg("--peer")
         .current_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/fixtures/gen"))
+        .env("PEARTUBE_APP", app)
         .stdout(Stdio::piped())
         .spawn()
         .unwrap();

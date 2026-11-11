@@ -465,7 +465,7 @@ fn has_app() -> bool {
         return true;
     }
     Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../peartube/src/cast.js")
+        .join("../peartube/src/cast.js")
         .exists()
 }
 

@@ -1,9 +1,9 @@
 //! The Rust acquirer and mirror host must reproduce the app's own calls and JSON for the same scripted sources.
 //!
 //! The oracles are `tests/js/acquire-mirror-acquire.mjs` and `tests/js/acquire-mirror-mirror.mjs`, which run the
-//! copied app modules (`fixtures/gen/acquire.js`, `fixtures/gen/mirror.js`) against a scripted node, an in-memory
-//! filesystem, scripted HTTP feeds and a fake `ubit`. Here the same scenarios drive fake implementations of every
-//! seam; the two traces are compared as JSON.
+//! app's own `src/acquire.js` and `src/mirror.js` (from `PEARTUBE_APP`, else the sibling `../peartube`) against a
+//! scripted node, an in-memory filesystem, scripted HTTP feeds and a fake `ubit`. Here the same scenarios drive fake
+//! implementations of every seam; the two traces are compared as JSON.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::io;

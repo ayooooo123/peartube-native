@@ -1,4 +1,4 @@
-// Stand-ins for the mirror host's neighbours so the copied `mirror.js` can run headless: no HiveRelay seeder,
+// Stand-ins for the mirror host's neighbours so the app's `mirror.js` can run headless: no HiveRelay seeder,
 // no traffic gate, and a feed fetcher that reads its reply from a scripted plan.
 export function createHiverelaySeeder () {
   return {

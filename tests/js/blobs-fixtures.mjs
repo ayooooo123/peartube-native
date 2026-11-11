@@ -15,7 +15,7 @@ import { tmpdir } from 'node:os'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const here = fileURLToPath(new URL('.', import.meta.url))
-const APP = process.env.PEARTUBE_APP || resolve(here, '../../../../peartube')
+const APP = process.env.PEARTUBE_APP || resolve(here, '../../../peartube')
 const require = createRequire(join(APP, 'package.json'))
 const Corestore = require('corestore')
 const b4a = require('b4a')
@@ -62,6 +62,10 @@ function makeCtx ({ dir, store, ops, epochKey = true }) {
     net: {
       joinContentSwarm () {},
       leaveContentSwarm () {},
+      // The node announces, wants and leaves only what it publishes; the recorded values are the ops and blocks.
+      announceContent () {},
+      wantContent () {},
+      leaveContent () {},
       inflightRange: () => [256, 512],
       downBps: 0,
       upBps: 0

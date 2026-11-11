@@ -1,4 +1,4 @@
-// Generates ../art-identify-reference.json from the app's own art.js/identify.js copies in this folder.
+// Generates art-identify-reference.json from the app's own src/art.js and src/identify.js.
 // `node art-identify.mjs` writes the reference; the Rust port replays every case against the same routes,
 // subprocess plans and recorded subprocess output in tests/art_identify.rs.
 import { chmodSync, copyFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
@@ -6,10 +6,12 @@ import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { send, metaFor, posterUrl, backdropUrl } from './art.js'
-import {
+import { load, outFile } from './app.mjs'
+
+const { send, metaFor, posterUrl, backdropUrl } = await load('src/art.js')
+const {
   parseName, fileName, cinemetaSearch, candidateEntry, identify, probe, ubitInfo, downloadPage, norm, strong
-} from './identify.js'
+} = await load('src/identify.js')
 
 const here = dirname(fileURLToPath(import.meta.url))
 const fakeUbit = join(here, 'fake-ubit.mjs')
@@ -87,7 +89,7 @@ const fill = (value, base) => JSON.parse(JSON.stringify(value).split('{BASE}').j
 // The port is different on every run, so recorded values keep a {BASE} placeholder.
 const template = (value, base) => JSON.parse(JSON.stringify(value).split(base).join('{BASE}'))
 
-const fixture = { source: 'fixtures/gen/art-identify.mjs from src/art.js and src/identify.js' }
+const fixture = { source: 'fixtures/gen/art-identify.mjs from the PEARTUBE_APP checkout' }
 
 // --- parseName ---
 fixture.parseName = [
@@ -614,5 +616,5 @@ for (const test of identifyCases) {
   await server.close()
 }
 
-writeFileSync(join(here, '..', 'art-identify-reference.json'), `${JSON.stringify(fixture, null, 2)}\n`)
-console.log('wrote fixtures/art-identify-reference.json')
+writeFileSync(outFile('art-identify-reference.json'), `${JSON.stringify(fixture, null, 2)}\n`)
+console.log(`wrote ${outFile('art-identify-reference.json')}`)

@@ -1,6 +1,8 @@
-import { readFile, writeFile } from 'node:fs/promises'
-const source = await readFile(new URL('./resolution.js', import.meta.url), 'utf8')
-const { videoSize, resolutionLabel } = await import('data:text/javascript;base64,' + Buffer.from(source).toString('base64'))
+// Generates resolution-reference.json from the app's own src/resolution.js.
+import { writeFileSync } from 'node:fs'
+import { load, outFile } from './app.mjs'
+
+const { videoSize, resolutionLabel } = await load('src/resolution.js')
 const box = (type, data) => { const h = Buffer.alloc(8); h.writeUInt32BE(data.length + 8); h.write(type, 4); return Buffer.concat([h, data]) }
 const tkhd = Buffer.alloc(84); tkhd.writeUInt32BE(1920 * 65536, 76); tkhd.writeUInt32BE(800 * 65536, 80)
 const handler = Buffer.alloc(12); handler.write('vide', 8)
@@ -30,4 +32,5 @@ const media = []
 for (const [name, data] of Object.entries(cases)) media.push({ name, hex: data.toString('hex'), expected: await videoSize(async (start, end) => data.subarray(start, end + 1)) })
 const labels = []
 for (const [width, height] of [[0,0],[639,479],[640,1],[1,480],[1199,699],[1200,1],[1,700],[1799,999],[1800,1],[1,1000],[3199,1999],[3200,1],[1,2000],[1920,800]]) labels.push({ width, height, expected: resolutionLabel({ width, height }) })
-await writeFile(new URL('../resolution-reference.json', import.meta.url), JSON.stringify({ media, labels }, null, 2) + '\n')
+writeFileSync(outFile('resolution-reference.json'), JSON.stringify({ media, labels }, null, 2) + '\n')
+console.log(`wrote ${outFile('resolution-reference.json')}`)

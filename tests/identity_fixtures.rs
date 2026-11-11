@@ -315,6 +315,16 @@ fn rust_written_identity_files_load_in_js() {
         eprintln!("skipping: fixtures/gen/node_modules is missing");
         return;
     }
+    let Some(app) = std::env::var_os("PEARTUBE_APP")
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            let sibling = Path::new(env!("CARGO_MANIFEST_DIR")).join("../peartube");
+            sibling.is_dir().then_some(sibling)
+        })
+    else {
+        eprintln!("skipping: set PEARTUBE_APP to the app checkout");
+        return;
+    };
     let fixtures = fixtures();
     let root = temp_root().with_extension("js");
     let _ = fs::remove_dir_all(&root);
@@ -342,6 +352,7 @@ fn rust_written_identity_files_load_in_js() {
         .arg(&generator)
         .arg("verify")
         .arg(&request)
+        .env("PEARTUBE_APP", app)
         .output()
         .expect("node");
     assert!(

@@ -1,12 +1,10 @@
-// Generates ../http-reference.json by running the app's own API server.
-// Source: PearTube src/http.js (sibling checkout, `PEARTUBE_JS_DIR` to override), driven with the
-// stub node and extensions below. Run: node http.mjs
+// Generates http-reference.json by running the app's own API server (PEARTUBE_APP, else the sibling
+// `../peartube`), driven with the stub node and extensions below. Run: node http.mjs
 import { createServer, request } from 'node:http'
 import { writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { load, outFile } from './app.mjs'
 
-const appDir = process.env.PEARTUBE_JS_DIR || join(import.meta.dirname, '../../../../peartube')
-const { createApi } = await import(join(appDir, 'src/http.js'))
+const { createApi } = await load('src/http.js')
 
 const HOST = 'relay.test:8174'
 const STREAM = 'http://127.0.0.1:9/?key=aaa&blob=bbb&type=video%2Fmp4'
@@ -270,5 +268,5 @@ const reference = { host: HOST, scenarios: [] }
 for (const [name, requests] of Object.entries(scenarios)) {
   reference.scenarios.push({ name, responses: await run(states[name], requests) })
 }
-writeFileSync(join(import.meta.dirname, '../http-reference.json'), JSON.stringify(reference, null, 2) + '\n')
-console.log(`wrote ${reference.scenarios.length} scenarios`)
+writeFileSync(outFile('http-reference.json'), JSON.stringify(reference, null, 2) + '\n')
+console.log(`wrote ${outFile('http-reference.json')} (${reference.scenarios.length} scenarios)`)

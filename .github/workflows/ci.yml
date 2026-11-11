@@ -5,6 +5,10 @@ on:
     branches: [main]
   pull_request:
 
+# The app commit in JS_REF is the reference for every fixture and every ignored interop test.
+env:
+  PEARTUBE_APP: ${{ github.workspace }}/peartube
+
 jobs:
   rust:
     strategy:
@@ -18,6 +22,13 @@ jobs:
       - uses: actions/checkout@v4
         with:
           path: peartube-native
+      - id: jsref
+        run: echo "ref=$(cat JS_REF)" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/peartube
+          ref: ${{ steps.jsref.outputs.ref }}
+          path: peartube
       - uses: actions/checkout@v4
         with:
           repository: ${{ github.repository_owner }}/compact-encoding-rs
@@ -76,8 +87,15 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - run: for d in tests/js fixtures/gen; do [ -f $d/package.json ] && (cd $d && npm ci); done; true
+      # The app imports its own bare/holepunch libraries, so its checkout needs its dependencies.
+      - run: npm ci --no-audit --no-fund
+        working-directory: peartube
+      # The interop harnesses import Protomux, compact-encoding and Bonjour themselves.
+      - run: npm ci --no-audit --no-fund
+        working-directory: peartube-native/tests/js
+      # Fails when a committed reference is not what the app at JS_REF produces.
+      - run: node fixtures/gen/check.mjs
       - run: cargo fmt --check -p peartube-native -p peartube-native-ffi
       - run: cargo clippy --workspace --all-targets -- -D warnings
-      # Ignored tests drive the PearTube app's own JS, which CI doesn't check out.
-      - run: cargo test --workspace
+      # The ignored tests drive the app's own JS: they run here, against the JS_REF checkout.
+      - run: cargo test --workspace -- --include-ignored --test-threads=1

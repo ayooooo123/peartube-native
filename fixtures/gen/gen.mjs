@@ -1,12 +1,12 @@
-// Generates ../js-reference.json from the app's own protocol.js/mnemonic.js copies in this folder.
+// Generates js-reference.json from the app's own src/protocol.js and src/mnemonic.js.
 import { createHash } from 'node:crypto'
-import { writeFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
-import { fileURLToPath } from 'node:url'
-import * as protocol from './protocol.js'
-import * as mnemonic from './mnemonic.js'
+import { readFileSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { APP, JS_REF, load, outFile } from './app.mjs'
 
-const here = dirname(fileURLToPath(import.meta.url))
+const protocol = await load('src/protocol.js')
+const mnemonic = await load('src/mnemonic.js')
+
 const hex = b => Buffer.from(b).toString('hex')
 const sha = (...parts) => {
   const h = createHash('sha256')
@@ -420,13 +420,16 @@ const mediaFile = ['film.mp4', 'FILM.MKV', 'song.flac', 'notes.txt', 'noext', 'a
   name => ({ name, value: isMedia(name) })
 )
 
+const appDeps = JSON.parse(readFileSync(join(APP, 'package.json'), 'utf8')).dependencies
+
 const fixtures = {
   meta: {
-    source: 'fixtures/gen (copied from the PearTube app)',
+    source: 'fixtures/gen/gen.mjs from the PEARTUBE_APP checkout',
+    commit: JS_REF,
     node: process.version,
-    hypercore: '11.40.3',
-    hypercoreCrypto: '3.7.0',
-    sodiumNative: '5.1.0'
+    hypercore: appDeps.hypercore,
+    hypercoreCrypto: appDeps['hypercore-crypto'],
+    sodiumNative: appDeps['sodium-native']
   },
   identities,
   claims,
@@ -446,8 +449,8 @@ const fixtures = {
   mediaFile
 }
 
-writeFileSync(join(here, '..', 'js-reference.json'), JSON.stringify(fixtures, null, 2) + '\n')
-console.log('wrote js-reference.json')
+writeFileSync(outFile('js-reference.json'), JSON.stringify(fixtures, null, 2) + '\n')
+console.log(`wrote ${outFile('js-reference.json')}`)
 for (const [key, value] of Object.entries(fixtures)) {
   if (Array.isArray(value)) console.log(` ${key}: ${value.length}`)
 }

@@ -12,7 +12,7 @@ import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 
 const here = fileURLToPath(new URL('.', import.meta.url))
-const APP = process.env.PEARTUBE_APP || resolve(here, '../../../../peartube')
+const APP = process.env.PEARTUBE_APP || resolve(here, '../../../peartube')
 const CAST_SRC = readFileSync(join(APP, 'src/cast.js'), 'utf8')
 
 const cast = await import(join(APP, 'src/cast.js'))
