@@ -21,12 +21,20 @@ relay UI, the API and video (`/v1/blob`; the node's blob server stays on loopbac
 (the `channel` setting) is the channel it serves; a pre-channel `settings.json` has its `tracker`
 moved to `channel` and its `streamHost`/`streamPort` dropped at start. HTTPS runs on
 `PEARTUBE_HTTPS_PORT` when `tls.crt`/`tls.key` exist. The acquirer comes with the
-`http-acquire`, `channel-backfill`, `blob-rechunk`, `watch-dir`, `feed-mirror` and
-`p2p-replicate` plugins (`replicate`, over the `traffic` gate's `peartube/bulk-busy`).
+`http-acquire`, `channel-backfill`, `blob-rechunk`, `watch-dir`, `feed-mirror`,
+`p2p-replicate` and `hiverelay-seed` plugins. `p2p-replicate` and `hiverelay-seed`
+share one `traffic` gate (`peartube/bulk-busy`, `hiverelayUploadMbps`). `hiverelay-seed`
+recruits existing HiveRelays for this relay's own cores: `POST /seed-core` on the
+`hiverelays` list (`=TOKEN` per relay, `hiverelayApiKey` as its default), and the
+zero-key `hiverelay-discovery-v1` DHT (`hiverelayDiscover`, `PEARTUBE_HIVERELAY=1`)
+with a wire-exact 2-core Hyperdrive v11/v13 beacon and signed
+`hiverelay.seed-request.v3` requests over the `hiverelay-seed` Protomux channel
+(`hiverelayReplicas`, 30-day TTL, `replicate` also offers cached copies).
 The `privateGuard` setting runs the guard forwarder in-process on its own HyperDHT and port
-(JS spawns `bin/private-relay.js`). Not yet ported: the `hiverelay-seed` plugin (so
-`PEARTUBE_HIVERELAY_UPLOAD_MBPS` caps nothing), standalone guard mode (`PEARTUBE_PRIVATE_RELAY`),
-cast routes, and JS plugins from `<storage>/plugins`. `status.lan` also carries the LAN `publicKey`. The UI and web player
+(JS spawns `bin/private-relay.js`); `PEARTUBE_PRIVATE_RELAY` (or
+`PEARTUBE_PRIVATE_RELAY_PORT`) makes the same binary the standalone Corestore-free guard
+of `bin/private-relay.js`: no storage folder, no Corestore, and channel or content flags
+are refused. `status.lan` reports `{host, port}`, as JS does. The UI and web player
 come from `PEARTUBE_WEB_DIR` (default: `web/` beside the binary). `relay.Dockerfile`
 builds the image from this stack and the app's `src/ui.js` and `web/assets`.
 
@@ -41,7 +49,7 @@ Paths on the right are in the PearTube app unless otherwise stated.
 | `acquire`, `mirror` | `src/acquire.js`, `src/mirror.js`: acquisition jobs and mirror plugins |
 | `cast` | `src/cast.js`, `src/cast-ui.js`: controller, receiver, pairing and media serving |
 | `lan` | `src/lan.js`: mDNS and isolated LAN DHT; worker host Bonjour events and interface selection |
-| `hiverelay`, `traffic`, `private_overlay` | `src/hiverelay.js`, `src/traffic.js`, `src/private-overlay.js`: relay protocol, traffic gate and private routing |
+| `hiverelay`, `hiverelay::seeder`, `traffic`, `private_overlay` | `src/hiverelay.js`, `src/traffic.js`, `src/private-overlay.js`: relay protocol and the `hiverelay-seed` seeder, traffic gate and private routing (the standalone guard is `bin/private-relay.js`) |
 | `node/storage`, `network`, `channel`, `apply`, `sources`, `catalog`, `blobs` | Corresponding `src/node/*.js`: storage, replication, channel operations, source and catalog management, blob storage and streaming |
 | `node/core`, `node/factory` | `src/index.js`: compose and open the native node; default worker factory |
 | `protocol`, `mnemonic`, `identity` | `src/protocol.js`, `src/mnemonic.js`, `src/identity.js`: wire formats, recovery and keys, identity storage |
@@ -81,9 +89,9 @@ than presented as live network parity.
 - `tests/apply.rs`: JS apply operations, host calls and view bytes on a real Hyperbee.
 - `tests/blobs.rs`: JS blob operations, core keys, announce fields, encrypted and plain block bytes, and cache decisions.
 - `tests/cast.rs`: JS cast fixtures and receiver/controller interop over HTTP and a TCP secret-stream stand-in. `tests/cast_default.rs` exercises the real default adapters and a JS receiver on a local testnet.
-- `tests/hiverelay.rs`: JS relay wire vectors and secret-stream interop.
+- `tests/hiverelay.rs`: JS relay wire vectors, secret-stream interop, and the app's own `createHiverelaySeeder` beside this crate's seeder against one HiveRelay stand-in: identical `/seed-core` bodies and identical `hiverelay-seed` request bytes.
 - `tests/traffic.rs`: JS traffic-gate decisions and npm Protomux busy-channel interop.
-- `tests/replicate.rs`: `p2p-replicate` pulls a followed channel's title on a local testnet and skips it under an unmet disk reserve. `tests/relay.rs`: the relay founds its channel and keeps it across restarts.
+- `tests/replicate.rs`: `p2p-replicate` pulls a followed channel's title on a local testnet and skips it under an unmet disk reserve. `tests/relay.rs`: the relay founds its channel and keeps it across restarts; `PEARTUBE_PRIVATE_RELAY` starts a guard with no storage folder and refuses channel flags.
 - `tests/private_overlay.rs`: JS overlay vectors and behavior with a fake DHT, plus JS interop. `tests/network_private.rs` checks private routing fails closed and public routing joins topics; it is not a JS comparison.
 - `tests/lan_mdns.rs`: JS TXT records and parsing plus live Bonjour interop. `tests/lan_interop.rs`: JS/Rust and Rust/Rust isolated LAN discovery, streaming and connection rules.
 - `tests/node_api_shapes.rs`: node JSON shape round trips. `tests/node_mixed.rs`: real JS/Rust publication, following, streaming and restart on a local HyperDHT testnet.
@@ -270,7 +278,8 @@ tested and rejected for lack of repeatable wins. No ACK, pacing or wire changes.
 
 ## Known gaps and differences
 
-- The `hiverelay-seed` mirror plugin is not built in; hosts can register plugins with `MirrorHost::register`. `p2p-replicate` (`replicate`) is built on `CoreNode` and registered by the relay; it runs one title at a time (the app's default `replicateConcurrency`).
+- JS plugins from `<storage>/plugins` (`PEARTUBE_PLUGINS_DIR`, `*.mjs`) are a permanent difference: this crate cannot load JavaScript. Its built-in plugins register through `MirrorHost::register`; `p2p-replicate` (`replicate`) and `hiverelay-seed` are built on `CoreNode` and registered by the relay.
+- `hiverelay-seed` marks HiveRelay connections bulk on the shared traffic gate, which buckets them and reports `peersBusy`; the gate's `pause`/`resume` are still no-ops at the transport (`src/node/network.rs`), so `hiverelayUploadMbps` does not yet throttle the wire itself.
 - The default cast adapter has no `PeerFactory`: a load targeting a different network reuses the current node. Continuous read-ahead retargeting and `holdIfThin` are not wired; retry window timing differs. See [cast notes](docs/port-notes-cast.md).
 - LAN mDNS and the isolated DHT are implemented, but the real-interface interoperability matrix remains environment-blocked on this Mac. A standalone raw UDP probe also receives no LAN multicast; an ALF “permitted” query alone does not establish delivery. See [LAN notes](docs/port-notes-lan.md).
 - Corestore storage tuning uses engine defaults; free disk space is unknown. Status reports live blob-peer in-flight requests and UDX RTT/retransmitted packets; see [node notes](docs/node-api.md).

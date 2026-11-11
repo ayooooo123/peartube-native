@@ -75,11 +75,9 @@ pub struct Relay(Arc<Inner>);
 impl Relay {
     /// Create the storage folder, read the settings and start the API; [`Relay::start`] opens the node.
     pub async fn listen(env: HashMap<String, String>) -> Result<Self, String> {
-        if env.contains_key("PEARTUBE_PRIVATE_RELAY")
-            || env.contains_key("PEARTUBE_PRIVATE_RELAY_PORT")
-        {
+        if guard_mode(&env) {
             return Err(
-                "PEARTUBE_PRIVATE_RELAY: the guard forwarder is not part of this relay build"
+                "PEARTUBE_PRIVATE_RELAY runs a standalone guard forwarder, not a content relay; call relay::guard_only"
                     .into(),
             );
         }
@@ -469,6 +467,29 @@ impl Relay {
             let relay = self.clone();
             Arc::new(move || relay.notify("update")) as Arc<dyn Fn() + Send + Sync>
         };
+        // `hiverelayOpt()`: the HiveRelay seeder's relays, key and discovery, and whether it runs.
+        let hiverelay = crate::hiverelay::seeder::HiverelayConfig {
+            relays: strings(&cfg("hiverelays")),
+            api_key: non_empty(text(&cfg("hiverelayApiKey"))),
+            discover: js_truthy(&cfg("hiverelayDiscover"))
+                || matches!(
+                    self.0.env.get("PEARTUBE_HIVERELAY").map(String::as_str),
+                    Some("1" | "true")
+                ),
+            replicas: cfg("hiverelayReplicas").as_u64().unwrap_or(3).clamp(1, 32),
+            ttl_days: 30,
+            include_cached: js_truthy(&cfg("replicate")),
+        };
+        let hiverelay_enabled = !hiverelay.relays.is_empty() || hiverelay.discover;
+        // One gate for the relay's bulk work: `p2p-replicate` and the HiveRelay seeder.
+        let (traffic, detach_traffic) =
+            node.traffic_gate(cfg("hiverelayUploadMbps").as_f64().unwrap_or(0.0).max(0.0));
+        let seeder = crate::hiverelay::seeder::plugin(
+            node.clone(),
+            traffic.clone(),
+            hiverelay,
+            Some(notify.clone()),
+        );
         let mirror = Arc::new(
             MirrorHost::start(
                 node.clone(),
@@ -477,6 +498,7 @@ impl Relay {
                 Arc::new(NodeStreams),
                 Arc::new(NodeStreams),
                 Arc::new(ArtFeed),
+                vec![seeder],
                 MirrorOptions {
                     storage: self.0.storage.display().to_string(),
                     mirror_channel: js_truthy(&cfg("publishChannel")),
@@ -484,6 +506,11 @@ impl Relay {
                     watch_dir: non_empty(text(&cfg("watchDir"))),
                     feeds: strings(&cfg("feeds")),
                     plugins_dir: None,
+                    start_runs: if hiverelay_enabled {
+                        vec!["hiverelay-seed".to_owned()]
+                    } else {
+                        Vec::new()
+                    },
                     onchange: Some(notify.clone()),
                     ..MirrorOptions::default()
                 },
@@ -492,7 +519,14 @@ impl Relay {
         );
         *self.0.mirror.lock().unwrap() = Some(mirror.clone());
         let replication = self
-            .start_replication(&node, &mirror, &cfg, notify.clone())
+            .start_replication(
+                &node,
+                &mirror,
+                notify.clone(),
+                traffic,
+                detach_traffic,
+                hiverelay_enabled,
+            )
             .await;
 
         let mut changes = node.onchange();
@@ -514,15 +548,16 @@ impl Relay {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)] // the node, its plugins, and the one gate they share
     async fn start_replication(
         &self,
         node: &Arc<CoreNode>,
         mirror: &Arc<MirrorHost<CoreNode>>,
-        cfg: &impl Fn(&str) -> Value,
         onchange: Arc<dyn Fn() + Send + Sync>,
+        traffic: TrafficGate,
+        detach_traffic: Box<dyn Fn() + Send + Sync>,
+        hiverelay: bool,
     ) -> Replication {
-        let (traffic, detach_traffic) =
-            node.traffic_gate(cfg("hiverelayUploadMbps").as_f64().unwrap_or(0.0).max(0.0));
         let replicator = Replicator::new(
             node.clone(),
             self.0.storage.clone(),
@@ -540,6 +575,10 @@ impl Relay {
                     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
                     if replicator.enabled() {
                         let _ = mirror.run("p2p-replicate", json!({})).await;
+                    }
+                    // `scheduleReplicate`: catalog changes re-run the seeder too.
+                    if hiverelay {
+                        let _ = mirror.run("hiverelay-seed", json!({})).await;
                     }
                 }
             })
@@ -865,11 +904,10 @@ fn guard_status(guard: &PrivateGuard) -> Value {
     })
 }
 
-/// `status.lan`: where LAN peers reach this relay. The key is extra over JS (which draws a
-/// fresh swarm key each start and shows only host and port): a direct dial needs it.
+/// `status.lan`: where LAN peers reach this relay, `{host, port}` as the JS relay reports it.
 async fn lan_status(node: &CoreNode) -> Value {
     match node.lan_endpoint().await {
-        Some(lan) => json!({ "host": lan.host, "port": lan.port, "publicKey": lan.public_key }),
+        Some(lan) => json!({ "host": lan.host, "port": lan.port }),
         None => Value::Null,
     }
 }
@@ -964,6 +1002,226 @@ impl http::Mirror for MirrorBridge {
     }
 }
 
+/// `bin/private-relay.js`'s mode: the process is a Corestore-free 2-hop guard forwarder, never a
+/// content relay. An empty variable is unset, as JS truthiness has it.
+pub fn guard_mode(env: &HashMap<String, String>) -> bool {
+    present(env, "PEARTUBE_PRIVATE_RELAY") || present(env, "PEARTUBE_PRIVATE_RELAY_PORT")
+}
+
+fn present(env: &HashMap<String, String>, key: &str) -> bool {
+    env.get(key).is_some_and(|value| !value.is_empty())
+}
+
+/// The flags `bin/relay.js` refuses beside guard mode: a guard serves no channel and no content.
+const CONTENT_FLAGS: [&str; 6] = [
+    "PEARTUBE_CHANNEL",
+    "PEARTUBE_SOURCES",
+    "PEARTUBE_PRIVATE_ROUTING",
+    "PEARTUBE_REPLICATE",
+    "PEARTUBE_WATCH_DIR",
+    "PEARTUBE_MIRROR_FEEDS",
+];
+
+/// A standalone guard, listening and announcing. No Corestore, no storage folder, no files.
+pub struct StandaloneGuard {
+    guard: PrivateGuard,
+    host: String,
+    port: u16,
+    follow_parent: bool,
+}
+
+impl StandaloneGuard {
+    /// `{"publicKey", "host", "port"}`, as `private-relay.js` prints its ready line.
+    pub fn ready(&self) -> Value {
+        json!({
+            "publicKey": to_hex(&self.guard.public_key()),
+            "host": self.host,
+            "port": self.port,
+        })
+    }
+
+    /// `{"publicKey", ...guard.stats()}`, the heartbeat line.
+    pub fn heartbeat(&self) -> Value {
+        heartbeat_line(&self.guard)
+    }
+
+    pub fn public_key(&self) -> [u8; 32] {
+        self.guard.public_key()
+    }
+
+    pub fn address(&self) -> (String, u16) {
+        (self.host.clone(), self.port)
+    }
+
+    /// How often `private-relay.js` reports: 10 s while following a parent, 60 s alone.
+    pub fn heartbeat_interval(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(if self.follow_parent { 10 } else { 60 })
+    }
+
+    pub async fn close(self) {
+        let _ = self.guard.close().await;
+    }
+}
+
+/// `createPrivateGuard` over the environment `private-relay.js` reads: no storage is touched.
+pub async fn start_standalone_guard(
+    env: &HashMap<String, String>,
+) -> Result<StandaloneGuard, String> {
+    if let Some(flag) = CONTENT_FLAGS
+        .iter()
+        .find(|flag| present(env, flag))
+    {
+        return Err(format!(
+            "PEARTUBE_PRIVATE_RELAY runs a standalone Corestore-free guard forwarder and cannot be combined with channel or content flags; run peartube-private-relay separately ({flag})"
+        ));
+    }
+    let bootstrap = env
+        .get("PEARTUBE_BOOTSTRAP")
+        .map(|raw| {
+            raw.split(',')
+                .map(str::trim)
+                .filter(|part| !part.is_empty())
+                .map(str::to_owned)
+                .collect()
+        })
+        .unwrap_or_default();
+    let bootstrap = crate::node::network::resolve_bootstrap(bootstrap);
+    let port = ["PEARTUBE_PRIVATE_RELAY_PORT", "PEARTUBE_DHT_PORT"]
+        .iter()
+        .find_map(|var| {
+            env.get(*var)
+                .filter(|value| !value.is_empty())
+                .and_then(|value| value.trim().parse().ok())
+        })
+        .unwrap_or(0);
+    let host = env
+        .get("PEARTUBE_PRIVATE_HOST")
+        .filter(|host| !host.trim().is_empty())
+        .cloned();
+    let seed: Option<[u8; 32]> = env
+        .get("PEARTUBE_GUARD_SEED")
+        .map(|value| value.trim().to_owned())
+        .and_then(|value| parse_hex32(&value));
+    // `createPrivateGuard` binds loopback for a local bootstrap, as the guard's own swarm does.
+    let bind = host.clone().or_else(|| {
+        crate::private_overlay::is_local_bootstrap(host.as_deref(), &bootstrap)
+            .then(|| "127.0.0.1".to_owned())
+    });
+    let dht = open_dht(DhtOptions {
+        host: bind.clone(),
+        port,
+        bootstrap: bootstrap.clone(),
+    })
+    .await
+    .map_err(|e| format!("private guard dht: {e}"))?;
+    let guard = create_private_guard(
+        dht,
+        GuardOptions {
+            host: bind,
+            port,
+            bootstrap,
+            seed,
+            ..GuardOptions::default()
+        },
+    )
+    .await
+    .map_err(|e| format!("private guard: {e}"))?;
+    let address = guard.address();
+    Ok(StandaloneGuard {
+        host: address
+            .map(|addr| addr.ip().to_string())
+            .or(host)
+            .unwrap_or_else(|| "0.0.0.0".to_owned()),
+        port: address.map_or(port, |addr| addr.port()),
+        follow_parent: present(env, "PEARTUBE_GUARD_FOLLOW_PARENT"),
+        guard,
+    })
+}
+
+/// `bin/relay.js`'s guard-only branch: run the forwarder until a signal or the parent leaves.
+pub async fn guard_only(env: HashMap<String, String>) -> Result<(), String> {
+    let guard = start_standalone_guard(&env).await?;
+    log("private-guard ready", guard.ready());
+    let every = guard.heartbeat_interval();
+    let follow = guard.follow_parent;
+    let heartbeat = {
+        let guard = guard.guard.clone();
+        let pid = if follow { parent_pid() } else { None };
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(every);
+            ticker.tick().await;
+            loop {
+                tokio::select! {
+                    _ = ticker.tick() => {
+                        log("private-guard heartbeat", heartbeat_line(&guard));
+                    }
+                    // Leave with the relay that started us, even if it died without saying so.
+                    _ = parent_gone(pid), if follow => return,
+                }
+            }
+        })
+    };
+    wait_for_signal().await;
+    heartbeat.abort();
+    guard.close().await;
+    Ok(())
+}
+
+/// `{"publicKey", ...guard.stats()}`.
+fn heartbeat_line(guard: &PrivateGuard) -> Value {
+    let mut line = json!({ "publicKey": to_hex(&guard.public_key()) });
+    if let (Some(fields), Value::Object(stats)) = (line.as_object_mut(), guard_status(guard)) {
+        fields.extend(stats);
+    }
+    line
+}
+
+/// `process.ppid`, as `private-relay.js` captures it at start.
+fn parent_pid() -> Option<u32> {
+    #[cfg(unix)]
+    {
+        rustix::process::getppid().map(|pid| pid.as_raw_nonzero().get() as u32)
+    }
+    #[cfg(not(unix))]
+    {
+        None
+    }
+}
+
+/// Resolves once the parent process is gone (the reparented pid changes).
+async fn parent_gone(pid: Option<u32>) {
+    let Some(pid) = pid else {
+        std::future::pending::<()>().await;
+        return;
+    };
+    loop {
+        tokio::time::sleep(std::time::Duration::from_millis(2_000)).await;
+        if parent_pid() != Some(pid) {
+            return;
+        }
+    }
+}
+
+async fn wait_for_signal() {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{SignalKind, signal};
+        let (Ok(mut term), Ok(mut int)) = (
+            signal(SignalKind::terminate()),
+            signal(SignalKind::interrupt()),
+        ) else {
+            let _ = tokio::signal::ctrl_c().await;
+            return;
+        };
+        tokio::select! {
+            _ = term.recv() => {}
+            _ = int.recv() => {}
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = tokio::signal::ctrl_c().await;
+}
+
 fn read_tls(env: &HashMap<String, String>, storage: &Path) -> Option<tokio_rustls::TlsAcceptor> {
     use tokio_rustls::rustls::pki_types::pem::PemObject;
     use tokio_rustls::rustls::pki_types::{CertificateDer, PrivateKeyDer};
@@ -1017,6 +1275,18 @@ fn port(env: &HashMap<String, String>, var: &str, default: u16) -> u16 {
     env.get(var)
         .and_then(|v| v.trim().parse().ok())
         .unwrap_or(default)
+}
+
+/// 64 hex characters as 32 bytes.
+fn parse_hex32(text: &str) -> Option<[u8; 32]> {
+    if text.len() != 64 || !text.is_ascii() {
+        return None;
+    }
+    let mut out = [0u8; 32];
+    for (i, chunk) in text.as_bytes().chunks(2).enumerate() {
+        out[i] = u8::from_str_radix(std::str::from_utf8(chunk).ok()?, 16).ok()?;
+    }
+    Some(out)
 }
 
 fn non_empty(text: String) -> Option<String> {

@@ -1382,6 +1382,7 @@ impl MirrorHarness {
             Arc::new(Factory),
             Arc::new(RechunkFactory),
             feeds,
+            Vec::new(),
             MirrorOptions {
                 storage: "/data".to_owned(),
                 mirror_channel: false,

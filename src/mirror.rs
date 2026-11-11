@@ -1,9 +1,10 @@
 //! Mirror plugin host for PearTube relays, ported from `src/mirror.js`.
 //!
 //! Built-in plugins: `http-acquire` (the durable acquirer as a plugin), `channel-backfill`, `blob-rechunk`,
-//! `watch-dir` and `feed-mirror`. `p2p-replicate` (`crate::replicate`) and `hiverelay-seed` are not built here:
-//! replication needs block-range downloads off a remote core, which `node::Node` deliberately does not expose, and
-//! the HiveRelay seeder owns its own module. Both register through `MirrorHost::register` as the app's plugins do.
+//! `watch-dir` and `feed-mirror`. `p2p-replicate` (`crate::replicate`) and `hiverelay-seed`
+//! (`crate::hiverelay::seeder`) own their modules: replication needs block-range downloads off a remote
+//! core, and the seeder needs the Corestore and the node's connections. The caller passes them to
+//! [`MirrorHost::start`] and they register as the app's plugins do.
 //!
 //! The filesystem and remote-feed fetches sit behind small traits so a test can script them.
 
@@ -615,6 +616,8 @@ pub struct MirrorOptions {
     pub feeds: Vec<String>,
     pub plugins_dir: Option<String>,
     pub poll_interval_ms: u64,
+    /// Plugins to run once the host is up, by name, as `relay.js` runs `hiverelay-seed`.
+    pub start_runs: Vec<String>,
     pub onchange: Option<Arc<dyn Fn() + Send + Sync>>,
     pub onstarting: Option<Arc<dyn Fn() + Send + Sync>>,
     pub now_ms: Arc<dyn Fn() -> u64 + Send + Sync>,
@@ -630,6 +633,7 @@ impl Default for MirrorOptions {
             feeds: Vec::new(),
             plugins_dir: None,
             poll_interval_ms: 60_000,
+            start_runs: Vec::new(),
             onchange: None,
             onstarting: None,
             now_ms: Arc::new(system_now_ms),
@@ -1281,6 +1285,7 @@ where
     N::Error: From<AcquireError>,
 {
     /// `createMirrorHost`: register the built-ins, then run the startup backfill, folder import, feeds and timer.
+    #[allow(clippy::too_many_arguments)] // the reference's host arguments, plus the relay's plugins
     pub async fn start(
         node: Arc<N>,
         acquirer: Option<Acquirer<N>>,
@@ -1288,6 +1293,8 @@ where
         factory: Arc<dyn PutStreamFactory<N>>,
         rechunk_factory: Arc<dyn RechunkOptionsFactory<N>>,
         feed: Arc<dyn FeedFetch>,
+        // Plugins the caller built (the relay's `hiverelay-seed`), registered before polling starts.
+        extra: Vec<Arc<dyn MirrorPlugin<N>>>,
         opts: MirrorOptions,
     ) -> Self {
         let closed = Arc::new(AtomicBool::new(false));
@@ -1354,6 +1361,9 @@ where
             feeds: host.feeds.clone(),
             feed,
         }));
+        for plugin in extra {
+            host.register(plugin);
+        }
 
         if let Some(onstarting) = &opts.onstarting {
             onstarting();
@@ -1400,6 +1410,11 @@ where
         }
         if !host.feeds.lock().expect("feeds").is_empty() && !host.is_closed() {
             host.spawn_run("feed-mirror", Value::Null);
+        }
+        for name in &opts.start_runs {
+            if !host.is_closed() {
+                host.spawn_run(name, Value::Null);
+            }
         }
         host.start_poll_timer(opts.poll_interval_ms);
         host
