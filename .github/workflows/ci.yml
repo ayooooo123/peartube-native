@@ -12,6 +12,8 @@ env:
 jobs:
   rust:
     strategy:
+      # One OS failing must not hide the other's result.
+      fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
@@ -98,4 +100,4 @@ jobs:
       - run: cargo fmt --check -p peartube-native -p peartube-native-ffi
       - run: cargo clippy --workspace --all-targets -- -D warnings
       # The ignored tests drive the app's own JS: they run here, against the JS_REF checkout.
-      - run: cargo test --workspace -- --include-ignored --test-threads=1
+      - run: cargo test --workspace --no-fail-fast -- --include-ignored --test-threads=1
