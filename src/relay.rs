@@ -1178,13 +1178,11 @@ impl StandaloneGuard {
 pub async fn start_standalone_guard(
     env: &HashMap<String, String>,
 ) -> Result<StandaloneGuard, String> {
-    if let Some(flag) = CONTENT_FLAGS
-        .iter()
-        .find(|flag| present(env, flag))
-    {
-        return Err(format!(
-            "PEARTUBE_PRIVATE_RELAY runs a standalone Corestore-free guard forwarder and cannot be combined with channel or content flags; run peartube-private-relay separately ({flag})"
-        ));
+    if CONTENT_FLAGS.iter().any(|flag| present(env, flag)) {
+        return Err(
+            "PEARTUBE_PRIVATE_RELAY runs a standalone Corestore-free guard forwarder and cannot be combined with channel or content flags; run peartube-private-relay separately"
+                .to_owned(),
+        );
     }
     let bootstrap = env
         .get("PEARTUBE_BOOTSTRAP")
@@ -1251,40 +1249,54 @@ pub async fn start_standalone_guard(
 
 /// `bin/relay.js`'s guard-only branch: run the forwarder until a signal or the parent leaves.
 pub async fn guard_only(env: HashMap<String, String>) -> Result<(), String> {
+    // Read before the first await: a relay that dies while the guard is still opening would
+    // otherwise be recorded as the pid the guard was reparented to, and the watch never fires.
+    let follow = present(&env, "PEARTUBE_GUARD_FOLLOW_PARENT");
+    let pid = if follow { parent_pid() } else { None };
     let guard = start_standalone_guard(&env).await?;
     log("private-guard ready", guard.ready());
     let every = guard.heartbeat_interval();
-    let follow = guard.follow_parent;
     let heartbeat = {
         let guard = guard.guard.clone();
-        let pid = if follow { parent_pid() } else { None };
         tokio::spawn(async move {
             let mut ticker = tokio::time::interval(every);
             ticker.tick().await;
             loop {
-                tokio::select! {
-                    _ = ticker.tick() => {
-                        log("private-guard heartbeat", heartbeat_line(&guard));
-                    }
-                    // Leave with the relay that started us, even if it died without saying so.
-                    _ = parent_gone(pid), if follow => return,
-                }
+                ticker.tick().await;
+                log("private-guard heartbeat", heartbeat_line(&guard));
             }
         })
     };
-    wait_for_signal().await;
+    // `private-relay.js`'s parent watch: leave with the relay that started us, even if it died
+    // without saying so. Its `shutdown()` closes the guard, so the wait ends here, not only the
+    // heartbeat above.
+    tokio::select! {
+        _ = wait_for_signal() => {}
+        _ = parent_gone(pid), if follow => {}
+    }
     heartbeat.abort();
-    guard.close().await;
+    // JS clears the heartbeat and starts a 2 s kill timer before awaiting `guard.close()`: a close
+    // that waits on the network must not keep a guard whose relay is gone.
+    if tokio::time::timeout(std::time::Duration::from_secs(2), guard.close())
+        .await
+        .is_err()
+    {
+        log("private-guard close timed out", json!({}));
+    }
     Ok(())
 }
 
-/// `{"publicKey", ...guard.stats()}`.
+/// `{"publicKey", ...guard.stats()}`, the whole heartbeat line `private-relay.js` prints.
 fn heartbeat_line(guard: &PrivateGuard) -> Value {
-    let mut line = json!({ "publicKey": to_hex(&guard.public_key()) });
-    if let (Some(fields), Value::Object(stats)) = (line.as_object_mut(), guard_status(guard)) {
-        fields.extend(stats);
-    }
-    line
+    let stats = guard.stats();
+    json!({
+        "publicKey": to_hex(&guard.public_key()),
+        "registeredRoutes": stats.registered_routes,
+        "activeCircuits": stats.active_circuits,
+        "rendezvousTopics": stats.rendezvous_topics,
+        "putMutableCount": stats.put_mutable_count,
+        "rvRegisterCount": stats.rv_register_count,
+    })
 }
 
 /// `process.ppid`, as `private-relay.js` captures it at start.

@@ -354,7 +354,28 @@ async fn guard_mode_runs_a_guard_writes_no_storage_and_refuses_content_flags() {
         !storage.exists(),
         "guard mode creates no storage folder: {ready}"
     );
-    assert!(guard.heartbeat().get("registeredRoutes").is_some());
+    // The heartbeat line is the ready line's key plus `guard.stats()`, and nothing else: JS
+    // spreads `guard.stats()` there, which carries no port.
+    let heartbeat = guard.heartbeat();
+    let mut keys: Vec<&str> = heartbeat
+        .as_object()
+        .expect("a heartbeat object")
+        .keys()
+        .map(String::as_str)
+        .collect();
+    keys.sort_unstable();
+    assert_eq!(
+        keys,
+        [
+            "activeCircuits",
+            "publicKey",
+            "putMutableCount",
+            "registeredRoutes",
+            "rendezvousTopics",
+            "rvRegisterCount",
+        ],
+        "{heartbeat}"
+    );
     guard.close().await;
     assert!(!storage.exists(), "still nothing written on close");
 
@@ -363,9 +384,9 @@ async fn guard_mode_runs_a_guard_writes_no_storage_and_refuses_content_flags() {
         .await
         .err()
         .expect("a channel flag is refused");
-    assert!(
-        error.contains("cannot be combined with channel or content flags"),
-        "{error}"
+    assert_eq!(
+        error,
+        "PEARTUBE_PRIVATE_RELAY runs a standalone Corestore-free guard forwarder and cannot be combined with channel or content flags; run peartube-private-relay separately"
     );
     assert!(!storage.exists());
 
@@ -375,4 +396,94 @@ async fn guard_mode_runs_a_guard_writes_no_storage_and_refuses_content_flags() {
     assert!(!peartube_native::relay::guard_mode(&empty));
     empty.insert("PEARTUBE_PRIVATE_RELAY_PORT".into(), "0".into());
     assert!(peartube_native::relay::guard_mode(&empty));
+}
+
+/// `PEARTUBE_GUARD_FOLLOW_PARENT`: a guard whose parent dies exits on its own, as
+/// `private-relay.js`'s 2 s parent watch does (it calls `shutdown()`, which closes the guard and
+/// exits). Without it the process outlived the relay that started it until it was signalled.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn a_following_guard_leaves_when_its_parent_dies() {
+    use peartube_native::private_overlay::dht::DhtOptions;
+    use peartube_native::private_overlay::peeroxide::open_dht;
+    use std::process::{Command, Stdio};
+
+    // A bootstrap node of its own, so the guard's announce completes without the public DHT.
+    let bootstrap = open_dht(DhtOptions {
+        host: Some("127.0.0.1".into()),
+        port: 0,
+        bootstrap: Vec::new(),
+    })
+    .await
+    .expect("bootstrap dht");
+    let bootstrap = bootstrap
+        .address()
+        .map(|addr| format!("127.0.0.1:{}", addr.port()))
+        .expect("bootstrap address");
+    let storage = tempfile::tempdir().unwrap();
+
+    // `$0` is the relay binary, started in the background so its parent is this short-lived
+    // shell rather than the test process. The shell outlives the guard's startup (a debug build
+    // takes a moment to reach `main`), then leaves without stopping it.
+    let mut parent = Command::new("sh")
+        .arg("-c")
+        .arg("\"$0\" & echo pid=$!; sleep 4")
+        .arg(env!("CARGO_BIN_EXE_peartube-relay"))
+        .env("PEARTUBE_PRIVATE_RELAY", "1")
+        .env("PEARTUBE_PRIVATE_RELAY_PORT", "0")
+        .env("PEARTUBE_GUARD_FOLLOW_PARENT", "1")
+        .env("PEARTUBE_PRIVATE_HOST", "127.0.0.1")
+        .env("PEARTUBE_BOOTSTRAP", &bootstrap)
+        .env("PEARTUBE_GUARD_SEED", "22".repeat(32))
+        .env("PEARTUBE_STORAGE", storage.path())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("parent shell");
+    let guard_pid = parent
+        .stdout
+        .take()
+        .map(|stdout| {
+            // The guard inherits the pipe, so it stays open until the guard itself exits.
+            let (sender, receiver) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                let mut text = String::new();
+                let mut stdout = std::io::BufReader::new(stdout);
+                for line in std::io::BufRead::lines(&mut stdout).map_while(Result::ok) {
+                    eprintln!("guard: {line}");
+                    text.push_str(&line);
+                    text.push('\n');
+                }
+                let _ = sender.send(text);
+            });
+            receiver
+        })
+        .expect("stdout");
+    parent.wait().expect("the parent shell exits");
+    let started = std::time::Instant::now();
+    let output = guard_pid
+        .recv_timeout(Duration::from_secs(30))
+        .expect("the guard exits after its parent, not on a signal");
+    let elapsed = started.elapsed();
+
+    let pid: i32 = output
+        .lines()
+        .find_map(|line| line.strip_prefix("pid="))
+        .and_then(|pid| pid.trim().parse().ok())
+        .expect("the guard's pid");
+    // Whatever happened, never leave the process behind.
+    let _ = Command::new("kill")
+        .arg("-9")
+        .arg(pid.to_string())
+        .stderr(Stdio::null())
+        .status();
+    assert!(
+        output.contains("\"private-guard ready\""),
+        "the guard started: {output}"
+    );
+    assert!(
+        elapsed < Duration::from_secs(15),
+        "the guard left right after its parent: {elapsed:?}"
+    );
 }
