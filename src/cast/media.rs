@@ -903,8 +903,10 @@ mod tests {
             HOLD_AFTER_BYTES as usize,
             "a thin reader stops at its first 2 MiB"
         );
-        // The stream's window fills the cushion; the reader resumes at once.
-        for index in 32..112 {
+        // The stream's window fills the cushion; the reader resumes at once. The rest of the film is
+        // fetched too, so the 2 s rule after the cushion never holds the tail on a slow runner: the
+        // test is about the release, not about how fast an unsteered tail arrives.
+        for index in 32..200 {
             fetch(&stream.reader, index).await;
         }
         let rest = timeout(Duration::from_secs(30), async {

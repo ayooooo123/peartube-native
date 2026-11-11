@@ -40,7 +40,7 @@ there is no Rust code to compare.
 | `src/http.js` | `http` | `match` | `8286e22f6` |
 | `src/identify.js` | `identify` | `match` | `8286e22f6` |
 | `src/index.js` | `node/core`, `node/factory` | `match` | `8286e22f6` |
-| `src/lan.js` | `lan/` (`discovery`, `mdns`, `host`) | `debt:` the real-interface interop matrix is blocked on this host's network — see README "Known gaps" | `8286e22f6` |
+| `src/lan.js` | `lan/` (`discovery`, `mdns`, `host`) | `debt:` `tests/lan_mdns.rs::mdns_interop_with_bonjour_service` fails (bonjour-service never reports the Rust record; seen on Linux CI and a Mac, and at `d9a520e` before this alignment) while JS↔Rust LAN discovery in `tests/lan_interop.rs` passes on Linux; macOS runners have no LAN multicast, so CI skips the mDNS discovery tests there — see README "Known gaps" | `8286e22f6` |
 | `src/mirror.js` | `mirror`, `replicate` | `match` | `8286e22f6` |
 | `src/mnemonic.js` | `mnemonic` | `match` | `8286e22f6` |
 | `src/node/blobs.js` | `node/blobs`, `node/hash_state` | `match` | `8286e22f6` |
