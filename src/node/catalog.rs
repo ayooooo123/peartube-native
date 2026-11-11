@@ -10,7 +10,6 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use futures_util::future::join_all;
-use hyperbee::{Bee, RangeOptions};
 use serde_json::Value;
 
 use super::api::{Announce, Blob, Entry, OpenUri, SearchOptions};
@@ -18,7 +17,7 @@ use super::channel::Channel;
 use super::sources::{Item, Sources};
 use crate::protocol::{
     BlobPointer, ParsedUri, WatchEntry, clean_text, decode_op, describe_entry, format_watch_uri,
-    is_system_view_key, parse_uri,
+    parse_uri,
 };
 
 fn lock<T>(cell: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -45,17 +44,33 @@ pub trait CatalogBlobs: Send + Sync {
     fn cached_meta(&self, blob: &[u8; 32]) -> Option<(u64, u64, u64)>;
     fn absent(&self, discovery: &[u8; 32]) -> bool;
     fn blob_disc(&self, blob: &[u8; 32]) -> [u8; 32];
-    fn stored(&self, discovery: &[u8; 32]) -> bool;
-    fn open_core_session(&self, blob: &[u8; 32]) -> Option<Arc<hypercore::Session>>;
-    fn probe<'a>(&'a self, blob: &'a [u8; 32]) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>>;
+    /// `coreStorage.getInfos(discs, { auth: false, head: true, hints: false })`: one RocksDB
+    /// pass. `None` means the probe failed, which says nothing about the batch.
+    fn infos(&self, discovery: &[[u8; 32]]) -> Option<Vec<Option<(u64, u64)>>>;
+    /// `absentDisc.add`: this discovery key is not on disk.
+    fn mark_absent(&self, discovery: &[u8; 32]);
+    /// `recordCached(hex, 0, 0, 0)`: a stored core with no blocks.
+    fn record_probe(&self, blob: [u8; 32], length: u64, byte_length: u64, blocks: u64);
+    /// `blobCore(hex)`: the open session for a slot or open core, kept for the ledger.
+    fn blob_core<'a>(&'a self, blob: &'a [u8; 32])
+    -> Pin<Box<dyn Future<Output = ()> + Send + 'a>>;
+    /// A stored core with data: open it inactive, count its blocks and record the ledger entry.
+    fn probe_blocks<'a>(
+        &'a self,
+        blob: &'a [u8; 32],
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>>;
     fn entry_cached_bytes<'a>(
         &'a self,
         blob: &'a [u8; 32],
         entry: &'a Announce,
     ) -> Pin<Box<dyn Future<Output = u64> + Send + 'a>>;
     fn resolve_video_key(&self, entry: &Announce) -> bool;
-    fn join_content(&self, blob: &[u8; 32], evict: bool);
+    /// `offerCopy`: a complete cached copy a relay may announce when a slot is free.
+    fn offer_copy(&self, blob: &[u8; 32]);
+    /// `ctx.net.dht`: private routing reaches only followed channels.
+    fn private_routing(&self) -> bool;
     fn join_source_swarm(&self, source: &[u8; 32]);
+    fn leave_source_swarm(&self, source: &[u8; 32]);
     fn stream_url(&self, entry: &Announce) -> String;
     fn warm<'a>(&'a self, entry: &'a Announce) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>>;
 }
@@ -84,6 +99,8 @@ pub struct Catalog {
     blobs: Arc<dyn CatalogBlobs>,
     primary: Mutex<PrimaryCache>,
     ephemeral: Mutex<HashMap<String, (Value, String, String)>>,
+    /// Channels whose swarm a watch link joined without following them, oldest first.
+    link_swarms: Mutex<Vec<String>>,
 }
 
 impl Catalog {
@@ -98,49 +115,8 @@ impl Catalog {
             blobs,
             primary: Mutex::new(PrimaryCache::default()),
             ephemeral: Mutex::new(HashMap::new()),
+            link_swarms: Mutex::new(Vec::new()),
         })
-    }
-
-    async fn scan(
-        &self,
-        view: &Bee,
-        via: &str,
-    ) -> hyperbee::Result<(Vec<Item>, Vec<super::api::DiscoveredSource>)> {
-        let mut entries = Vec::new();
-        let mut discovered = Vec::new();
-        let mut stream = view.range(RangeOptions::default());
-        loop {
-            let Some(node) = stream.next().await? else {
-                break;
-            };
-            let sub = String::from_utf8_lossy(&node.key).into_owned();
-            if sub.starts_with("source/") {
-                if let Some(op) = decode_op(node.value)
-                    && op.get("type").and_then(Value::as_str) == Some("source")
-                {
-                    let source_key = op
-                        .get("sourceKey")
-                        .and_then(Value::as_str)
-                        .unwrap_or_default()
-                        .to_owned();
-                    discovered.push(super::api::DiscoveredSource {
-                        key: source_key.clone(),
-                        kind: "channel".to_owned(),
-                        title: clean_text(
-                            op.get("title").and_then(Value::as_str),
-                            &source_key[..source_key.len().min(12)],
-                        ),
-                        via: via.to_owned(),
-                    });
-                }
-            } else if !is_system_view_key(&sub)
-                && let Some(op) = decode_op(node.value)
-                && op.get("type").and_then(Value::as_str) == Some("announce")
-            {
-                entries.push(Item { sub, entry: op });
-            }
-        }
-        Ok((entries, discovered))
     }
 
     /// `refreshPrimaryCache()`: replace, never merge.
@@ -162,9 +138,13 @@ impl Catalog {
         if head.is_some() && lock(&self.primary).head == head {
             return;
         }
-        if let Ok((entries, discovered)) = self
-            .scan(self.channel.view(), &self.channel.primary_key())
-            .await
+        // A landed view whose blocks nobody serves ends at the read timeout: the last complete
+        // scan stands, and the head is left unrecorded so the next tick rescans.
+        let Ok((entries, discovered)) =
+            super::sources::scan_view(self.channel.view(), &self.channel.primary_key()).await
+        else {
+            return;
+        };
         {
             let mut primary = lock(&self.primary);
             primary.entries = entries;
@@ -251,8 +231,10 @@ impl Catalog {
             raw.retain(|item| item.entry.get("id").and_then(Value::as_str) == Some(id));
         }
 
-        // Only probe cores whose discovery key is stored and not known absent.
-        let mut to_probe: Vec<[u8; 32]> = Vec::new();
+        // Batch-probe unindexed candidate discovery keys straight out of RocksDB in one `getInfos`
+        // pass, negative-caching absent keys in `absent` so repeat catalog searches touch zero disk.
+        let mut open_to_probe: Vec<[u8; 32]> = Vec::new();
+        let mut disk_to_probe: Vec<[u8; 32]> = Vec::new();
         let mut seen_blobs: HashSet<[u8; 32]> = HashSet::new();
         for item in &raw {
             let Some(blob_hex) = item.entry.get("blobs").and_then(Value::as_str) else {
@@ -264,20 +246,47 @@ impl Catalog {
             if !seen_blobs.insert(blob) || self.blobs.owned(&blob) {
                 continue;
             }
-            if self.blobs.slot_contains(&blob)
-                || self.blobs.open_core(&blob)
-                || self.blobs.cached_meta(&blob).is_some()
-            {
+            if self.blobs.slot_contains(&blob) || self.blobs.open_core(&blob) {
+                open_to_probe.push(blob);
                 continue;
             }
-            let discovery = self.blobs.blob_disc(&blob);
-            if !self.blobs.stored(&discovery) || self.blobs.absent(&discovery) {
+            if self.blobs.cached_meta(&blob).is_some() {
                 continue;
             }
-            to_probe.push(blob);
+            if self.blobs.absent(&self.blobs.blob_disc(&blob)) {
+                continue;
+            }
+            disk_to_probe.push(blob);
         }
-        for chunk in to_probe.chunks(16) {
-            join_all(chunk.iter().map(|blob| self.blobs.probe(blob))).await;
+        for chunk in open_to_probe.chunks(16) {
+            join_all(chunk.iter().map(|blob| self.blobs.blob_core(blob))).await;
+        }
+        for batch in disk_to_probe.chunks(256) {
+            let discovery: Vec<[u8; 32]> = batch
+                .iter()
+                .map(|blob| self.blobs.blob_disc(blob))
+                .collect();
+            // A failed probe says nothing about its batch: skipping it leaves those keys uncached
+            // for the next search, where an empty answer would have recorded all of them absent.
+            let Some(infos) = self.blobs.infos(&discovery) else {
+                continue;
+            };
+            let mut with_data: Vec<[u8; 32]> = Vec::new();
+            for (index, blob) in batch.iter().enumerate() {
+                match infos.get(index).copied().flatten() {
+                    None => {
+                        let discovery = self.blobs.blob_disc(blob);
+                        self.blobs.mark_absent(&discovery);
+                    }
+                    Some((0, _)) => {
+                        self.blobs.record_probe(*blob, 0, 0, 0);
+                    }
+                    Some(_) => with_data.push(*blob),
+                }
+            }
+            for chunk in with_data.chunks(16) {
+                join_all(chunk.iter().map(|blob| self.blobs.probe_blocks(blob))).await;
+            }
         }
 
         // Insertion order, as the JS `Map` keeps it: listings must come back in catalog order.
@@ -301,8 +310,8 @@ impl Catalog {
             } else {
                 self.blobs.entry_cached_bytes(&blob, &announce).await
             };
-            if cached > 0 && !owned && !self.blobs.owned(&blob) {
-                self.blobs.join_content(&blob, false);
+            if !owned && cached > 0 && cached >= announce.size {
+                self.blobs.offer_copy(&blob);
             }
             let local = owned || (self.blobs.slot_contains(&blob) && cached >= announce.size);
             let info = describe_entry(
@@ -328,7 +337,7 @@ impl Catalog {
                 base_title: info.base_title.clone(),
                 year: info.year.clone(),
                 stream_url: self.blobs.stream_url(&announce),
-                magnet_url: format_watch_uri(&watch_entry(&announce), "", ""),
+                magnet_url: format_watch_uri(&watch_entry(&announce), &item.source, "channel"),
             };
             let dedupe = format!("{}/{}", entry.id, entry.sha256);
             match positions.get(&dedupe).copied() {
@@ -420,8 +429,10 @@ impl Catalog {
         op
     }
 
-    /// `openUri(uri, { joinSource })`.
-    pub async fn open_uri(&self, uri: &str, join_source: bool) -> Result<OpenUri, String> {
+    /// `openUri(uri)`. The Rust API keeps the caller's `joinSource` flag for its own callers
+    /// (cast, the app and the relay HTTP routes), but the reference no longer reads it: a watch
+    /// link joins the channel's swarm and never follows it unless the node private-routes.
+    pub async fn open_uri(&self, uri: &str, _join_source: bool) -> Result<OpenUri, String> {
         let parsed = parse_uri(uri).map_err(|error| error.to_string())?;
         match parsed {
             ParsedUri::Receiver { .. } => {
@@ -458,23 +469,43 @@ impl Catalog {
                 entry: parsed_entry,
                 ..
             } => {
-                if join_source && let Some(key) = &source_key {
-                    let _ = self
-                        .sources
-                        .add(
-                            super::api::SourceSpec::Object(super::api::SourceObject {
-                                uri: None,
-                                key: Some(key.clone()),
-                                kind: Some("channel".into()),
-                                alias: None,
-                            }),
-                            true,
-                        )
-                        .await;
-                } else if !join_source
-                    && let Some(key) = source_key.as_deref().and_then(parse_hex32)
-                {
-                    self.blobs.join_source_swarm(&key);
+                // A watch link's channel is where the video's peers are. Private routing only
+                // reaches the channels it follows; otherwise joining the channel's swarm is
+                // enough, and the link does not add the channel to the library.
+                if let Some(key) = &source_key {
+                    if self.blobs.private_routing() {
+                        let _ = self
+                            .sources
+                            .add(
+                                super::api::SourceSpec::Object(super::api::SourceObject {
+                                    uri: None,
+                                    key: Some(key.clone()),
+                                    kind: Some("channel".into()),
+                                    alias: None,
+                                }),
+                                true,
+                            )
+                            .await;
+                    } else if let Some(source) = parse_hex32(key) {
+                        let held = {
+                            let mut links =
+                                self.link_swarms.lock().unwrap_or_else(|e| e.into_inner());
+                            if links.iter().any(|held| held == key) {
+                                None
+                            } else {
+                                links.push(key.clone());
+                                if links.len() > 4 {
+                                    Some(links.remove(0))
+                                } else {
+                                    None
+                                }
+                            }
+                        };
+                        self.blobs.join_source_swarm(&source);
+                        if let Some(dropped) = held.and_then(|dropped| parse_hex32(&dropped)) {
+                            self.blobs.leave_source_swarm(&dropped);
+                        }
+                    }
                 }
                 let announce = Announce {
                     kind: "announce".to_owned(),
@@ -512,6 +543,7 @@ impl Catalog {
                     &announce.id,
                     &clean_text(Some(&announce.title), &announce.id),
                 );
+                let magnet_url = format_watch_uri(&watch_entry(&announce), &source, "channel");
                 Ok(OpenUri::Watch {
                     entry: Entry {
                         key,
@@ -532,7 +564,7 @@ impl Catalog {
                         base_title: info.base_title.clone(),
                         year: info.year.clone(),
                         stream_url: self.blobs.stream_url(&announce),
-                        magnet_url: format_watch_uri(&watch_entry(&announce), "", ""),
+                        magnet_url,
                     },
                 })
             }

@@ -56,10 +56,20 @@ otherwise the Noise handshake advertises non-loopback interfaces and misses a lo
 The public DHT starts firewalled and probes reachability like JS; only isolated
 LAN DHTs assume an open socket. Neither worklet mode nor LAN discovery disables
 public topic joins.
-Public watch links with `joinSource: false` still join `source-swarm:<channel>`,
-as JS does, without following or hydrating the source catalog. This lets a
-receiver find the publisher even when its rotating content-topic cap omits the
-film. Private-routed watches do not use this public rendezvous.
+Watch links carry their channel, and opening one joins that channel's swarm
+(`source-swarm:<channel>`, at most four held at a time) without following or
+hydrating it: the peers that cached the film are there, since only its publisher
+and relays announce the video itself. A private-routed node instead follows the
+channel, because private discovery reaches only the channels it follows.
+A node announces a video's DHT topic (its Hypercore discovery key) only when it
+published that video, plus, as a relay (`announceCache`, which `peartube-relay`
+sets), complete cached copies under the same 48-topic cap and 20-second rotation.
+The title being read is looked up as a client (at most four at once) and never
+announced, so watching a film does not tell the DHT this address holds it.
+`peersBusy` in the traffic gate counts a `peartube/bulk-busy` claim only from a
+peer that served this node blocks; the node cannot yet answer that, because
+hypercore-rs reports a download without the peer that served the block, so the
+gate runs without the predicate and every claim counts as before.
 Loopback `/v1/status` and receiver `/cast/v1/info` include `connectedPeers`:
 16-hex public-key prefixes, the discovery route (`public`, `lan`, `private`),
 and the live transport address (null if unavailable). A public-DHT connection
@@ -82,7 +92,7 @@ than presented as live network parity.
 - `tests/blobs.rs`: JS blob operations, core keys, announce fields, encrypted and plain block bytes, and cache decisions.
 - `tests/cast.rs`: JS cast fixtures and receiver/controller interop over HTTP and a TCP secret-stream stand-in. `tests/cast_default.rs` exercises the real default adapters and a JS receiver on a local testnet.
 - `tests/hiverelay.rs`: JS relay wire vectors and secret-stream interop.
-- `tests/traffic.rs`: JS traffic-gate decisions and npm Protomux busy-channel interop.
+- `tests/traffic.rs`: JS traffic-gate decisions and npm Protomux busy-channel interop; a `peartube/bulk-busy` claim over the wire counts only from a peer the gate was told is a source peer.
 - `tests/replicate.rs`: `p2p-replicate` pulls a followed channel's title on a local testnet and skips it under an unmet disk reserve. `tests/relay.rs`: the relay founds its channel and keeps it across restarts.
 - `tests/private_overlay.rs`: JS overlay vectors and behavior with a fake DHT, plus JS interop. `tests/network_private.rs` checks private routing fails closed and public routing joins topics; it is not a JS comparison.
 - `tests/lan_mdns.rs`: JS TXT records and parsing plus live Bonjour interop. `tests/lan_interop.rs`: JS/Rust and Rust/Rust isolated LAN discovery, streaming and connection rules.

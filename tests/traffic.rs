@@ -188,6 +188,9 @@ async fn run_scenario(scenario: &Value) -> Value {
         mark_bulk_peer: Some(Arc::new(move |key: &str, bulk| {
             hook_marks.lock().unwrap().push((key.to_owned(), bulk));
         })),
+        // The oracle's fake node names its source peers explicitly; no claim is ever made over a
+        // channel in the decision scenarios, so the set starts empty on both sides.
+        is_source_peer: Some(Arc::new(|_: &str| false)),
         ..Options::default()
     });
 
@@ -332,6 +335,9 @@ async fn marked_peers_follow_bulk_state() {
         mark_bulk_peer: Some(Arc::new(move |key: &str, bulk| {
             hook_marks.lock().unwrap().push((key.to_owned(), bulk));
         })),
+        // The oracle's fake node names its source peers explicitly; no claim is ever made over a
+        // channel in the decision scenarios, so the set starts empty on both sides.
+        is_source_peer: Some(Arc::new(|_: &str| false)),
         ..Options::default()
     });
     let events = Arc::new(Mutex::new(Vec::new()));
@@ -484,4 +490,80 @@ async fn busy_channel_interop() {
     let result = tokio::time::timeout(Duration::from_secs(20), exchange).await;
     child.kill().await.ok();
     result.expect("busy channel exchange timed out");
+}
+
+/// A connection the test drives from both ends, for the busy channel's wire protocol.
+struct WireConn {
+    mux: Mux,
+    key: [u8; 32],
+}
+
+impl Connection for WireConn {
+    fn id(&self) -> u64 {
+        1
+    }
+    fn raw_bytes_written(&self) -> u64 {
+        0
+    }
+    fn pause(&self) {}
+    fn resume(&self) {}
+    fn destroyed(&self) -> bool {
+        false
+    }
+    fn mux(&self) -> Mux {
+        self.mux.clone()
+    }
+    fn remote_public_key(&self) -> Option<[u8; 32]> {
+        Some(self.key)
+    }
+}
+
+/// `peersBusy` honours a `peartube/bulk-busy` claim only from a peer that served this node blocks:
+/// a stranger can open the channel, and counting its claim would hold every relay's backfill.
+#[tokio::test]
+async fn a_busy_claim_counts_only_from_a_source_peer() {
+    use protomux::ChannelOptions;
+
+    for (source, expected) in [(false, false), (true, true)] {
+        let ((local_read, local_write), (peer_read, peer_write)) = protomux::memory::duplex(64);
+        let conn = Arc::new(WireConn {
+            mux: Mux::new(local_read, local_write, StreamInfo::default()),
+            key: unhex(KEY_A),
+        });
+        let peer = Mux::new(peer_read, peer_write, StreamInfo::default());
+        let gate = TrafficGate::new(Options {
+            auto_tick: false,
+            is_source_peer: Some(Arc::new(move |key: &str| source && key == KEY_A)),
+            ..Options::default()
+        });
+        gate.attach(conn);
+
+        // The gate opens its busy channel on attach; the peer answers with its own open and claims
+        // viewers. Pairing first is what makes the remote open land instead of being rejected.
+        let mut pairs = peer.pair(peartube_native::traffic::BUSY_PROTOCOL, None);
+        let request = tokio::time::timeout(Duration::from_secs(5), pairs.recv())
+            .await
+            .expect("the remote open arrives")
+            .expect("a pair request");
+        drop(request);
+        let channel = peer
+            .open_channel(ChannelOptions::new(peartube_native::traffic::BUSY_PROTOCOL))
+            .expect("peer channel");
+        channel.sender().send(0, &1u64);
+
+        let deadline = tokio::time::Instant::now() + Duration::from_millis(500);
+        while tokio::time::Instant::now() < deadline {
+            if gate.peers_busy() == expected && gate.info().peers_busy == expected {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert_eq!(
+            gate.peers_busy(),
+            expected,
+            "a busy claim counts only from a source peer"
+        );
+        assert_eq!(gate.info().peers_busy, expected);
+        gate.stop();
+    }
 }

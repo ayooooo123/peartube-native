@@ -2,22 +2,19 @@
 //!
 //! The JS owns a `hypercore-storage` instance so compaction and core lookups go through it; the
 //! Rust Corestore is the same engine (RocksDB in the hypercore-storage format), so only the folder
-//! and the stored-core index are mirrored here. The worklet RocksDB tuning options map onto the
-//! engine's own defaults.
+//! and the engine's maintenance calls are mirrored here. The worklet RocksDB tuning options map
+//! onto the engine's own defaults.
 
-use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
 
 use corestore::Corestore;
 
 use super::blobs::BlobsError;
 
-/// Where the Corestore lives and which cores it already holds.
+/// Where the Corestore lives.
 pub struct Storage {
     path: PathBuf,
     store: Corestore,
-    stored_disc: Mutex<HashSet<[u8; 32]>>,
     worklet: bool,
     mobile_worklet: bool,
 }
@@ -48,12 +45,10 @@ impl Storage {
         }
         let store =
             Corestore::open_with_options(&dir, hypercore::storage::StoreOptions { wal, memory })?;
-        let stored_disc = store.list()?.into_iter().collect();
         let mobile_worklet = worklet && !cfg!(target_os = "macos");
         Ok(Self {
             path,
             store,
-            stored_disc: Mutex::new(stored_disc),
             worklet,
             mobile_worklet,
         })
@@ -65,34 +60,6 @@ impl Storage {
 
     pub fn store(&self) -> &Corestore {
         &self.store
-    }
-
-    pub fn stored_disc(&self) -> HashSet<[u8; 32]> {
-        self.stored_disc
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .clone()
-    }
-
-    pub fn has_stored(&self, discovery_key: &[u8; 32]) -> bool {
-        self.stored_disc
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .contains(discovery_key)
-    }
-
-    pub fn mark_stored(&self, discovery_key: [u8; 32]) {
-        self.stored_disc
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .insert(discovery_key);
-    }
-
-    pub fn forget_stored(&self, discovery_key: &[u8; 32]) {
-        self.stored_disc
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .remove(discovery_key);
     }
 
     pub fn worklet(&self) -> bool {

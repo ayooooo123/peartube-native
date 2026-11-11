@@ -53,6 +53,7 @@ fn data(size: usize) -> Vec<u8> {
 #[derive(Default)]
 struct SwarmState {
     joined: Mutex<Vec<[u8; 32]>>,
+    wanted: Mutex<Vec<[u8; 32]>>,
     left: Mutex<Vec<[u8; 32]>>,
 }
 
@@ -64,14 +65,21 @@ impl TestSwarm {
         lock(&self.0.joined).clone()
     }
 
+    fn wanted(&self) -> Vec<[u8; 32]> {
+        lock(&self.0.wanted).clone()
+    }
+
     fn left(&self) -> Vec<[u8; 32]> {
         lock(&self.0.left).clone()
     }
 }
 
 impl ContentSwarm for TestSwarm {
-    fn join(&self, key: [u8; 32]) {
+    fn announce(&self, key: [u8; 32]) {
         lock(&self.0.joined).push(key);
+    }
+    fn want(&self, key: [u8; 32], _owned: bool, _holds_all: bool) {
+        lock(&self.0.wanted).push(key);
     }
     fn leave(&self, key: [u8; 32]) {
         lock(&self.0.left).push(key);
@@ -96,7 +104,6 @@ struct ChannelState {
     writer: [u8; 32],
     primary: [u8; 32],
     ops: Mutex<Vec<(Vec<u8>, Vec<u8>)>>,
-    secondary: Mutex<HashSet<String>>,
     has_entries: AtomicBool,
 }
 
@@ -169,9 +176,6 @@ impl ChannelView for TestChannel {
         self.push(op);
         Box::pin(async { Ok(()) })
     }
-    fn add_secondary_writer(&self, writer_hex: &str) {
-        lock(&self.0.secondary).insert(writer_hex.to_owned());
-    }
     fn mark_has_entries(&self) {
         self.0.has_entries.store(true, Ordering::Release);
     }
@@ -187,7 +191,6 @@ struct HostState {
     vault: AtomicBool,
     epoch_key: Mutex<Option<[u8; 32]>>,
     announcements: Mutex<HashMap<String, Announce>>,
-    stored: Mutex<HashSet<[u8; 32]>>,
     db_bytes: AtomicU64,
     compactions: Mutex<Vec<Compact>>,
     storage: Mutex<Option<Corestore>>,
@@ -245,9 +248,6 @@ impl BlobHost for TestHost {
     }
     fn refresh_catalog(&self) -> SendFuture<'_, ()> {
         Box::pin(async {})
-    }
-    fn mark_stored(&self, discovery_key: [u8; 32]) {
-        lock(&self.0.stored).insert(discovery_key);
     }
     fn db_disk_bytes(&self) -> u64 {
         self.0.db_bytes.load(Ordering::Acquire)
@@ -1432,11 +1432,11 @@ async fn warm_joins_the_swarm_and_registers_ranges() {
     };
     h.blobs.warm(&announce).await.expect("warm");
     let key = unhex32(&announce.blobs);
-    assert_eq!(h.swarm.joined(), vec![key]);
+    assert_eq!(h.swarm.wanted(), vec![key]);
     assert!(h.blobs.open_core(&key).is_some());
-    // A second warm for the same span re-joins (as the JS does) and keeps one range.
+    // A second warm for the same span looks the title up again (as the JS does) and keeps one range.
     h.blobs.warm(&announce).await.expect("warm again");
-    assert_eq!(h.swarm.joined(), vec![key, key]);
+    assert_eq!(h.swarm.wanted(), vec![key, key]);
 }
 
 #[test]

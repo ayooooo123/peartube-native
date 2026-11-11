@@ -34,10 +34,12 @@ use tokio::io::{AsyncRead, AsyncWrite, ReadHalf, WriteHalf};
 
 use super::api::{LanEndpoint, Route, Routes};
 
-/// Announcements beyond the cap take turns on the DHT.
-pub const MAX_CONTENT_TOPICS: usize = 48;
-/// How often content beyond the announcement cap gets its turn.
-pub const CONTENT_TOPIC_ROTATE_MS: u64 = 20_000;
+/// How many videos a node announces at once.
+pub const MAX_ANNOUNCED: usize = 48;
+/// How often one video past the announcement cap gets its turn on the DHT.
+pub const ANNOUNCE_ROTATE_MS: u64 = 20_000;
+/// Titles looked up at once: the one playing and the last few opened.
+pub const MAX_LOOKUPS: usize = 4;
 
 fn lock<T>(cell: &Mutex<T>) -> MutexGuard<'_, T> {
     cell.lock().unwrap_or_else(|error| error.into_inner())
@@ -160,6 +162,33 @@ pub trait WakeupSink: Send + Sync {
     fn add_stream(&self, mux: &Mux);
     /// `session.broadcastLookup()`: ask the new peer for the writers it holds.
     fn request_lookup(&self);
+}
+
+/// What the announcement rotation enumerates from the blob store: `network.js` reads
+/// `ctx.blobs.ownedBlobs` and (for a relay) `cachedBlobs`/`blobCores` directly.
+pub trait ContentIndex: Send + Sync {
+    /// Videos this node published, complete legacy slots first, in the app's announcement order.
+    fn owned(&self) -> Vec<[u8; 32]>;
+    /// Complete cached copies, for a relay's announce rotation.
+    fn complete_cached(&self) -> Vec<[u8; 32]>;
+}
+
+/// One video topic this node holds, and whether it holds it as an announcement or a lookup.
+#[derive(Clone, Copy)]
+struct HeldTopic {
+    key: [u8; 32],
+    topic: [u8; 32],
+}
+
+/// A video's DHT topic is its Hypercore discoveryKey, the one HiveRelays and every PearTube
+/// since v0.4.32 use. Announcing it tells the DHT and the LAN that this address holds the video,
+/// so a node announces only what it published (and, as a relay, its complete cached copies) and
+/// looks the title being read up without announcing. The maps keep the app's least-recently-used
+/// order: asking again only refreshes a title's place in line.
+#[derive(Default)]
+struct ContentState {
+    announced: Vec<HeldTopic>,
+    lookups: Vec<HeldTopic>,
 }
 
 /// The frames one connection carried, as its route counts them.
@@ -554,7 +583,10 @@ pub struct Network {
     listeners: Mutex<Vec<(u64, Listener)>>,
     next_listener: AtomicU64,
     wakeups: Mutex<Vec<Arc<dyn WakeupSink>>>,
-    content_topics: Mutex<HashMap<[u8; 32], [u8; 32]>>,
+    content: Mutex<ContentState>,
+    content_index: Mutex<Option<Arc<dyn ContentIndex>>>,
+    /// A relay's job: announce the complete copies this node caches, not only what it published.
+    announce_cache: bool,
     overlay_topics: Mutex<HashMap<String, [u8; 32]>>,
     allowed: Mutex<Option<HashSet<String>>>,
     lan: Mutex<Option<LanState>>,
@@ -587,6 +619,7 @@ impl Network {
         relay_through: Option<[u8; 32]>,
         allowed_peers: Option<Vec<String>>,
         private_routing: bool,
+        announce_cache: bool,
         closing: Arc<AtomicBool>,
     ) -> Result<Arc<Self>, std::io::Error> {
         // Resolve before choosing the bind: wildcard Noise addresses omit loopback interfaces.
@@ -639,7 +672,9 @@ impl Network {
             listeners: Mutex::new(Vec::new()),
             next_listener: AtomicU64::new(0),
             wakeups: Mutex::new(Vec::new()),
-            content_topics: Mutex::new(HashMap::new()),
+            content: Mutex::new(ContentState::default()),
+            content_index: Mutex::new(None),
+            announce_cache,
             overlay_topics: Mutex::new(HashMap::new()),
             allowed: Mutex::new(allowed),
             lan: Mutex::new(None),
@@ -676,12 +711,33 @@ impl Network {
         {
             *lock(&network.private) = Some(private);
         }
+        // Content past the cap gets its turn slowly, one complete copy at a time. The status poll
+        // used to join every cached core it walked, which churned the DHT and evicted whatever it
+        // happened to see.
+        let weak = network.weak.clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(Duration::from_millis(ANNOUNCE_ROTATE_MS)).await;
+                let Some(network) = weak.upgrade() else {
+                    break;
+                };
+                if network.closing.load(Ordering::Acquire) {
+                    break;
+                }
+                network.rotate_announcement();
+            }
+        });
         Ok(network)
     }
 
     /// Registers a bee's wakeup before any connection arrives.
     pub fn attach_wakeup(&self, bee: Arc<autobee::Autobee>) {
         lock(&self.wakeups).push(Arc::new(BeeWakeup(bee)));
+    }
+
+    /// `createNetwork` reading `ctx.blobs`: the store the rotation enumerates once blobs open.
+    pub fn install_content_index(&self, index: Arc<dyn ContentIndex>) {
+        *lock(&self.content_index) = Some(index);
     }
 
     /// A followed source's wakeup must ride the connections already open.
@@ -938,50 +994,216 @@ impl Network {
         }
     }
 
-    /// `joinContentSwarm`: the stock Hypercore discoveryKey of a video core.
-    pub fn join_content(&self, key: [u8; 32]) {
-        if !self.can_announce() {
-            return;
-        }
-        let mut topics = lock(&self.content_topics);
-        if topics.contains_key(&key) {
-            return;
-        }
-        if topics.len() >= MAX_CONTENT_TOPICS
-            && let Some(victim) = topics.keys().next().copied()
-        {
-            topics.remove(&victim);
-        }
-        let discovery = hypercore::crypto::discovery_key(&key);
-        topics.insert(key, discovery);
-        drop(topics);
-        let swarm = self.swarm.clone();
-        if let Some(lan) = lock(&self.lan).as_ref().map(|state| state.binding.clone()) {
-            lan.join(discovery);
-        }
-        tokio::spawn(async move {
-            let mut opts = JoinOpts::default();
-            opts.server = true;
-            opts.client = true;
-            let _ = swarm.join(discovery, opts).await;
-        });
+    /// `usable(hex)`: topics may be announced, and this node is not closing.
+    fn usable(&self) -> bool {
+        self.can_announce() && !self.closing.load(Ordering::Acquire)
     }
 
-    pub fn leave_content(&self, key: &[u8; 32]) {
-        if let Some(discovery) = lock(&self.content_topics).remove(key) {
-            let swarm = self.swarm.clone();
-            tokio::spawn(async move {
-                let _ = swarm.leave(discovery).await;
-            });
+    /// `joinTopic`: the topic's LAN join is immediate; the DHT join runs detached.
+    fn join_topic(&self, key: [u8; 32], server: bool, client: bool) -> HeldTopic {
+        let topic = hypercore::crypto::discovery_key(&key);
+        if let Some(lan) = lock(&self.lan).as_ref().map(|state| state.binding.clone()) {
+            lan.join(topic);
         }
+        let swarm = self.swarm.clone();
+        let closing = self.closing.clone();
+        tokio::spawn(async move {
+            if closing.load(Ordering::Acquire) {
+                return;
+            }
+            let mut opts = JoinOpts::default();
+            opts.server = server;
+            opts.client = client;
+            let _ = swarm.join(topic, opts).await;
+        });
+        HeldTopic { key, topic }
+    }
+
+    /// `dropTopic`: leave the DHT topic and the LAN one.
+    fn drop_topic(&self, held: HeldTopic) {
+        let swarm = self.swarm.clone();
+        tokio::spawn(async move {
+            let _ = swarm.leave(held.topic).await;
+        });
+        if let Some(lan) = lock(&self.lan).as_ref().map(|state| state.binding.clone()) {
+            lan.leave(held.topic);
+        }
+    }
+
+    /// `touch`: asking again for a held topic only refreshes its place in line.
+    fn touch(list: &mut Vec<HeldTopic>, key: &[u8; 32]) -> bool {
+        let Some(position) = list.iter().position(|held| &held.key == key) else {
+            return false;
+        };
+        let held = list.remove(position);
+        list.push(held);
+        true
+    }
+
+    /// `announceContent`: join a published video's topic as a server and never look it up.
+    pub fn announce_content(&self, key: [u8; 32]) {
+        self.announce_content_with(key, true);
+    }
+
+    fn announce_content_with(&self, key: [u8; 32], evict: bool) {
+        if !self.usable() {
+            return;
+        }
+        let mut state = lock(&self.content);
+        if Self::touch(&mut state.announced, &key) {
+            return;
+        }
+        if state.announced.len() >= MAX_ANNOUNCED {
+            // Catalog reads never displace a topic just because a refresh saw a complete copy.
+            // Deliberate joins still rotate the least recently served title out, owned or not: a
+            // finished download walks the same queue, so a large library still gets its turn.
+            if !evict {
+                return;
+            }
+            let victim = state.announced.remove(0);
+            drop(state);
+            self.drop_topic(victim);
+            state = lock(&self.content);
+        }
+        // A lookup of this title becomes its announcement: the swarm has no in-place refresh, so
+        // the topic is rejoined as a server (the LAN join never left).
+        if let Some(position) = state.lookups.iter().position(|held| held.key == key) {
+            let held = state.lookups.remove(position);
+            let swarm = self.swarm.clone();
+            let closing = self.closing.clone();
+            tokio::spawn(async move {
+                if closing.load(Ordering::Acquire) {
+                    return;
+                }
+                let _ = swarm.leave(held.topic).await;
+                let mut opts = JoinOpts::default();
+                opts.server = true;
+                opts.client = false;
+                let _ = swarm.join(held.topic, opts).await;
+            });
+            state.announced.push(held);
+            return;
+        }
+        let held = self.join_topic(key, true, false);
+        state.announced.push(held);
+    }
+
+    /// `lookupContent`: find a title's peers without telling anyone this node holds it.
+    pub fn lookup_content(&self, key: [u8; 32]) {
+        if !self.usable() {
+            return;
+        }
+        let mut state = lock(&self.content);
+        if state.announced.iter().any(|held| held.key == key)
+            || Self::touch(&mut state.lookups, &key)
+        {
+            return;
+        }
+        if state.lookups.len() >= MAX_LOOKUPS {
+            let victim = state.lookups.remove(0);
+            drop(state);
+            self.drop_topic(victim);
+            state = lock(&self.content);
+        }
+        let held = self.join_topic(key, false, true);
+        state.lookups.push(held);
+    }
+
+    /// `wantContent`: a title about to be read. A relay announces a copy it holds whole; every
+    /// other read looks the title up, and a node never announces what it merely watched.
+    pub fn want_content(&self, key: [u8; 32], owned: bool, holds_all: bool) {
+        if owned || (self.announce_cache && holds_all) {
+            self.announce_content(key);
+        } else if !holds_all {
+            self.lookup_content(key);
+        }
+    }
+
+    /// `createNetwork`'s boot joins: every complete legacy slot and published video is announced
+    /// up to the cap (network.js: `blobSlots` first, then `ownedBlobs`).
+    pub fn prime_content(&self) {
+        let index = { lock(&self.content_index).clone() };
+        let Some(index) = index else {
+            return;
+        };
+        for key in index.owned() {
+            if lock(&self.content).announced.len() >= MAX_ANNOUNCED {
+                break;
+            }
+            self.announce_content(key);
+        }
+    }
+
+    /// `offerCopy`: a complete cached copy seen while the catalog is listed. A relay announces it
+    /// when a slot is free; it never displaces a title.
+    pub fn offer_copy(&self, key: [u8; 32], holds_all: bool) {
+        if self.announce_cache && holds_all {
+            self.announce_content_with(key, false);
+        }
+    }
+
+    /// `leaveContent`: forget both holds of a video's topic.
+    pub fn leave_content(&self, key: &[u8; 32]) {
+        let dropped: Vec<HeldTopic> = {
+            let mut state = lock(&self.content);
+            let mut dropped = Vec::new();
+            if let Some(position) = state.announced.iter().position(|held| &held.key == key) {
+                dropped.push(state.announced.remove(position));
+            }
+            if let Some(position) = state.lookups.iter().position(|held| &held.key == key) {
+                dropped.push(state.lookups.remove(position));
+            }
+            dropped
+        };
+        for held in dropped {
+            self.drop_topic(held);
+        }
+    }
+
+    /// `rotateTimer`: one video past the cap gets its turn.
+    fn rotate_announcement(&self) {
+        let index = { lock(&self.content_index).clone() };
+        let Some(index) = index else {
+            return;
+        };
+        let mut candidates: Vec<[u8; 32]> = Vec::new();
+        if self.announce_cache {
+            candidates.extend(index.complete_cached());
+        }
+        candidates.extend(index.owned());
+        let announced = lock(&self.content)
+            .announced
+            .iter()
+            .map(|held| held.key)
+            .collect::<HashSet<_>>();
+        if let Some(next) = candidates.into_iter().find(|key| !announced.contains(key)) {
+            self.announce_content(next);
+        }
+    }
+
+    /// The titles this node announces (a status/debug view, as `contentTopics` was).
+    pub fn content_topics(&self) -> Vec<[u8; 32]> {
+        lock(&self.content)
+            .announced
+            .iter()
+            .map(|held| held.key)
+            .collect()
+    }
+
+    /// The titles this node only looks up.
+    pub fn lookup_topics(&self) -> Vec<[u8; 32]> {
+        lock(&self.content)
+            .lookups
+            .iter()
+            .map(|held| held.key)
+            .collect()
     }
 
     pub fn has_content_topic(&self, key: &[u8; 32]) -> bool {
-        lock(&self.content_topics).contains_key(key)
-    }
-
-    pub fn content_topics(&self) -> Vec<[u8; 32]> {
-        lock(&self.content_topics).values().copied().collect()
+        lock(&self.content)
+            .announced
+            .iter()
+            .any(|held| &held.key == key)
     }
 
     pub fn overlay_topic_count(&self) -> usize {
@@ -1006,8 +1228,11 @@ impl Network {
             binding.destroy().await;
             return Ok(());
         }
-        for topic in lock(&self.content_topics).values() {
-            binding.join(*topic);
+        {
+            let state = lock(&self.content);
+            for held in state.announced.iter().chain(state.lookups.iter()) {
+                binding.join(held.topic);
+            }
         }
         for key in lock(&self.overlay_topics).values() {
             binding.join(hypercore::crypto::discovery_key(key));
@@ -1018,6 +1243,14 @@ impl Network {
                 (connection.close)();
                 return;
             };
+            // `allowedPeers` filters a LAN peer as it arrives, not in Hyperswarm's firewall: a
+            // rejected key there is banned for life, and a LAN key is a real peer on this network.
+            if let Some(key) = connection.remote_public_key
+                && network.blocked(&key)
+            {
+                (connection.close)();
+                return;
+            }
             network.wire(
                 connection.mux,
                 connection.remote_public_key.unwrap_or_default(),
@@ -1295,8 +1528,11 @@ impl Network {
 }
 
 impl super::blobs::ContentSwarm for Arc<Network> {
-    fn join(&self, key: [u8; 32]) {
-        Network::join_content(self, key);
+    fn announce(&self, key: [u8; 32]) {
+        Network::announce_content(self, key);
+    }
+    fn want(&self, key: [u8; 32], owned: bool, holds_all: bool) {
+        Network::want_content(self, key, owned, holds_all);
     }
     fn leave(&self, key: [u8; 32]) {
         Network::leave_content(self, &key);
@@ -1348,8 +1584,77 @@ impl super::api::Swarm for NetworkSwarm {
 mod tests {
     use super::*;
 
+    /// A node announces only what it published: the title being watched is looked up, so the DHT
+    /// (and a LAN peer who hears the lookup's hashed topic) never learns this address holds it.
     #[tokio::test]
-    async fn watch_without_following_joins_only_the_public_source_rendezvous() {
+    async fn only_a_publisher_announces_the_title() {
+        use crate::node::Node;
+        use crate::node::api::PutMeta;
+        use crate::node::core::NodeSource;
+        use serde_json::Map;
+
+        let publisher_dir = tempfile::tempdir().unwrap();
+        let publisher = crate::node::core::create_node(serde_json::json!({
+            "storage": publisher_dir.path(), "bootstrap": ["127.0.0.1:9"], "worklet": true,
+            "streamHost": "127.0.0.1", "streamPort": 0,
+        }))
+        .await
+        .unwrap();
+        let published = publisher
+            .publish(
+                PutMeta {
+                    id: "imdb:tt0816692".into(),
+                    title: "Interstellar".into(),
+                    private_entry: None,
+                    epoch: None,
+                    store: None,
+                    expected_size: None,
+                    extra: Map::new(),
+                },
+                NodeSource::bytes(vec![7u8; 1024]),
+            )
+            .await
+            .unwrap();
+        let blob = published.announce.blobs.clone();
+        let announced = parse_hex32(&blob).unwrap();
+        let net = publisher.net();
+        assert!(
+            net.content_topics().contains(&announced),
+            "the publisher announces its own video"
+        );
+        assert!(
+            !net.lookup_topics().contains(&announced),
+            "a published title is not looked up"
+        );
+
+        let app_dir = tempfile::tempdir().unwrap();
+        let app = crate::node::core::create_node(serde_json::json!({
+            "storage": app_dir.path(), "bootstrap": ["127.0.0.1:9"], "worklet": true,
+            "streamHost": "127.0.0.1", "streamPort": 0,
+        }))
+        .await
+        .unwrap();
+        let uri = format!(
+            "peartube://watch/{blob}:0:1:0:1024?id=imdb%3Att0816692&title=Interstellar&source={}&kind=channel",
+            "ab".repeat(32)
+        );
+        app.open_uri(&uri, false).await.unwrap();
+        let net = app.net();
+        assert!(
+            net.lookup_topics().contains(&announced),
+            "a watched title is looked up"
+        );
+        assert!(
+            !net.content_topics().contains(&announced),
+            "an app never announces what it watched"
+        );
+
+        app.close().await.unwrap();
+        publisher.close().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_watch_link_joins_its_channel_swarm_and_follows_it_only_when_private() {
         use crate::node::Node;
         let source = hex(&[17; 32]);
         let blob = hex(&[34; 32]);
@@ -1373,9 +1678,22 @@ mod tests {
                     .get(&format!("source-swarm:{source}"))
                     .copied(),
                 (!private_routing).then_some([17; 32]),
-                "public watches rendezvous with the channel without following; private watches must not announce",
+                "a public watch joins the channel's swarm; private routing must not announce it",
             );
-            assert_eq!(node.list_sources().await, followed);
+            let sources = node.list_sources().await;
+            if private_routing {
+                assert_eq!(
+                    sources.len(),
+                    followed.len() + 1,
+                    "private routing reaches only followed channels, so the link follows its channel"
+                );
+                assert!(sources.iter().any(|item| item.key == source));
+            } else {
+                assert_eq!(
+                    sources, followed,
+                    "a public watch does not follow the channel"
+                );
+            }
             node.close().await.unwrap();
         }
     }
@@ -1416,6 +1734,7 @@ mod tests {
                 0,
                 None,
                 None,
+                false,
                 false,
                 Arc::new(AtomicBool::new(false)),
             ),
