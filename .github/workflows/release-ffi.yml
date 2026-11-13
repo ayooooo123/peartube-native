@@ -34,57 +34,73 @@ jobs:
         with:
           ref: ${{ github.event.inputs.ref || github.ref }}
           path: peartube-native
+      # The sibling crates build at the commits STACK.lock names, so a release can be rebuilt later.
+      - id: stack
+        run: while read -r repo sha; do echo "$repo=$sha" >> "$GITHUB_OUTPUT"; done < STACK.lock
       - uses: actions/checkout@v4
         with:
           repository: ${{ github.repository_owner }}/compact-encoding-rs
+          ref: ${{ steps.stack.outputs['compact-encoding-rs'] }}
           path: compact-encoding-rs
       - uses: actions/checkout@v4
         with:
           repository: ${{ github.repository_owner }}/protomux-rs
+          ref: ${{ steps.stack.outputs['protomux-rs'] }}
           path: protomux-rs
       - uses: actions/checkout@v4
         with:
           repository: ${{ github.repository_owner }}/protomux-wakeup-rs
+          ref: ${{ steps.stack.outputs['protomux-wakeup-rs'] }}
           path: protomux-wakeup-rs
       - uses: actions/checkout@v4
         with:
           repository: ${{ github.repository_owner }}/hyperschema-rs
+          ref: ${{ steps.stack.outputs['hyperschema-rs'] }}
           path: hyperschema-rs
       - uses: actions/checkout@v4
         with:
           repository: ${{ github.repository_owner }}/hypercore-id-encoding-rs
+          ref: ${{ steps.stack.outputs['hypercore-id-encoding-rs'] }}
           path: hypercore-id-encoding-rs
       - uses: actions/checkout@v4
         with:
           repository: ${{ github.repository_owner }}/hypercore-storage-rs
+          ref: ${{ steps.stack.outputs['hypercore-storage-rs'] }}
           path: hypercore-storage-rs
       - uses: actions/checkout@v4
         with:
           repository: ${{ github.repository_owner }}/hypercore-rs
+          ref: ${{ steps.stack.outputs['hypercore-rs'] }}
           path: hypercore-rs
       - uses: actions/checkout@v4
         with:
           repository: ${{ github.repository_owner }}/corestore-rs
+          ref: ${{ steps.stack.outputs['corestore-rs'] }}
           path: corestore-rs
       - uses: actions/checkout@v4
         with:
           repository: ${{ github.repository_owner }}/hyperbee-rs
+          ref: ${{ steps.stack.outputs['hyperbee-rs'] }}
           path: hyperbee-rs
       - uses: actions/checkout@v4
         with:
           repository: ${{ github.repository_owner }}/hyperblobs-rs
+          ref: ${{ steps.stack.outputs['hyperblobs-rs'] }}
           path: hyperblobs-rs
       - uses: actions/checkout@v4
         with:
           repository: ${{ github.repository_owner }}/byte-stream-rs
+          ref: ${{ steps.stack.outputs['byte-stream-rs'] }}
           path: byte-stream-rs
       - uses: actions/checkout@v4
         with:
           repository: ${{ github.repository_owner }}/autobee-rs
+          ref: ${{ steps.stack.outputs['autobee-rs'] }}
           path: autobee-rs
       - uses: actions/checkout@v4
         with:
           repository: ${{ github.repository_owner }}/peeroxide
+          ref: ${{ steps.stack.outputs['peeroxide'] }}
           path: peeroxide
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -101,7 +117,7 @@ jobs:
         run: |
           grep -q '^Pkg.Revision = 29.0.14206865$' "$ANDROID_NDK_HOME/source.properties"
           sh ffi/build.sh android-arm64 "${{ github.workspace }}/dist"
-      # The sibling crates are checked out at their default branches: record what this library was built from.
+      # What this library was built from: the release checks it against STACK.lock.
       - name: Stack commits
         run: for r in compact-encoding-rs protomux-rs protomux-wakeup-rs hyperschema-rs hypercore-id-encoding-rs hypercore-storage-rs hypercore-rs corestore-rs hyperbee-rs hyperblobs-rs byte-stream-rs autobee-rs peeroxide; do printf '%s %s\n' "$r" "$(git -C ../$r rev-parse HEAD)"; done > "${{ github.workspace }}/dist/stack-android-arm64.txt"
       - uses: actions/upload-artifact@v4
@@ -124,64 +140,80 @@ jobs:
         with:
           ref: ${{ github.event.inputs.ref || github.ref }}
           path: peartube-native
+      # The sibling crates build at the commits STACK.lock names, so a release can be rebuilt later.
+      - id: stack
+        run: while read -r repo sha; do echo "$repo=$sha" >> "$GITHUB_OUTPUT"; done < STACK.lock
       - uses: actions/checkout@v4
         with:
           repository: ${{ github.repository_owner }}/compact-encoding-rs
+          ref: ${{ steps.stack.outputs['compact-encoding-rs'] }}
           path: compact-encoding-rs
       - uses: actions/checkout@v4
         with:
           repository: ${{ github.repository_owner }}/protomux-rs
+          ref: ${{ steps.stack.outputs['protomux-rs'] }}
           path: protomux-rs
       - uses: actions/checkout@v4
         with:
           repository: ${{ github.repository_owner }}/protomux-wakeup-rs
+          ref: ${{ steps.stack.outputs['protomux-wakeup-rs'] }}
           path: protomux-wakeup-rs
       - uses: actions/checkout@v4
         with:
           repository: ${{ github.repository_owner }}/hyperschema-rs
+          ref: ${{ steps.stack.outputs['hyperschema-rs'] }}
           path: hyperschema-rs
       - uses: actions/checkout@v4
         with:
           repository: ${{ github.repository_owner }}/hypercore-id-encoding-rs
+          ref: ${{ steps.stack.outputs['hypercore-id-encoding-rs'] }}
           path: hypercore-id-encoding-rs
       - uses: actions/checkout@v4
         with:
           repository: ${{ github.repository_owner }}/hypercore-storage-rs
+          ref: ${{ steps.stack.outputs['hypercore-storage-rs'] }}
           path: hypercore-storage-rs
       - uses: actions/checkout@v4
         with:
           repository: ${{ github.repository_owner }}/hypercore-rs
+          ref: ${{ steps.stack.outputs['hypercore-rs'] }}
           path: hypercore-rs
       - uses: actions/checkout@v4
         with:
           repository: ${{ github.repository_owner }}/corestore-rs
+          ref: ${{ steps.stack.outputs['corestore-rs'] }}
           path: corestore-rs
       - uses: actions/checkout@v4
         with:
           repository: ${{ github.repository_owner }}/hyperbee-rs
+          ref: ${{ steps.stack.outputs['hyperbee-rs'] }}
           path: hyperbee-rs
       - uses: actions/checkout@v4
         with:
           repository: ${{ github.repository_owner }}/hyperblobs-rs
+          ref: ${{ steps.stack.outputs['hyperblobs-rs'] }}
           path: hyperblobs-rs
       - uses: actions/checkout@v4
         with:
           repository: ${{ github.repository_owner }}/byte-stream-rs
+          ref: ${{ steps.stack.outputs['byte-stream-rs'] }}
           path: byte-stream-rs
       - uses: actions/checkout@v4
         with:
           repository: ${{ github.repository_owner }}/autobee-rs
+          ref: ${{ steps.stack.outputs['autobee-rs'] }}
           path: autobee-rs
       - uses: actions/checkout@v4
         with:
           repository: ${{ github.repository_owner }}/peeroxide
+          ref: ${{ steps.stack.outputs['peeroxide'] }}
           path: peeroxide
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-apple-darwin
       - name: Build
         run: sh ffi/build.sh darwin-arm64 "${{ github.workspace }}/dist"
-      # The sibling crates are checked out at their default branches: record what this library was built from.
+      # What this library was built from: the release checks it against STACK.lock.
       - name: Stack commits
         run: for r in compact-encoding-rs protomux-rs protomux-wakeup-rs hyperschema-rs hypercore-id-encoding-rs hypercore-storage-rs hypercore-rs corestore-rs hyperbee-rs hyperblobs-rs byte-stream-rs autobee-rs peeroxide; do printf '%s %s\n' "$r" "$(git -C ../$r rev-parse HEAD)"; done > "${{ github.workspace }}/dist/stack-darwin-arm64.txt"
       - uses: actions/upload-artifact@v4
@@ -231,6 +263,9 @@ jobs:
           if stacks[0] != stacks[1]:
               sys.exit("the two builds used different sibling commits; run the release again")
           stack = dict(line.split() for line in stacks[0].splitlines())
+          locked = dict(line.split() for line in open("STACK.lock").read().splitlines() if line.strip())
+          if stack != locked:
+              sys.exit("the builds did not use the commits STACK.lock names")
           manifest = {"commit": commit, "abiVersion": abi, "jsRef": js_ref, "stack": stack, "assets": digests}
           with open(os.path.join(dist, "ffi-manifest.json"), "w") as f:
               json.dump(manifest, f, indent=2)

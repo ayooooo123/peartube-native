@@ -36,6 +36,11 @@ The app does not build this crate. It downloads the pinned release `ffi-<sha9>`
 (the first nine hex digits of a `peartube-native` commit) and verifies every file
 before use.
 
+The sibling crates build at the commits `STACK.lock` names, not at their latest
+`main`, so a release can be built again later; `ffi-manifest.json` repeats them as
+`stack`. After a sibling change a release must include, push it and run
+`sh ffi/stack-lock.sh`, then commit `STACK.lock`.
+
 | Asset | Built from |
 |---|---|
 | `peartube_native_ffi-android-arm64.so` | `aarch64-linux-android`, NDK r29 (`29.0.14206865`), API 29, release profile, stripped, `LOAD` segments aligned to 16 KiB (`-Wl,-z,max-page-size=16384`) |
