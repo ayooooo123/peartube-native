@@ -101,10 +101,15 @@ jobs:
         run: |
           grep -q '^Pkg.Revision = 29.0.14206865$' "$ANDROID_NDK_HOME/source.properties"
           sh ffi/build.sh android-arm64 "${{ github.workspace }}/dist"
+      # The sibling crates are checked out at their default branches: record what this library was built from.
+      - name: Stack commits
+        run: for r in compact-encoding-rs protomux-rs protomux-wakeup-rs hyperschema-rs hypercore-id-encoding-rs hypercore-storage-rs hypercore-rs corestore-rs hyperbee-rs hyperblobs-rs byte-stream-rs autobee-rs peeroxide; do printf '%s %s\n' "$r" "$(git -C ../$r rev-parse HEAD)"; done > "${{ github.workspace }}/dist/stack-android-arm64.txt"
       - uses: actions/upload-artifact@v4
         with:
           name: android-arm64
-          path: dist/peartube_native_ffi-android-arm64.so
+          path: |
+            dist/peartube_native_ffi-android-arm64.so
+            dist/stack-android-arm64.txt
           if-no-files-found: error
           retention-days: 7
 
@@ -176,10 +181,15 @@ jobs:
           targets: aarch64-apple-darwin
       - name: Build
         run: sh ffi/build.sh darwin-arm64 "${{ github.workspace }}/dist"
+      # The sibling crates are checked out at their default branches: record what this library was built from.
+      - name: Stack commits
+        run: for r in compact-encoding-rs protomux-rs protomux-wakeup-rs hyperschema-rs hypercore-id-encoding-rs hypercore-storage-rs hypercore-rs corestore-rs hyperbee-rs hyperblobs-rs byte-stream-rs autobee-rs peeroxide; do printf '%s %s\n' "$r" "$(git -C ../$r rev-parse HEAD)"; done > "${{ github.workspace }}/dist/stack-darwin-arm64.txt"
       - uses: actions/upload-artifact@v4
         with:
           name: darwin-arm64
-          path: dist/peartube_native_ffi-darwin-arm64.dylib
+          path: |
+            dist/peartube_native_ffi-darwin-arm64.dylib
+            dist/stack-darwin-arm64.txt
           if-no-files-found: error
           retention-days: 7
 
@@ -217,7 +227,11 @@ jobs:
           for name in assets:
               with open(os.path.join(dist, name), "rb") as f:
                   digests[name] = hashlib.sha256(f.read()).hexdigest()
-          manifest = {"commit": commit, "abiVersion": abi, "jsRef": js_ref, "assets": digests}
+          stacks = [open(os.path.join(dist, "stack-%s.txt" % t)).read() for t in ("android-arm64", "darwin-arm64")]
+          if stacks[0] != stacks[1]:
+              sys.exit("the two builds used different sibling commits; run the release again")
+          stack = dict(line.split() for line in stacks[0].splitlines())
+          manifest = {"commit": commit, "abiVersion": abi, "jsRef": js_ref, "stack": stack, "assets": digests}
           with open(os.path.join(dist, "ffi-manifest.json"), "w") as f:
               json.dump(manifest, f, indent=2)
               f.write("\n")
