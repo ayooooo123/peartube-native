@@ -30,6 +30,58 @@ runtime unresolved. It also needs the Rust runtime's system dependencies:
 - macOS/iOS: `-framework Security -framework CoreFoundation`
 - Linux/Android: `-lpthread -ldl -lm`
 
+## Release artifacts
+
+The app does not build this crate. It downloads the pinned release `ffi-<sha9>`
+(the first nine hex digits of a `peartube-native` commit) and verifies every file
+before use.
+
+| Asset | Built from |
+|---|---|
+| `peartube_native_ffi-android-arm64.so` | `aarch64-linux-android`, NDK r29 (`29.0.14206865`), API 29, release profile, stripped, `LOAD` segments aligned to 16 KiB (`-Wl,-z,max-page-size=16384`) |
+| `peartube_native_ffi-darwin-arm64.dylib` | `aarch64-apple-darwin`, release profile, install name `@rpath/libpeartube_native_ffi.dylib` |
+| `peartube_native.h` | `ffi/include/peartube_native.h` at the same commit |
+| `ffi-manifest.json` | `commit`, `abiVersion` (the header's `PT_ABI_VERSION`), `jsRef` (`JS_REF`), `assets`: file name → sha256 |
+| `SHA256SUMS` | `sha256sum` format over the two libraries and the header |
+
+The Android library links the C++ runtime dynamically. It needs the NDK r29
+`libc++_shared.so` beside it in `jniLibs/arm64-v8a`, the same copy the app's
+worklet addons load; every other dependency (`libstdc++.so`, the platform's
+empty stub, `libdl`, `libm`, `libc`) is part of Android 10 (API 29) and later.
+The macOS library needs only the system frameworks listed above. Both carry no
+build-machine path strings (`--remap-path-prefix`).
+
+A host links the files under their own names, not the asset names: the macOS
+copy goes into the bundle as `libpeartube_native_ffi.dylib`, which is what the
+install name expects, and the Android copy keeps `libpeartube_native_ffi.so`.
+
+### Cutting a release
+
+```
+gh workflow run release-ffi.yml -f ref=<commit|branch>
+```
+
+`.github/workflows/release-ffi.yml` builds `android-arm64` on `ubuntu-latest`
+and `darwin-arm64` on `macos-latest` with `ffi/build.sh`, then creates or
+updates the prerelease `ffi-<sha9>` for the built commit and uploads the five
+assets above. A dispatch run tags the resolved commit; pushing a matching
+`ffi-<sha9>` tag runs the same workflow.
+
+The same build locally (needs an NDK at `$ANDROID_NDK_HOME` or the newest under
+`$ANDROID_HOME/ndk`):
+
+```
+sh ffi/build.sh android-arm64 /tmp/ffi-out
+sh ffi/build.sh darwin-arm64 /tmp/ffi-out
+```
+
+Each run checks what it publishes before printing the asset: the ELF `LOAD`
+alignment, the six `pt_*` exports, the dylib install name, and that no
+build-machine home directory survived in the strings.
+
+The app pins a release in its `native.lock` (release tag, commit, `jsRef`,
+`abiVersion`, each asset's sha256) with its `sync-native.py`.
+
 ## ABI
 
 ```c

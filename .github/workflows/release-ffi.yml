@@ -1,0 +1,258 @@
+name: release-ffi
+
+# Publishes the pinned engine libraries the app downloads and verifies: release
+# `ffi-<sha9>` for the built commit, holding
+#   peartube_native_ffi-android-arm64.so
+#   peartube_native_ffi-darwin-arm64.dylib
+#   peartube_native.h
+#   ffi-manifest.json
+#   SHA256SUMS
+# See ffi/README.md ("Release artifacts").
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Commit, branch or tag to build and release
+        required: true
+        default: main
+  push:
+    tags: ['ffi-*']
+
+permissions:
+  contents: write
+
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    defaults:
+      run:
+        working-directory: peartube-native
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.ref || github.ref }}
+          path: peartube-native
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/compact-encoding-rs
+          path: compact-encoding-rs
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/protomux-rs
+          path: protomux-rs
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/protomux-wakeup-rs
+          path: protomux-wakeup-rs
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/hyperschema-rs
+          path: hyperschema-rs
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/hypercore-id-encoding-rs
+          path: hypercore-id-encoding-rs
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/hypercore-storage-rs
+          path: hypercore-storage-rs
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/hypercore-rs
+          path: hypercore-rs
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/corestore-rs
+          path: corestore-rs
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/hyperbee-rs
+          path: hyperbee-rs
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/hyperblobs-rs
+          path: hyperblobs-rs
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/byte-stream-rs
+          path: byte-stream-rs
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/autobee-rs
+          path: autobee-rs
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/peeroxide
+          path: peeroxide
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+      # r29 is 29.0.14206865, the NDK the app ships libc++_shared.so from.
+      - uses: nttld/setup-ndk@v1
+        id: ndk
+        with:
+          ndk-version: r29
+          add-to-path: false
+      - name: Build
+        env:
+          ANDROID_NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
+        run: |
+          grep -q '^Pkg.Revision = 29.0.14206865$' "$ANDROID_NDK_HOME/source.properties"
+          sh ffi/build.sh android-arm64 "${{ github.workspace }}/dist"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-arm64
+          path: dist/peartube_native_ffi-android-arm64.so
+          if-no-files-found: error
+          retention-days: 7
+
+  darwin:
+    runs-on: macos-latest
+    timeout-minutes: 90
+    defaults:
+      run:
+        working-directory: peartube-native
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.ref || github.ref }}
+          path: peartube-native
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/compact-encoding-rs
+          path: compact-encoding-rs
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/protomux-rs
+          path: protomux-rs
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/protomux-wakeup-rs
+          path: protomux-wakeup-rs
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/hyperschema-rs
+          path: hyperschema-rs
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/hypercore-id-encoding-rs
+          path: hypercore-id-encoding-rs
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/hypercore-storage-rs
+          path: hypercore-storage-rs
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/hypercore-rs
+          path: hypercore-rs
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/corestore-rs
+          path: corestore-rs
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/hyperbee-rs
+          path: hyperbee-rs
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/hyperblobs-rs
+          path: hyperblobs-rs
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/byte-stream-rs
+          path: byte-stream-rs
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/autobee-rs
+          path: autobee-rs
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/peeroxide
+          path: peeroxide
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+      - name: Build
+        run: sh ffi/build.sh darwin-arm64 "${{ github.workspace }}/dist"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: darwin-arm64
+          path: dist/peartube_native_ffi-darwin-arm64.dylib
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    needs: [android, darwin]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.ref || github.ref }}
+          path: peartube-native
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: ffi-manifest.json and SHA256SUMS
+        working-directory: peartube-native
+        run: |
+          set -eu
+          commit=$(git rev-parse HEAD)
+          abi=$(sed -n 's/^#define PT_ABI_VERSION \([0-9]\{1,\}\)u.*$/\1/p' ffi/include/peartube_native.h)
+          test -n "$abi"
+          cp ffi/include/peartube_native.h ../dist/peartube_native.h
+          python3 - ../dist "$commit" "$abi" "$(tr -d '\n' < JS_REF)" <<'PY'
+          import hashlib, json, os, sys
+
+          dist, commit, abi, js_ref = sys.argv[1], sys.argv[2], int(sys.argv[3]), sys.argv[4]
+          assets = [
+              "peartube_native_ffi-android-arm64.so",
+              "peartube_native_ffi-darwin-arm64.dylib",
+              "peartube_native.h",
+          ]
+          digests = {}
+          for name in assets:
+              with open(os.path.join(dist, name), "rb") as f:
+                  digests[name] = hashlib.sha256(f.read()).hexdigest()
+          manifest = {"commit": commit, "abiVersion": abi, "jsRef": js_ref, "assets": digests}
+          with open(os.path.join(dist, "ffi-manifest.json"), "w") as f:
+              json.dump(manifest, f, indent=2)
+              f.write("\n")
+          with open(os.path.join(dist, "SHA256SUMS"), "w") as f:
+              for name in assets:
+                  f.write("%s  %s\n" % (digests[name], name))
+          print(json.dumps(manifest, indent=2))
+          PY
+          cat ../dist/SHA256SUMS >> "$GITHUB_STEP_SUMMARY"
+      - name: Release
+        working-directory: peartube-native
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          commit=$(git rev-parse HEAD)
+          tag="ffi-$(printf '%s' "$commit" | cut -c1-9)"
+          if [ "$GITHUB_EVENT_NAME" = push ] && [ "$GITHUB_REF_NAME" != "$tag" ]; then
+            echo "tag $GITHUB_REF_NAME does not name the built commit ($tag)" >&2
+            exit 1
+          fi
+          notes="Pinned engine libraries for peartube-native@$commit: peartube_native_ffi-android-arm64.so, peartube_native_ffi-darwin-arm64.dylib, peartube_native.h. Digests are in ffi-manifest.json and SHA256SUMS."
+          if ! gh release view "$tag" >/dev/null 2>&1; then
+            if git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null 2>&1; then
+              gh release create "$tag" --prerelease --title "$tag" --notes "$notes"
+            else
+              # A dispatch run makes the tag at the built commit.
+              gh release create "$tag" --target "$commit" --prerelease --title "$tag" --notes "$notes"
+            fi
+          fi
+          gh release upload "$tag" \
+            ../dist/peartube_native_ffi-android-arm64.so \
+            ../dist/peartube_native_ffi-darwin-arm64.dylib \
+            ../dist/peartube_native.h \
+            ../dist/ffi-manifest.json \
+            ../dist/SHA256SUMS \
+            --clobber
+          gh release view "$tag" --json tagName,isPrerelease,assets
