@@ -103,9 +103,8 @@ fn gf_mul(a: u8, b: u8) -> u8 {
 
 fn rs_generator(degree: usize) -> Vec<u8> {
     let mut poly = vec![1u8];
-    for i in 0..degree {
+    for &root in &GF.exp[..degree] {
         let mut next = vec![0u8; poly.len() + 1];
-        let root = GF.exp[i];
         for (j, term) in poly.iter().enumerate() {
             next[j] ^= term;
             next[j + 1] ^= gf_mul(*term, root);
