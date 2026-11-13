@@ -3,15 +3,17 @@
 #
 #   sh ffi/build.sh <target> <out-dir>
 #
-#   target    android-arm64 | darwin-arm64
+#   target    android-arm64 | android-arm64-dev | darwin-arm64
+#             android-arm64-dev is the dev cargo profile, for the apps' debug builds
 #   out-dir   receives the asset; nothing is written outside it and target/
 #
 # The release workflow runs this unchanged on ubuntu-latest and macos-latest
 # (.github/workflows/release-ffi.yml); ffi/README.md lists the assets.
 set -eu
 
-target=${1:?usage: build.sh <android-arm64|darwin-arm64> <out-dir>}
-mkdir -p "${2:?usage: build.sh <android-arm64|darwin-arm64> <out-dir>}"
+usage='usage: build.sh <android-arm64|android-arm64-dev|darwin-arm64> <out-dir>'
+target=${1:?$usage}
+mkdir -p "${2:?$usage}"
 out=$(cd "$2" && pwd)
 repo=$(cd "$(dirname "$0")/.." && pwd)
 
@@ -28,10 +30,18 @@ remap="$remap${us}--remap-path-prefix=$cargo_home/git=~/.cargo/git"
 env_name() { printf '%s' "$1" | tr '-' '_'; }
 var_name() { printf '%s' "$1" | tr 'a-z-' 'A-Z_'; }
 
+# Release assets use the release profile; the dev asset matches a debug app build.
+profile=release
 case "$target" in
-  android-arm64)
+  android-arm64-dev) profile=dev ;;
+esac
+# cargo writes the dev profile to target/<triple>/debug.
+dir=$([ "$profile" = dev ] && echo debug || echo release)
+
+case "$target" in
+  android-arm64|android-arm64-dev)
     triple=aarch64-linux-android
-    asset=peartube_native_ffi-android-arm64.so
+    asset=peartube_native_ffi-$target.so
 
     ndk=${ANDROID_NDK_HOME:-}
     if [ -z "$ndk" ]; then
@@ -60,7 +70,7 @@ case "$target" in
     # dynamically, so that NDK copy must ship beside this file (see ffi/README.md).
     rustflags="-Clink-arg=-Wl,-z,max-page-size=16384"
     strip=$bin/llvm-strip
-    built=$repo/target/$triple/release/libpeartube_native_ffi.so
+    built=$repo/target/$triple/$dir/libpeartube_native_ffi.so
     ;;
   darwin-arm64)
     triple=aarch64-apple-darwin
@@ -70,17 +80,17 @@ case "$target" in
     built=$repo/target/$triple/release/libpeartube_native_ffi.dylib
     ;;
   *)
-    echo "unsupported target $target (android-arm64 | darwin-arm64)" >&2
+    echo "unsupported target $target (android-arm64 | android-arm64-dev | darwin-arm64)" >&2
     exit 1
     ;;
 esac
 
 export CARGO_ENCODED_RUSTFLAGS="$rustflags${us}$remap"
-cargo build --manifest-path "$repo/Cargo.toml" -p peartube-native-ffi --release --target "$triple"
+cargo build --manifest-path "$repo/Cargo.toml" -p peartube-native-ffi --profile "$profile" --target "$triple"
 
 # A released asset is frozen: fail the build rather than publish a wrong one.
 case "$target" in
-  android-arm64)
+  android-arm64|android-arm64-dev)
     "$strip" --strip-unneeded -o "$out/$asset" "$built"
     "$bin/llvm-readelf" -l "$out/$asset" | grep -Eq '^  LOAD .*0x4000$' ||
       { echo "$asset: LOAD segments are not 16 KiB aligned" >&2; exit 1; }

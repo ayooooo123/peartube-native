@@ -44,6 +44,7 @@ The sibling crates build at the commits `STACK.lock` names, not at their latest
 | Asset | Built from |
 |---|---|
 | `peartube_native_ffi-android-arm64.so` | `aarch64-linux-android`, NDK r29 (`29.0.14206865`), API 29, release profile, stripped, `LOAD` segments aligned to 16 KiB (`-Wl,-z,max-page-size=16384`) |
+| `peartube_native_ffi-android-arm64-dev.so` | the same, built with the dev cargo profile (stripped) for the apps' debug builds: a debug APK never carries a release-speed engine |
 | `peartube_native_ffi-darwin-arm64.dylib` | `aarch64-apple-darwin`, release profile, install name `@rpath/libpeartube_native_ffi.dylib` |
 | `peartube_native.h` | `ffi/include/peartube_native.h` at the same commit |
 | `ffi-manifest.json` | `commit`, `abiVersion` (the header's `PT_ABI_VERSION`), `jsRef` (`JS_REF`), `stack`: each sibling crate → the commit both builds used, `assets`: file name → sha256 |
