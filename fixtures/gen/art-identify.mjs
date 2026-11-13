@@ -62,11 +62,15 @@ function fakeUbitDir (plan) {
 const withUbit = async (plan, run) => {
   const dir = fakeUbitDir(plan)
   const path = process.env.PATH
+  const ubitBin = process.env.UBIT_BIN
   process.env.PATH = `${dir}:${path}`
+  process.env.UBIT_BIN = join(dir, 'ubit')
   try {
     return await run(dir)
   } finally {
     process.env.PATH = path
+    if (ubitBin === undefined) delete process.env.UBIT_BIN
+    else process.env.UBIT_BIN = ubitBin
     rmSync(dir, { recursive: true, force: true })
   }
 }
@@ -402,12 +406,16 @@ for (const test of infoCases) {
 {
   const empty = mkdtempSync(join(tmpdir(), 'peartube-noubit-'))
   const path = process.env.PATH
+  const ubitBin = process.env.UBIT_BIN
   process.env.PATH = empty
+  process.env.UBIT_BIN = join(empty, 'ubit')
   let result
   try {
     result = await captured(() => ubitInfo('https://vid.example/absent', {}))
   } finally {
     process.env.PATH = path
+    if (ubitBin === undefined) delete process.env.UBIT_BIN
+    else process.env.UBIT_BIN = ubitBin
   }
   fixture.ubitInfo.push({ name: 'ubit is not installed', url: 'https://vid.example/absent', plan: null, argv: null, configDir: null, ...result })
 }

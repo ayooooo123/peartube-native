@@ -26,39 +26,39 @@ there is no Rust code to compare.
 
 | JS module | Rust module | Status | JS commit last absorbed |
 | --- | --- | --- | --- |
-| `bin/private-relay.js` | `relay` (`PEARTUBE_PRIVATE_RELAY` standalone guard), `private_overlay::guard` | `match` | `8286e22f6` |
+| `bin/private-relay.js` | `relay` (`PEARTUBE_PRIVATE_RELAY` standalone guard), `private_overlay::guard` | `match` | `8326afa2c` |
 | `bin/rebuild-view.js` | — | `JS-only:` one-off repair tool, run with the relay stopped; no Rust runtime path | — |
-| `bin/relay.js` | `relay`, `src/bin/peartube-relay.rs` | `match` (cast routes, `hiverelay-seed`, standalone guard, `status.lan` as `{host, port}`) | `8286e22f6` |
-| `src/acquire.js` | `acquire` | `match` | `8286e22f6` |
-| `src/app-settings.js` | `app_settings` | `match` | `8286e22f6` |
-| `src/apply.js` | `node/apply` | `match` | `8286e22f6` |
-| `src/art.js` | `art` | `debt:` artwork HTTP timeout covers the whole exchange, unlike the app's socket inactivity timeout — see README "Known gaps" | `8286e22f6` |
-| `src/blob-server.js` | `node/blobs`, `http` (Range streaming) | `match` | `8286e22f6` |
-| `src/cast-control.js` | `cast/control` | `match` | `8286e22f6` |
-| `src/cast.js` | `cast/` (`controller`, `receiver`, `pairing`, `state`, `media`, `mdns`, `http`, `disk`) | `match` (the live LAN cast test needs working multicast; see `src/lan.js`) | `8286e22f6` |
-| `src/hiverelay.js` | `hiverelay`, `hiverelay::seeder` | `match` (on stop the relay leaves its topics; it has no `leavePeer` for recruited relays, and the process closes right after) | `8286e22f6` |
-| `src/http.js` | `http` | `match` | `8286e22f6` |
-| `src/identify.js` | `identify` | `match` | `8286e22f6` |
-| `src/index.js` | `node/core`, `node/factory` | `match` | `8286e22f6` |
-| `src/lan.js` | `lan/` (`discovery`, `mdns`, `host`) | `debt:` `tests/lan_mdns.rs::mdns_interop_with_bonjour_service` fails (bonjour-service never reports the Rust record; seen on Linux CI and a Mac, and at `d9a520e` before this alignment) while JS↔Rust LAN discovery in `tests/lan_interop.rs` passes on Linux; macOS runners have no LAN multicast, so CI skips the mDNS discovery tests there — see README "Known gaps" | `8286e22f6` |
-| `src/mirror.js` | `mirror`, `replicate` | `match` | `8286e22f6` |
-| `src/mnemonic.js` | `mnemonic` | `match` | `8286e22f6` |
-| `src/node/blobs.js` | `node/blobs`, `node/hash_state` | `match` | `8286e22f6` |
-| `src/node/catalog.js` | `node/catalog` | `match` | `8286e22f6` |
-| `src/node/channel.js` | `node/channel` | `match` | `8286e22f6` |
-| `src/node/identity.js` | `identity` | `match` | `8286e22f6` |
-| `src/node/network.js` | `node/network` | `match` | `8286e22f6` |
-| `src/node/sources.js` | `node/sources` | `debt:` with no `findingPeers` guard held, hypercore-rs `update()` still waits for a first peer where Hypercore returns at once; every app path holds the guard, so the node behaves the same | `8286e22f6` |
-| `src/node/storage.js` | `node/storage` | `match` | `8286e22f6` |
-| `src/private-overlay.js` | `private_overlay` | `match` | `8286e22f6` |
-| `src/protocol.js` | `protocol` | `match` | `8286e22f6` |
-| `src/qr.js` | `cast/qr` | `match` | `8286e22f6` |
+| `bin/relay.js` | `relay`, `src/bin/peartube-relay.rs` | `match` (cast routes, `hiverelay-seed`, standalone guard, `status.lan` as `{host, port}`) | `8326afa2c` |
+| `src/acquire.js` | `acquire` | `match` | `8326afa2c` |
+| `src/app-settings.js` | `app_settings` | `match` | `8326afa2c` |
+| `src/apply.js` | `node/apply` | `match` | `8326afa2c` |
+| `src/art.js` | `art` | `debt:` artwork HTTP timeout covers the whole exchange, unlike the app's socket inactivity timeout — see README "Known gaps" | `8326afa2c` |
+| `src/blob-server.js` | `node/blobs`, `http` (Range streaming) | `match` | `8326afa2c` |
+| `src/cast-control.js` | `cast/control` | `match` | `8326afa2c` |
+| `src/cast.js` | `cast/` (`controller`, `receiver`, `pairing`, `state`, `media`, `mdns`, `http`, `disk`) | `match` (the live LAN cast test needs working multicast; see `src/lan.js`) | `8326afa2c` |
+| `src/hiverelay.js` | `hiverelay`, `hiverelay::seeder` | `match` (on stop the relay leaves its topics; it has no `leavePeer` for recruited relays, and the process closes right after) | `8326afa2c` |
+| `src/http.js` | `http` | `match` | `8326afa2c` |
+| `src/identify.js` | `identify` | `match` | `8326afa2c` |
+| `src/index.js` | `node/core`, `node/factory` | `match` | `8326afa2c` |
+| `src/lan.js` | `lan/` (`discovery`, `mdns`, `host`) | `debt:` `tests/lan_mdns.rs::mdns_interop_with_bonjour_service` fails (bonjour-service never reports the Rust record; seen on Linux CI and a Mac, and at `d9a520e` before this alignment) while JS↔Rust LAN discovery in `tests/lan_interop.rs` passes on Linux; macOS runners have no LAN multicast, so CI skips the mDNS discovery tests there — see README "Known gaps" | `8326afa2c` |
+| `src/mirror.js` | `mirror`, `replicate` | `match` | `8326afa2c` |
+| `src/mnemonic.js` | `mnemonic` | `match` | `8326afa2c` |
+| `src/node/blobs.js` | `node/blobs`, `node/hash_state` | `match` | `8326afa2c` |
+| `src/node/catalog.js` | `node/catalog` | `match` | `8326afa2c` |
+| `src/node/channel.js` | `node/channel` | `match` | `8326afa2c` |
+| `src/node/identity.js` | `identity` | `match` | `8326afa2c` |
+| `src/node/network.js` | `node/network` | `match` | `8326afa2c` |
+| `src/node/sources.js` | `node/sources` | `debt:` with no `findingPeers` guard held, hypercore-rs `update()` still waits for a first peer where Hypercore returns at once; every app path holds the guard, so the node behaves the same | `8326afa2c` |
+| `src/node/storage.js` | `node/storage` | `match` | `8326afa2c` |
+| `src/private-overlay.js` | `private_overlay` | `match` | `8326afa2c` |
+| `src/protocol.js` | `protocol` | `match` | `8326afa2c` |
+| `src/qr.js` | `cast/qr` | `match` | `8326afa2c` |
 | `src/rebuild-view.js` | — | `JS-only:` the library behind `bin/rebuild-view.js`; an operator repair tool, not a runtime path | — |
-| `src/resolution.js` | `resolution` | `match` | `8286e22f6` |
-| `src/settings.js` | `settings` | `match` | `8286e22f6` |
-| `src/traffic.js` | `traffic` | `match` | `8286e22f6` |
-| `src/ui.js` | — | `JS-only:` shared asset; `relay.Dockerfile` copies the app's own file to `web/index.html` at image build and the relay serves it | `8286e22f6` |
-| `worklet/worker.js` | `app`, `lifecycle`, `ipc`, `backend` | `match` | `8286e22f6` |
+| `src/resolution.js` | `resolution` | `match` | `8326afa2c` |
+| `src/settings.js` | `settings` | `match` | `8326afa2c` |
+| `src/traffic.js` | `traffic` | `match` | `8326afa2c` |
+| `src/ui.js` | — | `JS-only:` shared asset; `relay.Dockerfile` copies the app's own file to `web/index.html` at image build and the relay serves it | `8326afa2c` |
+| `worklet/worker.js` | `app`, `lifecycle`, `ipc`, `backend` | `match` | `8326afa2c` |
 | `<storage>/plugins/*.mjs (user plugins)` | — | `JS-only:` Rust cannot execute JS plugins; the built-in plugins are ports of the app's own (`http-acquire`, `channel-backfill`, `blob-rechunk`, `watch-dir`, `feed-mirror`, `p2p-replicate`, `hiverelay-seed`) | — |
 
 `src/cast-ui.js`, `bin/receiver.js` and the browser-receiver cast routes were removed from the app in `fe2897172`;
