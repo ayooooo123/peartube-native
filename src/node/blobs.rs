@@ -976,7 +976,7 @@ where
     }
 
     fn grew(&self, byte_length: u64) {
-        let (max, step) = {
+        let (max, step, reached) = {
             let mut ceilings = lock(&self.inner.ceilings);
             ceilings.growth += if byte_length > 0 {
                 byte_length
@@ -984,15 +984,15 @@ where
                 1 << 19
             };
             let max = ceilings.max_bytes;
-            (max, ceiling_growth_step(max))
+            let step = ceiling_growth_step(max);
+            let reached = ceilings.growth >= step;
+            if reached {
+                ceilings.growth = 0;
+            }
+            (max, step, reached)
         };
-        if max == 0 {
-            return;
-        }
-        let mut ceilings = lock(&self.inner.ceilings);
-        if ceilings.growth >= step {
-            ceilings.growth = 0;
-            drop(ceilings);
+        let _ = step;
+        if reached && (max > 0 || self.disk_below_reserve()) {
             self.schedule_ceiling(None);
         }
     }
@@ -1507,6 +1507,13 @@ where
         self.gc_storage(false, true).await.reclaimed_bytes
     }
 
+    fn disk_below_reserve(&self) -> bool {
+        self.inner
+            .host
+            .free_bytes()
+            .is_some_and(|free| free < CACHE_DISK_RESERVE)
+    }
+
     fn cache_floor_bytes(&self) -> Option<u64> {
         self.inner
             .host
@@ -1623,15 +1630,24 @@ where
         let _pass = self.inner.ceiling_pass.lock().await;
         let budget = self.cache_max_bytes();
         let mut total = self.cached_total_bytes().await;
-        if budget == 0 {
-            return CacheCeiling {
-                evicted: 0,
-                cached_bytes: total,
-            };
-        }
-        let limit = match self.cache_floor_bytes() {
-            Some(spare) => budget.min(total.saturating_add(spare)),
-            None => budget,
+        // Even when a relay sets cacheMaxBytes=0, never let foreign cached slices choke the disk below CACHE_DISK_RESERVE and brick RocksDB with ENOSPC.
+        let limit = if budget > 0 {
+            match self.cache_floor_bytes() {
+                Some(spare) => budget.min(total.saturating_add(spare)),
+                None => budget,
+            }
+        } else {
+            match self.inner.host.free_bytes() {
+                Some(free) if free < CACHE_DISK_RESERVE => {
+                    total.saturating_sub(CACHE_DISK_RESERVE - free)
+                }
+                _ => {
+                    return CacheCeiling {
+                        evicted: 0,
+                        cached_bytes: total,
+                    };
+                }
+            }
         };
         if total <= limit {
             return CacheCeiling {
@@ -1745,7 +1761,7 @@ where
 
     /// Debounces a ceiling pass by two seconds, as the JS does.
     pub fn schedule_ceiling(&self, keep_hex: Option<[u8; 32]>) {
-        if self.cache_max_bytes() == 0 || self.inner.host.closing() {
+        if (self.cache_max_bytes() == 0 && !self.disk_below_reserve()) || self.inner.host.closing() {
             return;
         }
         {

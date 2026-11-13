@@ -196,6 +196,7 @@ struct HostState {
     db_bytes: AtomicU64,
     compactions: Mutex<Vec<Compact>>,
     storage: Mutex<Option<Corestore>>,
+    free_bytes: Mutex<Option<u64>>,
 }
 
 #[derive(Clone, Default)]
@@ -221,6 +222,10 @@ impl TestHost {
 
     fn compactions(&self) -> Vec<Compact> {
         lock(&self.0.compactions).clone()
+    }
+
+    fn set_free_bytes(&self, bytes: Option<u64>) {
+        *lock(&self.0.free_bytes) = bytes;
     }
 }
 
@@ -255,7 +260,7 @@ impl BlobHost for TestHost {
         self.0.db_bytes.load(Ordering::Acquire)
     }
     fn free_bytes(&self) -> Option<u64> {
-        None
+        *lock(&self.0.free_bytes)
     }
     fn flush(&self) -> SendFuture<'_, ()> {
         let storage = lock(&self.0.storage).clone();
@@ -2053,4 +2058,33 @@ async fn a_busy_claim_counts_only_from_a_peer_that_served_blocks() {
     ma.destroy();
     mb.destroy();
     far.destroy();
+}
+
+#[tokio::test]
+async fn disk_reserve_evicts_cached_cores_even_with_zero_cache_budget() {
+    let primary = [0x41; 32];
+    let h = harness(primary, [0x42; 32], 1_000_000).await;
+    assert_eq!(h.blobs.cache_max_bytes(), 0);
+
+    let writer_dir = tempfile::tempdir().expect("writer dir");
+    let writer_store =
+        Corestore::open_with_primary_key(writer_dir.path(), primary).expect("writer store");
+    let cached = replicate_core(&writer_store, &h.store, "cached-enospc", &[data(BLOCK)]).await;
+    writer_store.close().await;
+    h.blobs.blob_core(&cached).await.expect("blob core");
+    assert_eq!(h.blobs.local_blocks(&cached), 1);
+    h.host.tick(10 * 60 * 1000);
+
+    // Plenty of free space (>= 2 GiB reserve): zero cache budget leaves replica blocks untouched.
+    h.host.set_free_bytes(Some(10 * 1024 * 1024 * 1024));
+    let untouched = h.blobs.enforce_cache_ceiling(None).await;
+    assert_eq!(untouched.evicted, 0);
+    assert_eq!(h.blobs.local_blocks(&cached), 1);
+
+    // Disk drops below the 2 GiB reserve: relay evicts un-owned cached blocks and compacts before RocksDB hits ENOSPC.
+    h.host.set_free_bytes(Some(512 * 1024 * 1024));
+    let emergency = h.blobs.enforce_cache_ceiling(None).await;
+    assert!(emergency.evicted > 0);
+    assert_eq!(h.blobs.local_blocks(&cached), 0);
+    assert!(!h.host.compactions().is_empty());
 }

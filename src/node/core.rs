@@ -426,7 +426,9 @@ impl BlobHost for Host {
     }
 
     fn free_bytes(&self) -> Option<u64> {
-        None
+        self.0
+            .upgrade()
+            .and_then(|shared| crate::cast::disk::free_disk_bytes(shared.storage.path()))
     }
 
     fn flush(&self) -> super::blobs::SendFuture<'_, ()> {
