@@ -376,7 +376,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1059,6 +1059,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "tokio-rustls",
+ "ubit",
  "unicode-normalization",
  "url",
  "xsalsa20poly1305",
@@ -1203,7 +1204,7 @@ dependencies = [
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1373,7 +1374,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1640,7 +1641,7 @@ dependencies = [
  "getrandom 0.4.3",
  "once_cell",
  "rustix",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1765,6 +1766,19 @@ name = "typenum"
 version = "1.20.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b6f5e870be6c3b371b77fe0ee0bafb859fa4964b4404c27de1d380043c4dda20"
+
+[[package]]
+name = "ubit"
+version = "0.3.3"
+source = "git+https://github.com/ayooooo123/ubit?rev=09530baebdcdf9458593ad3fe92a70a737c5b302#09530baebdcdf9458593ad3fe92a70a737c5b302"
+dependencies = [
+ "cc",
+ "rustls",
+ "serde",
+ "serde_json",
+ "tokio",
+ "webpki-roots",
+]
 
 [[package]]
 name = "unicode-ident"

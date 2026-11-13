@@ -774,3 +774,38 @@ async fn downloads_match() {
         let _ = fs::remove_dir_all(&out_dir);
     }
 }
+
+#[tokio::test]
+async fn embedded_ubit_sdk_runs_by_default_and_blocks_loopback_ssrf() {
+    let server = serve(json!([{
+        "path": "/watch",
+        "status": 200,
+        "headers": { "content-type": "text/html" },
+        "body": "<html></html>"
+    }]))
+    .await;
+
+    let err = identify::identify(
+        &format!("{}/watch", server.base),
+        &IdentifyOptions::default(),
+    )
+    .await
+    .expect_err("embedded ubit SDK must block loopback SSRF");
+    assert_ne!(
+        err.code(),
+        Some("UBIT_MISSING"),
+        "embedded ubit must never report missing: {err:?}"
+    );
+
+    let missing = identify::identify(
+        &format!("{}/watch", server.base),
+        &IdentifyOptions {
+            ubit: "/nonexistent/ubit".to_owned(),
+            ..Default::default()
+        },
+    )
+    .await
+    .expect_err("explicit missing UBIT_BIN must still report UBIT_MISSING");
+    assert_eq!(missing.status(), Some(501));
+    assert_eq!(missing.code(), Some("UBIT_MISSING"));
+}

@@ -1387,9 +1387,7 @@ fn web_dir(env: &HashMap<String, String>) -> PathBuf {
 }
 
 fn ubit_bin(env: &HashMap<String, String>) -> String {
-    env.get("UBIT_BIN")
-        .cloned()
-        .unwrap_or_else(|| "ubit".into())
+    env.get("UBIT_BIN").cloned().unwrap_or_default()
 }
 
 fn port(env: &HashMap<String, String>, var: &str, default: u16) -> u16 {

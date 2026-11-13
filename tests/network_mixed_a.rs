@@ -272,7 +272,7 @@ fn build_acquirer(
         node,
         Arc::new(LocalJobFiles::new(jobs)),
         Arc::new(UbitPages {
-            ubit: "ubit".into(),
+            ubit: String::new(),
         }),
         Arc::new(HyperHttp),
         Arc::new(NodeStreams),

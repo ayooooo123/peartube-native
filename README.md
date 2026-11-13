@@ -57,7 +57,7 @@ Paths on the right are in the PearTube app unless otherwise stated.
 | `node/core`, `node/factory` | `src/index.js`: compose and open the native node; default worker factory |
 | `protocol`, `mnemonic`, `identity` | `src/protocol.js`, `src/mnemonic.js`, `src/identity.js`: wire formats, recovery and keys, identity storage |
 | `settings`, `resolution` | App settings and media resolution selection |
-| `art`, `identify` | `src/art.js`, `src/identify.js`: artwork lookup, media identification and `ubit` integration |
+| `art`, `identify` | `src/art.js`, `src/identify.js`: artwork lookup, media identification and baked-in `ubit` SDK (`UBIT_BIN` overrides the binary) |
 
 The node contract, JSON shapes and adapter details are in [docs/node-api.md](docs/node-api.md).
 

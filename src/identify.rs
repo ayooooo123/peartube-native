@@ -653,7 +653,7 @@ impl Default for ProbeOptions {
     fn default() -> Self {
         Self {
             config_dir: String::new(),
-            ubit: "ubit".to_owned(),
+            ubit: String::new(),
             ubit_timeout: INFO_TIMEOUT,
         }
     }
@@ -764,13 +764,49 @@ pub fn ubit_info_result(stdout: &[u8], stderr: &[u8], code: i32) -> Result<Value
     Ok(info)
 }
 
-/// Runs `ubit info` and reads both streams to the end, killing it at the timeout the way the app's timer does.
+/// Runs the baked-in `ubit` SDK by default, or spawns `program` when `UBIT_BIN` / an explicit path overrides it.
 pub async fn ubit_info(
     program: &str,
     url: &str,
     config_dir: &str,
     timeout: Duration,
 ) -> Result<Value, IdentifyError> {
+    if program.is_empty() {
+        let cfg = if config_dir.is_empty() {
+            Some(std::env::temp_dir().join("peartube-ubit"))
+        } else {
+            Some(std::path::PathBuf::from(config_dir))
+        };
+        return match ubit::Client::new()
+            .info_json(
+                url,
+                ubit::InfoOptions {
+                    config_dir: cfg,
+                    timeout,
+                    cancel: None,
+                },
+            )
+            .await
+        {
+            Ok(info) => {
+                if info.get("isDRM").is_some_and(js_truthy) {
+                    return Err(IdentifyError::tagged(
+                        "This video is DRM-protected",
+                        Some(451),
+                    ));
+                }
+                Ok(info)
+            }
+            Err(err) if err.is_drm() => Err(IdentifyError::tagged(
+                "This video is DRM-protected",
+                Some(451),
+            )),
+            Err(err) => {
+                let message = info_error_message(&err.message);
+                Err(IdentifyError::tagged(message.clone(), tag_status(&message)))
+            }
+        };
+    }
     let mut command = ubit_command(program, &["info", url, "--json"], config_dir);
     let mut child = command.spawn().map_err(|_| missing_ubit())?;
     let (Some(mut stdout), Some(mut stderr)) = (child.stdout.take(), child.stderr.take()) else {
@@ -1274,7 +1310,7 @@ impl Default for DownloadOptions {
         Self {
             config_dir: String::new(),
             stall_timeout: Duration::from_millis(30_000),
-            ubit: "ubit".to_owned(),
+            ubit: String::new(),
             controller: None,
             on_progress: None,
         }
@@ -1292,11 +1328,67 @@ pub async fn download_page(
         return Err(IdentifyError::new("Cancelled"));
     }
     let stall = opts.stall_timeout;
-    let ubit = if opts.ubit.is_empty() {
-        "ubit".to_owned()
-    } else {
-        opts.ubit.clone()
-    };
+    if opts.ubit.is_empty() {
+        let cancel = ubit::CancelToken::new();
+        let abort_guard = controller.clone().map(|ctrl| {
+            let cancel = cancel.clone();
+            tokio::spawn(async move {
+                ctrl.aborted().await;
+                cancel.cancel();
+            })
+        });
+        let cfg = if opts.config_dir.is_empty() {
+            Some(std::env::temp_dir().join("peartube-ubit"))
+        } else {
+            Some(std::path::PathBuf::from(&opts.config_dir))
+        };
+        let on_progress = opts.on_progress.take().map(|mut cb| {
+            Box::new(move |p: ubit::Progress| {
+                cb(DownloadProgress {
+                    bytes: JsNumber(p.downloaded as f64),
+                    total: p.total.map(|t| JsNumber(t as f64)),
+                });
+            }) as ubit::ProgressCallback
+        });
+        let res = ubit::Client::new()
+            .download(
+                page_url,
+                std::path::Path::new(out_dir),
+                ubit::DownloadOptions {
+                    config_dir: cfg,
+                    connections: 8,
+                    stall_timeout: stall,
+                    cancel: Some(cancel),
+                    on_progress,
+                    on_stage: None,
+                },
+            )
+            .await;
+        if let Some(guard) = abort_guard {
+            guard.abort();
+        }
+        if controller.as_ref().is_some_and(Controller::is_aborted) {
+            return Err(IdentifyError::new("Cancelled"));
+        }
+        return match res {
+            Ok(dl) => Ok(Downloaded {
+                path: dl.path.to_string_lossy().into_owned(),
+                size: i64::try_from(dl.size)
+                    .ok()
+                    .filter(|&s| s >= 0 && (s as f64) <= 9_007_199_254_740_991.0),
+            }),
+            Err(err) if err.is_cancelled() => Err(IdentifyError::new("Cancelled")),
+            Err(err) if err.is_timed_out() => Err(IdentifyError::new("Source stalled")),
+            Err(err) if err.is_drm() => Err(IdentifyError::tagged(
+                "This video is DRM-protected",
+                Some(451),
+            )),
+            Err(err) => {
+                let message = download_error_message(&err.message);
+                Err(IdentifyError::tagged(message.clone(), tag_status(&message)))
+            }
+        };
+    }
     let args = [
         "get",
         page_url,
@@ -1306,7 +1398,7 @@ pub async fn download_page(
         "-o",
         out_dir,
     ];
-    let mut child = ubit_command(&ubit, &args, &opts.config_dir)
+    let mut child = ubit_command(&opts.ubit, &args, &opts.config_dir)
         .spawn()
         .map_err(|_| missing_ubit())?;
     let (Some(mut stdout), Some(mut stderr)) = (child.stdout.take(), child.stderr.take()) else {
@@ -1418,21 +1510,11 @@ pub struct Identification {
 }
 
 /// How `identify` reaches Cinemeta and `ubit`.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct IdentifyOptions {
     pub cinemeta_url: String,
     pub config_dir: String,
     pub ubit: String,
-}
-
-impl Default for IdentifyOptions {
-    fn default() -> Self {
-        Self {
-            cinemeta_url: String::new(),
-            config_dir: String::new(),
-            ubit: "ubit".to_owned(),
-        }
-    }
 }
 
 /// `identify`: what the link is, the release name inside it, and the suggestion to announce it under.
