@@ -46,7 +46,7 @@ hyper-util = { version = "0.1", features = ["client-legacy", "http1", "tokio"] }
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
 unicode-normalization = "0.1"
 url = "2"
-ubit = { git = "https://github.com/ayooooo123/ubit", rev = "09530baebdcdf9458593ad3fe92a70a737c5b302" }
+ubit = { git = "https://github.com/ayooooo123/ubit", rev = "a243219e3b98387e80526122a28f91b0b533be10" }
 
 [target.'cfg(unix)'.dependencies]
 rustix = { version = "1", features = ["fs", "process"] }
