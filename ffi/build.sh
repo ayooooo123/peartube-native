@@ -54,6 +54,8 @@ case "$target" in
     name=$(env_name "$triple")
     export "CARGO_TARGET_$(var_name "$triple")_LINKER=$bin/$cc"
     export "CC_$name=$bin/$cc" "CXX_$name=$bin/$cc++" "AR_$name=$bin/llvm-ar"
+    # bindgen (rocksdb) parses headers with its own clang: without the NDK sysroot it reads the host's /usr/include.
+    export "BINDGEN_EXTRA_CLANG_ARGS_$name=--sysroot=$ndk/toolchains/llvm/prebuilt/$host/sysroot --target=aarch64-linux-android29"
     # Android 15 devices use 16 KiB pages; Rust's Android std links libc++_shared.so
     # dynamically, so that NDK copy must ship beside this file (see ffi/README.md).
     rustflags="-Clink-arg=-Wl,-z,max-page-size=16384"
