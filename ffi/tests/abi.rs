@@ -196,12 +196,17 @@ fn invalid_input_is_rejected() {
 #[test]
 fn c_host_links_staticlib() {
     let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    // The profile directory is the test binary's ancestor right under the
+    // target root (`CARGO_TARGET_TMPDIR` is `<target>/tmp`). Newer Cargo puts
+    // test binaries under `<profile>/build/<pkg>/<hash>/`, not `<profile>/deps/`.
+    let target_dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR"))
+        .parent()
+        .expect("target root");
     let exe = std::env::current_exe().expect("test binary path");
     let profile = exe
-        .parent()
-        .expect("deps dir")
-        .parent()
-        .expect("profile dir")
+        .ancestors()
+        .find(|dir| dir.parent() == Some(target_dir))
+        .expect("profile dir under the target root")
         .to_path_buf();
     let static_lib = profile.join("libpeartube_native_ffi.a");
     // `cargo test` builds the rlib, not the C artifacts, so ask for the archive
