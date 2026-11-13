@@ -1761,7 +1761,8 @@ where
 
     /// Debounces a ceiling pass by two seconds, as the JS does.
     pub fn schedule_ceiling(&self, keep_hex: Option<[u8; 32]>) {
-        if (self.cache_max_bytes() == 0 && !self.disk_below_reserve()) || self.inner.host.closing() {
+        if (self.cache_max_bytes() == 0 && !self.disk_below_reserve()) || self.inner.host.closing()
+        {
             return;
         }
         {
