@@ -10,7 +10,7 @@ out=$repo/STACK.lock
 tmp=$out.tmp
 : > "$tmp"
 for r in compact-encoding-rs protomux-rs protomux-wakeup-rs hyperschema-rs hypercore-id-encoding-rs \
-  hypercore-storage-rs hypercore-rs corestore-rs hyperbee-rs hyperblobs-rs byte-stream-rs autobee-rs peeroxide; do
+  hypercore-storage-rs hypercore-rs corestore-rs hyperbee-rs hyperblobs-rs byte-stream-rs autobee-rs peeroxide mdns-sd; do
   dir=$repo/../$r
   sha=$(git -C "$dir" rev-parse HEAD)
   [ -z "$(git -C "$dir" status --porcelain --untracked-files=no -- . ':!Cargo.lock')" ] || { echo "$r has uncommitted changes" >&2; rm -f "$tmp"; exit 1; }

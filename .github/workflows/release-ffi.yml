@@ -103,6 +103,11 @@ jobs:
           repository: ${{ github.repository_owner }}/peeroxide
           ref: ${{ steps.stack.outputs['peeroxide'] }}
           path: peeroxide
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/mdns-sd
+          ref: ${{ steps.stack.outputs['mdns-sd'] }}
+          path: mdns-sd
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-linux-android
@@ -211,6 +216,11 @@ jobs:
           repository: ${{ github.repository_owner }}/peeroxide
           ref: ${{ steps.stack.outputs['peeroxide'] }}
           path: peeroxide
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/mdns-sd
+          ref: ${{ steps.stack.outputs['mdns-sd'] }}
+          path: mdns-sd
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-apple-darwin

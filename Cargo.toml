@@ -21,7 +21,8 @@ autobee-rs = { path = "../autobee-rs" }
 peeroxide = { path = "../peeroxide/peeroxide" }
 libudx = { path = "../peeroxide/libudx" }
 byte-stream-rs = { path = "../byte-stream-rs" }
-mdns-sd = "0.21"
+# Our branch `peartube` of mdns-sd 0.21.7: evicts expired SRV/TXT records no PTR points at.
+mdns-sd = { path = "../mdns-sd" }
 simple-dns = "0.13"
 socket2 = { version = "0.6", features = ["all"] }
 mio = { version = "1", features = ["net", "os-poll"] }
