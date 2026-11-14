@@ -25,6 +25,11 @@ FROM gcr.io/distroless/cc-debian12
 COPY --from=build /peartube-relay /usr/local/bin/peartube-relay
 COPY --from=web /web /usr/local/bin/web
 ENV PEARTUBE_STORAGE=/data
+# glibc raises its mmap threshold to the largest block freed so far (up to 32 MiB) and its trim
+# threshold to twice that. A relay that freed one 16 MiB block kept up to 32 MiB free at the top
+# of each of its 17 arenas and 220 MiB in holes: 650 MB resident for about 200 MiB in use. Fixed
+# values (glibc's own defaults) stop that rise; blocks of 128 KiB or more go back when freed.
+ENV GLIBC_TUNABLES=glibc.malloc.mmap_threshold=131072:glibc.malloc.trim_threshold=131072
 VOLUME /data
 EXPOSE 8174 8175 8443
 ENTRYPOINT ["/usr/local/bin/peartube-relay"]
