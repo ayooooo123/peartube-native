@@ -939,8 +939,8 @@ where
             .collect()
     }
 
-    /// `searchGlobal`: rows carry `magnetUrl`; play one with `openUri`. Asking the same query
-    /// again returns the answers that arrived since.
+    /// `searchGlobal`: rows carry `magnetUrl`; play one with `openUri`. The same query again
+    /// within 10 s returns the answers that arrived since; after that it asks the relays again.
     pub async fn search_global(
         &mut self,
         request: SearchGlobalRequest,

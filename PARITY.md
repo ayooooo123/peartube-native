@@ -38,7 +38,7 @@ there is no Rust code to compare.
 | `src/control-channel.js` | `control_channel` | `match` | `2c97f5b7d` |
 | `src/cast.js` | `cast/` (`controller`, `receiver`, `pairing`, `state`, `media`, `mdns`, `http`, `disk`) | `match` (the live LAN cast test needs working multicast; see `src/lan.js`) | `8326afa2c` |
 | `src/hiverelay.js` | `hiverelay`, `hiverelay::seeder` | `match` (on stop the relay leaves its topics; it has no `leavePeer` for recruited relays, and the process closes right after) | `8326afa2c` |
-| `src/http.js` | `http` | `match` (`POST /v1/search/global`; download names from `media_format`) | `2c97f5b7d` |
+| `src/http.js` | `http` | `match` (`POST /v1/search/global`; download names from `media_format`) | `d6b9fc3ce` |
 | `src/identify.js` | `identify` | `match` | `8326afa2c` |
 | `src/index.js` | `node/core`, `node/factory` | `match` | `2c97f5b7d` |
 | `src/lan.js` | `lan/` (`discovery`, `mdns`, `host`) | `debt:` `tests/lan_mdns.rs::mdns_interop_with_bonjour_service` fails (bonjour-service never reports the Rust record; seen on Linux CI and a Mac, and at `d9a520e` before this alignment) while JS↔Rust LAN discovery in `tests/lan_interop.rs` passes on Linux; macOS runners have no LAN multicast, so CI skips the mDNS discovery tests there — see README "Known gaps" | `8326afa2c` |
@@ -56,11 +56,11 @@ there is no Rust code to compare.
 | `src/qr.js` | `cast/qr` | `match` | `8326afa2c` |
 | `src/rebuild-view.js` | — | `JS-only:` the library behind `bin/rebuild-view.js`; an operator repair tool, not a runtime path | — |
 | `src/resolution.js` | `resolution` | `match` | `8326afa2c` |
-| `src/search.js` | `search` | `debt:` peeroxide's `join` has no per-lookup `limit`, so a Rust searcher dials every relay the search-topic lookup returns where hyperswarm stops at 4; it still asks at most 4 (2 per `/24`) and closes the search-only connections a minute after the last search — see README "Known gaps" | `2c97f5b7d` |
+| `src/search.js` | `search` | `debt:` peeroxide's `join` has no per-lookup `limit`, so a Rust searcher dials every relay the search-topic lookup returns where hyperswarm stops at 4; it still asks at most 4 (2 per `/24`) and closes the search-only connections a minute after the last search — see README "Known gaps". A search run lives 10 s (`FRESH`), as in the app | `d6b9fc3ce` |
 | `src/settings.js` | `settings` | `match` | `2c97f5b7d` |
 | `src/traffic.js` | `traffic` | `match` | `8326afa2c` |
 | `src/ui.js` | — | `JS-only:` shared asset; `relay.Dockerfile` copies the app's own file to `web/index.html` at image build and the relay serves it | `8326afa2c` |
-| `worklet/worker.js` | `app`, `lifecycle`, `ipc`, `backend` | `match` (`searchGlobal`) | `2c97f5b7d` |
+| `worklet/worker.js` | `app`, `lifecycle`, `ipc`, `backend` | `match` (`searchGlobal`) | `d6b9fc3ce` |
 | `<storage>/plugins/*.mjs (user plugins)` | — | `JS-only:` Rust cannot execute JS plugins; the built-in plugins are ports of the app's own (`http-acquire`, `channel-backfill`, `blob-rechunk`, `watch-dir`, `feed-mirror`, `p2p-replicate`, `hiverelay-seed`, `media-check`) | — |
 
 `src/cast-ui.js`, `bin/receiver.js` and the browser-receiver cast routes were removed from the app in `fe2897172`;

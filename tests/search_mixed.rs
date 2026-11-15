@@ -1,13 +1,14 @@
 //! Global search (`search`, the app's `src/search.js`) between the real JS node and this port on
 //! one local HyperDHT testnet, both ways: a JS relay answers a Rust searcher, and a Rust relay
 //! answers a JS searcher. Each searcher follows nothing, finds the film through the search topic,
-//! and plays exact bytes from the relay that answered.
+//! and plays exact bytes from the relay that answered. The Rust searcher also finds a file the
+//! relay got after a search that missed it, by asking the same search again.
 //!
 //! Needs `node`, the app checkout (`PEARTUBE_APP`, else the sibling `../peartube`) and its installed
 //! modules; `#[ignore]` so `cargo test` stays offline.
 
-use std::io::{BufRead, BufReader};
-use std::process::{Child, ChildStdin, Command, Stdio};
+use std::io::{BufRead, BufReader, Lines, Write};
+use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -36,6 +37,7 @@ fn has_app() -> bool {
 struct Harness {
     child: Child,
     stdin: Option<ChildStdin>,
+    stdout: Lines<BufReader<ChildStdout>>,
 }
 
 impl Drop for Harness {
@@ -59,18 +61,29 @@ fn spawn_js(mode: &str, args: &[String]) -> Harness {
         .spawn()
         .expect("node");
     let stdin = child.stdin.take();
-    Harness { child, stdin }
+    let stdout = BufReader::new(child.stdout.take().expect("stdout")).lines();
+    Harness {
+        child,
+        stdin,
+        stdout,
+    }
 }
 
 impl Harness {
+    /// The harness's next JSON line.
     fn result(&mut self) -> Value {
-        let stdout = self.child.stdout.take().expect("stdout");
-        let line = BufReader::new(stdout)
-            .lines()
+        let line = self
+            .stdout
             .next()
             .expect("harness printed nothing")
             .expect("read line");
         serde_json::from_str(&line).expect("harness json")
+    }
+
+    fn send(&mut self, command: &str) {
+        let stdin = self.stdin.as_mut().expect("stdin");
+        writeln!(stdin, "{command}").expect("write command");
+        stdin.flush().expect("flush");
     }
 }
 
@@ -156,6 +169,31 @@ fn js_relay_answers_a_rust_searcher() {
         fetch.result()["sha256"],
         film["sha256"],
         "the played hit is the exact film"
+    );
+
+    // A file the relay gets after a search that missed it shows up when the same search is
+    // asked again.
+    let none = runtime
+        .block_on(node.search_global("solaris", None, 20))
+        .expect("search");
+    assert!(none.is_empty(), "nothing matches yet: {none:?}");
+    relay.send("publish");
+    let late_film = relay.result();
+    let end = Instant::now() + Duration::from_secs(60);
+    let late = loop {
+        let rows = runtime
+            .block_on(node.search_global("solaris", None, 20))
+            .expect("search");
+        if !rows.is_empty() || Instant::now() > end {
+            break rows;
+        }
+        std::thread::sleep(Duration::from_millis(500));
+    };
+    let ids: Vec<&str> = late.iter().filter_map(|row| row["id"].as_str()).collect();
+    assert_eq!(
+        ids,
+        vec![late_film["id"].as_str().unwrap()],
+        "the same search finds the file published after it: {late:?}"
     );
     runtime.block_on(node.close()).expect("close");
     let _ = std::fs::remove_dir_all(&storage);

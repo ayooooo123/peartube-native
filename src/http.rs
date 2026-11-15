@@ -782,8 +782,8 @@ impl<N: Node> Api<N> {
         }
         // Global search asks relays across the network (`search`), so only the relay's owner
         // starts one: the token when one is set, else a private address, and only from the relay's
-        // own page. A new query at most every 3 s per address; the same query again returns the
-        // answers that arrived since, without asking anyone again.
+        // own page. A new query at most every 3 s per address; the same query again within 10 s
+        // returns the answers that arrived since, and after that asks again.
         if *method == Method::POST && path == "/v1/search/global" {
             if !settings_open {
                 return Err(HttpError::new(

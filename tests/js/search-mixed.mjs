@@ -5,7 +5,8 @@
 //   testnet                         create a testnet, print its bootstrap nodes, stay up
 //   relay <bootstrap-json>          a JS relay that holds a Matroska-headed film and a file that is
 //                                   not media, and answers searches for the film only; print the
-//                                   film's id and SHA-256, stay up
+//                                   film's id and SHA-256, stay up. A `publish` line on stdin adds
+//                                   a second film (Solaris) and prints its id
 //   search <bootstrap-json> <query> a JS node that follows nothing searches until a row comes back,
 //                                   plays the first row, prints the rows and the played SHA-256
 //   fetch <url>                     fetch the whole URL and print its SHA-256
@@ -70,6 +71,18 @@ if (mode === 'testnet') {
   const media = new Set([`${filmOp.blobs}:${filmOp.blob.blockOffset}`])
   node.serveSearch({ isMedia: key => media.has(key) })
   out({ id: filmOp.id, sha256: sha256(film), peerKey: node.peerKey })
+  let buffered = ''
+  process.stdin.on('data', async chunk => {
+    buffered += chunk
+    if (!buffered.includes('publish\n')) return
+    buffered = ''
+    const late = randomBytes(600 * 1024)
+    late.set([0x1a, 0x45, 0xdf, 0xa3], 0)
+    const lateOp = await node.put({ id: 'imdb:tt0069293', title: 'Solaris (1972)' }, Readable.from([late]))
+    await node.append(lateOp)
+    media.add(`${lateOp.blobs}:${lateOp.blob.blockOffset}`)
+    out({ id: lateOp.id, sha256: sha256(late) })
+  })
   keepAlive(() => node.close())
 } else if (mode === 'search') {
   const node = await createNode({ storage: tmp(), bootstrap: JSON.parse(args[0]) })

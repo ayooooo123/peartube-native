@@ -58,6 +58,8 @@ const ASK_TIMEOUT: Duration = Duration::from_secs(3);
 /// After the last search the lookup ends and search-only connections close.
 const IDLE: Duration = Duration::from_secs(60);
 const KEEP_RUNS: usize = 8;
+/// The same search asked again after this asks every relay again, so newer files show up.
+const FRESH: Duration = Duration::from_secs(10);
 /// A relay rebuilds its list of offered files at most this often.
 const LIST_EVERY: Duration = Duration::from_secs(15);
 const SERVE_CHANNELS: usize = 64;
@@ -162,6 +164,7 @@ struct Run {
     buckets: HashMap<String, usize>,
     topic_asked: usize,
     returned: bool,
+    at: std::time::Instant,
 }
 
 #[derive(Default)]
@@ -288,8 +291,9 @@ impl GlobalSearch {
         }
     }
 
-    /// `searchGlobal({ query, id, limit })`: rows after `COLLECT`. Asking again returns the
-    /// fuller list.
+    /// `searchGlobal({ query, id, limit })`: rows after `COLLECT`. Asked again within `FRESH` it
+    /// returns the answers that arrived since; after that it is a new search, so a file published
+    /// or removed since is seen.
     pub async fn search_global(
         &self,
         query: &str,
@@ -312,9 +316,14 @@ impl GlobalSearch {
         let run_key = format!("{q}\n{}", mid.clone().unwrap_or_default());
         let (run, join, topic_conns) = {
             let mut state = lock(&inner.state);
-            let run = match state.runs.iter().position(|(key, _)| key == &run_key) {
-                Some(index) => state.runs.remove(index).1,
-                None => Arc::new(Mutex::new(Run {
+            let reuse = state
+                .runs
+                .iter()
+                .position(|(key, _)| key == &run_key)
+                .map(|index| state.runs.remove(index).1)
+                .filter(|run| lock(run).at.elapsed() <= FRESH);
+            let run = reuse.unwrap_or_else(|| {
+                Arc::new(Mutex::new(Run {
                     q,
                     mid,
                     rows: Vec::new(),
@@ -322,8 +331,9 @@ impl GlobalSearch {
                     buckets: HashMap::new(),
                     topic_asked: 0,
                     returned: false,
-                })),
-            };
+                    at: std::time::Instant::now(),
+                }))
+            });
             state.runs.push((run_key, run.clone()));
             while state.runs.len() > KEEP_RUNS {
                 state.runs.remove(0);
