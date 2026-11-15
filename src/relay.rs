@@ -42,6 +42,8 @@ struct Open {
     mirror: Arc<MirrorHost<CoreNode>>,
     changes: tokio::task::JoinHandle<()>,
     replication: Replication,
+    /// The files global search may offer.
+    media_check: Arc<crate::media_check::MediaCheck>,
 }
 
 /// `p2p-replicate` and the traffic gate whose `peersBusy` it waits on.
@@ -532,6 +534,14 @@ impl Relay {
             hiverelay,
             Some(notify.clone()),
         );
+        // `media-check`: the files global search may offer (src/search.js).
+        let global_search = js_truthy(&cfg("globalSearch"));
+        let media_check = crate::media_check::MediaCheck::new(
+            node.clone(),
+            traffic.clone(),
+            self.0.storage.clone(),
+            global_search,
+        );
         let mirror = Arc::new(
             MirrorHost::start(
                 node.clone(),
@@ -540,7 +550,7 @@ impl Relay {
                 Arc::new(NodeStreams),
                 Arc::new(NodeStreams),
                 Arc::new(ArtFeed),
-                vec![seeder],
+                vec![seeder, media_check.clone()],
                 MirrorOptions {
                     storage: self.0.storage.display().to_string(),
                     mirror_channel: js_truthy(&cfg("publishChannel")),
@@ -560,6 +570,13 @@ impl Relay {
             .await,
         );
         *self.0.mirror.lock().unwrap() = Some(mirror.clone());
+        node.serve_search(search_serve(&media_check, global_search));
+        if global_search {
+            let mirror = mirror.clone();
+            tokio::spawn(async move {
+                let _ = mirror.run("media-check", json!({})).await;
+            });
+        }
         let replication = self
             .start_replication(
                 &node,
@@ -585,6 +602,7 @@ impl Relay {
             mirror,
             changes,
             replication,
+            media_check,
         });
         self.notify("update");
         Ok(())
@@ -653,6 +671,7 @@ impl Relay {
             mirror,
             changes,
             replication,
+            media_check: _,
         }) = open.take()
         else {
             return;
@@ -704,6 +723,7 @@ impl Relay {
             current.acquirer.clone(),
             current.mirror.clone(),
         );
+        let media_check = current.media_check.clone();
         let (replicator, kick) = (
             current.replication.replicator.clone(),
             current.replication.kick.clone(),
@@ -737,6 +757,16 @@ impl Relay {
             tokio::spawn(async move {
                 let _ = mirror.run("blob-rechunk", Value::Null).await;
             });
+        }
+        if has(&["globalSearch"]) {
+            let on = js_truthy(&self.cfg("globalSearch").await);
+            if media_check.set_enabled(on) {
+                let mirror = mirror.clone();
+                tokio::spawn(async move {
+                    let _ = mirror.run("media-check", json!({})).await;
+                });
+            }
+            node.serve_search(search_serve(&media_check, on));
         }
         if has(&["watchDir", "feeds"]) {
             mirror.configure(
@@ -1406,6 +1436,16 @@ fn parse_hex32(text: &str) -> Option<[u8; 32]> {
         out[i] = u8::from_str_radix(std::str::from_utf8(chunk).ok()?, 16).ok()?;
     }
     Some(out)
+}
+
+/// What global search answers from (`searchServe()` in `bin/relay.js`): the files `media-check`
+/// found to be media, while the setting is on.
+fn search_serve(
+    media_check: &Arc<crate::media_check::MediaCheck>,
+    on: bool,
+) -> Option<crate::search::IsMedia> {
+    let media_check = media_check.clone();
+    on.then(|| Arc::new(move |key: &str| media_check.is_media(key)) as crate::search::IsMedia)
 }
 
 fn non_empty(text: String) -> Option<String> {

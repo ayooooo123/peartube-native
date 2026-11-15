@@ -592,6 +592,51 @@ impl CoreNode {
         self.inner.sources.get().cloned().expect("sources open")
     }
 
+    fn global_search(&self) -> crate::search::GlobalSearch {
+        self.net().search.get().cloned().expect("search open")
+    }
+
+    /// The first block of the file at `blobs:block_offset`, from this disk only, never the
+    /// network (`media-check`'s `readFirstBlock`).
+    pub async fn first_block(&self, blobs_hex: &str, block_offset: u64) -> Option<Vec<u8>> {
+        let key = parse_hex32(blobs_hex)?;
+        let mut opts = corestore::GetOptions::key(key);
+        opts.inactive = true;
+        let session = self.inner.storage.store().get(opts).await.ok()?;
+        let block = session
+            .get(
+                block_offset,
+                hypercore::GetOptions {
+                    wait: false,
+                    ..Default::default()
+                },
+            )
+            .await
+            .ok()
+            .flatten();
+        session.close();
+        block.map(|bytes| bytes.to_vec())
+    }
+
+    /// `node.publicEntries()`.
+    pub async fn public_entries(&self) -> Vec<Announce> {
+        self.catalog().public_entries().await
+    }
+
+    /// `node.searchGlobal({ query, id, limit })`.
+    pub async fn search_global(
+        &self,
+        query: &str,
+        id: Option<&Value>,
+        limit: usize,
+    ) -> Result<Vec<Value>, String> {
+        self.global_search().search_global(query, id, limit).await
+    }
+
+    /// `node.serveSearch(opts)`: answer global searches with the files `is_media` accepts, or stop.
+    pub fn serve_search(&self, is_media: Option<crate::search::IsMedia>) {
+        self.global_search().serve(is_media);
+    }
     /// `status()`.
     pub async fn status_value(&self) -> Status {
         let net = self.net();
@@ -867,6 +912,9 @@ impl CoreNode {
             *closed = true;
         }
         self.inner.closing.store(true, Ordering::Release);
+        if let Some(search) = self.inner.net.get().and_then(|net| net.search.get()) {
+            search.close();
+        }
         if let Some(sources) = self.inner.sources.get() {
             sources.flush();
         }
@@ -1418,6 +1466,15 @@ pub async fn create_node(options: Value) -> Result<Arc<CoreNode>, NodeError> {
         Arc::new(BlobOps(weak.clone())),
     );
     let _ = shared.catalog.set(catalog.clone());
+    let search = crate::search::GlobalSearch::new(Arc::new(SearchOps {
+        shared: weak.clone(),
+        swarm: net.swarm().clone(),
+    }));
+    let _ = net.search.set(search.clone());
+    {
+        let search = search.clone();
+        let _detach = net.on_connection(Arc::new(move |conn| search.connected(conn)));
+    }
 
     // A primary channel is hydrated once the update that follows the swarm's join has run.
     if channel.use_primary() {
@@ -1453,6 +1510,59 @@ pub async fn create_node(options: Value) -> Result<Arc<CoreNode>, NodeError> {
     Ok(node)
 }
 
+/// What global search reads from the node (`createGlobalSearch({ ... })` in `index.js`).
+struct SearchOps {
+    shared: Weak<Shared>,
+    swarm: peeroxide::SwarmHandle,
+}
+
+impl crate::search::SearchHost for SearchOps {
+    fn closing(&self) -> bool {
+        self.shared
+            .upgrade()
+            .is_none_or(|shared| shared.closing.load(Ordering::Acquire))
+    }
+    fn private_routing(&self) -> bool {
+        self.shared
+            .upgrade()
+            .and_then(|shared| shared.net.get().map(|net| net.private_routing()))
+            .unwrap_or(true)
+    }
+    fn connections(&self) -> Vec<super::network::ConnectionHandle> {
+        self.shared
+            .upgrade()
+            .and_then(|shared| shared.net.get().map(|net| net.connections()))
+            .unwrap_or_default()
+    }
+    fn is_source_peer(&self, key_hex: &str) -> bool {
+        self.shared.upgrade().is_some_and(|shared| {
+            shared
+                .blobs
+                .get()
+                .is_some_and(|blobs| blobs.is_source_peer(key_hex))
+        })
+    }
+    fn public_entries(&self) -> futures_util::future::BoxFuture<'static, Vec<Announce>> {
+        let shared = self.shared.clone();
+        Box::pin(async move {
+            let catalog = shared
+                .upgrade()
+                .and_then(|shared| shared.catalog.get().cloned());
+            match catalog {
+                Some(catalog) => catalog.public_entries().await,
+                None => Vec::new(),
+            }
+        })
+    }
+    fn update(&self) {
+        if let Some(shared) = self.shared.upgrade() {
+            shared.changed();
+        }
+    }
+    fn swarm(&self) -> peeroxide::SwarmHandle {
+        self.swarm.clone()
+    }
+}
 /// `createNetwork` reading `ctx.blobs.ownedBlobs`/`cachedBlobs`: the announcement rotation's list.
 struct BlobIndex(Weak<Shared>);
 
@@ -1872,6 +1982,19 @@ impl Node for CoreNode {
         options: SearchOptions,
     ) -> Result<Vec<Entry>, Self::Error> {
         Ok(self.catalog().search(id, options).await)
+    }
+
+    async fn search_global(
+        &self,
+        query: &str,
+        id: Option<&Value>,
+        limit: usize,
+    ) -> Result<Vec<Value>, String> {
+        CoreNode::search_global(self, query, id, limit).await
+    }
+
+    fn serve_search(&self, is_media: Option<crate::search::IsMedia>) {
+        CoreNode::serve_search(self, is_media);
     }
 
     async fn put(

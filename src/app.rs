@@ -123,6 +123,15 @@ pub struct SearchRequest {
     pub offset: Option<Number>,
 }
 
+/// `searchGlobal`: relays this device does not follow, by words in any order and/or a media id.
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct SearchGlobalRequest {
+    pub query: Option<String>,
+    pub id: Option<Value>,
+    pub limit: Option<Number>,
+}
+
 /// A call that names one key: `focusSource`, `warm`, `removeSource` and `remove`.
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default)]
@@ -928,6 +937,22 @@ where
             .into_iter()
             .map(|entry| with_download(entry, api_url.as_deref()))
             .collect()
+    }
+
+    /// `searchGlobal`: rows carry `magnetUrl`; play one with `openUri`. Asking the same query
+    /// again returns the answers that arrived since.
+    pub async fn search_global(
+        &mut self,
+        request: SearchGlobalRequest,
+    ) -> Result<Vec<Value>, String> {
+        let node = self.current()?;
+        let limit = request.limit.and_then(|n| n.as_u64()).unwrap_or(0) as usize;
+        node.search_global(
+            request.query.as_deref().unwrap_or(""),
+            request.id.as_ref().filter(|id| !id.is_null()),
+            limit,
+        )
+        .await
     }
 
     /// `focusSource`.

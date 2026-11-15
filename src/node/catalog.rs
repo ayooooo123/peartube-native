@@ -92,6 +92,8 @@ struct Raw {
     source_kind: String,
 }
 
+/// Opened watch links kept at once (`MAX_WATCHES`).
+const MAX_WATCHES: usize = 32;
 /// `createCatalog(ctx)`.
 pub struct Catalog {
     channel: Arc<Channel>,
@@ -99,6 +101,8 @@ pub struct Catalog {
     blobs: Arc<dyn CatalogBlobs>,
     primary: Mutex<PrimaryCache>,
     ephemeral: Mutex<HashMap<String, (Value, String, String)>>,
+    /// The `ephemeral` keys, oldest first (the JS `Map`'s insertion order).
+    watch_order: Mutex<Vec<String>>,
     /// Channels whose swarm a watch link joined without following them, oldest first.
     link_swarms: Mutex<Vec<String>>,
 }
@@ -115,6 +119,7 @@ impl Catalog {
             blobs,
             primary: Mutex::new(PrimaryCache::default()),
             ephemeral: Mutex::new(HashMap::new()),
+            watch_order: Mutex::new(Vec::new()),
             link_swarms: Mutex::new(Vec::new()),
         })
     }
@@ -154,9 +159,8 @@ impl Catalog {
         }
     }
 
-    /// `search(id, { source, query, limit, offset })`.
-    pub async fn search(&self, id: Option<&str>, options: SearchOptions) -> Vec<Entry> {
-        let filter = options.source.clone().flatten();
+    /// Every catalog record the node knows, one per file (id + hash), with its raw announce.
+    async fn collect(&self, id: Option<&str>, filter: Option<String>) -> Vec<(Entry, Announce)> {
         if let Some(filter) = &filter {
             let _ = self.sources.focus(filter).await;
         }
@@ -290,7 +294,7 @@ impl Catalog {
         }
 
         // Insertion order, as the JS `Map` keeps it: listings must come back in catalog order.
-        let mut files: Vec<Entry> = Vec::new();
+        let mut files: Vec<(Entry, Announce)> = Vec::new();
         let mut positions: HashMap<String, usize> = HashMap::new();
         for item in raw {
             let Some(announce) = announce_from(&item.entry) else {
@@ -343,18 +347,28 @@ impl Catalog {
             match positions.get(&dedupe).copied() {
                 Some(index) => {
                     let existing = &mut files[index];
-                    if better(&entry, existing) {
-                        *existing = entry;
+                    if better(&entry, &existing.0) {
+                        *existing = (entry, announce);
                     }
                 }
                 None => {
                     positions.insert(dedupe, files.len());
-                    files.push(entry);
+                    files.push((entry, announce));
                 }
             }
         }
 
-        let mut list = files;
+        files
+    }
+
+    /// `search(id, { source, query, limit, offset })`.
+    pub async fn search(&self, id: Option<&str>, options: SearchOptions) -> Vec<Entry> {
+        let mut list: Vec<Entry> = self
+            .collect(id, options.source.clone().flatten())
+            .await
+            .into_iter()
+            .map(|(entry, _)| entry)
+            .collect();
         let query = options
             .query
             .clone()
@@ -386,6 +400,25 @@ impl Catalog {
             };
         }
         list
+    }
+
+    /// `publicEntries()`: the announces global search may offer (`search`): public, from a
+    /// channel, and held whole by this node, so whoever finds one can read it from this node over
+    /// the connection the search came on. Whether a file is media is the relay's `media-check`
+    /// plugin's call, not the catalog's.
+    pub async fn public_entries(&self) -> Vec<Announce> {
+        self.collect(None, None)
+            .await
+            .into_iter()
+            .filter(|(entry, announce)| {
+                entry.source_kind == "channel"
+                    && announce.wrapped_key.is_none()
+                    && announce.epoch.unwrap_or(0) == 0
+                    && entry.size > 0
+                    && entry.cached_bytes >= entry.size
+            })
+            .map(|(_, announce)| announce)
+            .collect()
     }
 
     /// `findEntry(key)`: one record, with the shared `channel:<hex>/<sub>` form.
@@ -527,14 +560,36 @@ impl Catalog {
                 };
                 let key = format!("watch/{}:{}", announce.blobs, announce.blob.block_offset);
                 let source = source_key.clone().unwrap_or_else(|| "direct".to_owned());
-                lock(&self.ephemeral).insert(
-                    key.clone(),
-                    (
-                        serde_json::to_value(&parsed_entry).unwrap_or(Value::Null),
-                        source.clone(),
-                        "watch".to_owned(),
-                    ),
-                );
+                // Newest last; an opened link that nothing plays any more leaves once 32 are held.
+                {
+                    let mut ephemeral = lock(&self.ephemeral);
+                    let mut order = lock(&self.watch_order);
+                    ephemeral.insert(
+                        key.clone(),
+                        (
+                            serde_json::to_value(&parsed_entry).unwrap_or(Value::Null),
+                            source.clone(),
+                            "watch".to_owned(),
+                        ),
+                    );
+                    order.retain(|held| held != &key);
+                    order.push(key.clone());
+                    let mut index = 0;
+                    while order.len() > MAX_WATCHES && index < order.len() {
+                        let held = order[index].clone();
+                        let open = ephemeral
+                            .get(&held)
+                            .and_then(|(entry, _, _)| entry.get("blobs").and_then(Value::as_str))
+                            .and_then(parse_hex32)
+                            .is_some_and(|blob| self.blobs.open_core(&blob));
+                        if held != key && !open {
+                            ephemeral.remove(&held);
+                            order.remove(index);
+                        } else {
+                            index += 1;
+                        }
+                    }
+                }
                 self.blobs.warm(&announce).await;
                 self.channel.changed();
                 let blob = parse_hex32(&announce.blobs).unwrap_or_default();

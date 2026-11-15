@@ -355,7 +355,7 @@ impl Inner {
             }
             Err(error) => {
                 control.close();
-                Err(error)
+                Err(error.into())
             }
         }
     }
@@ -660,7 +660,7 @@ impl Inner {
                 Ok(reply) => reply,
                 Err(error) => {
                     control.close();
-                    return Err(error);
+                    return Err(error.into());
                 }
             };
             control.close();

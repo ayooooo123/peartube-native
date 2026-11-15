@@ -227,6 +227,15 @@ const SPEC: &[Spec] = &[
     )
     .live()
     .env_parse(env_truthy),
+    // Answer other nodes' global searches (`search`) with the media this relay holds.
+    spec(
+        "globalSearch",
+        "PEARTUBE_GLOBAL_SEARCH",
+        Kind::Bool,
+        Default::Bool(false),
+    )
+    .live()
+    .env_parse(env_flag),
     spec(
         "acquireConcurrency",
         "PEARTUBE_ACQUIRE_CONCURRENCY",

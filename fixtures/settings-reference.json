@@ -1713,6 +1713,14 @@
                 "envSet": false,
                 "value": false
               },
+              "globalSearch": {
+                "type": "bool",
+                "live": true,
+                "source": "default",
+                "env": "PEARTUBE_GLOBAL_SEARCH",
+                "envSet": false,
+                "value": false
+              },
               "acquireConcurrency": {
                 "type": "number",
                 "live": true,
@@ -1873,6 +1881,7 @@
             "allowedPeers": "[]",
             "publishChannel": "true",
             "directory": "false",
+            "globalSearch": "false",
             "acquireConcurrency": "4",
             "watchDir": "\"\"",
             "feeds": "[]",
@@ -1987,6 +1996,14 @@
             "live": true,
             "source": "default",
             "env": "PEARTUBE_DIRECTORY",
+            "envSet": false,
+            "value": false
+          },
+          "globalSearch": {
+            "type": "bool",
+            "live": true,
+            "source": "default",
+            "env": "PEARTUBE_GLOBAL_SEARCH",
             "envSet": false,
             "value": false
           },
@@ -2229,6 +2246,14 @@
                 "envSet": false,
                 "value": false
               },
+              "globalSearch": {
+                "type": "bool",
+                "live": true,
+                "source": "default",
+                "env": "PEARTUBE_GLOBAL_SEARCH",
+                "envSet": false,
+                "value": false
+              },
               "acquireConcurrency": {
                 "type": "number",
                 "live": true,
@@ -2398,6 +2423,7 @@
             "allowedPeers": "[]",
             "publishChannel": "true",
             "directory": "false",
+            "globalSearch": "false",
             "acquireConcurrency": "4",
             "watchDir": "\"\"",
             "feeds": "[]",
@@ -2512,6 +2538,14 @@
             "live": true,
             "source": "default",
             "env": "PEARTUBE_DIRECTORY",
+            "envSet": false,
+            "value": false
+          },
+          "globalSearch": {
+            "type": "bool",
+            "live": true,
+            "source": "default",
+            "env": "PEARTUBE_GLOBAL_SEARCH",
             "envSet": false,
             "value": false
           },
@@ -2767,6 +2801,14 @@
                 "envSet": false,
                 "value": false
               },
+              "globalSearch": {
+                "type": "bool",
+                "live": true,
+                "source": "default",
+                "env": "PEARTUBE_GLOBAL_SEARCH",
+                "envSet": false,
+                "value": false
+              },
               "acquireConcurrency": {
                 "type": "number",
                 "live": true,
@@ -2989,6 +3031,14 @@
             "live": true,
             "source": "default",
             "env": "PEARTUBE_DIRECTORY",
+            "envSet": false,
+            "value": false
+          },
+          "globalSearch": {
+            "type": "bool",
+            "live": true,
+            "source": "default",
+            "env": "PEARTUBE_GLOBAL_SEARCH",
             "envSet": false,
             "value": false
           },
@@ -3228,6 +3278,14 @@
                 "envSet": false,
                 "value": false
               },
+              "globalSearch": {
+                "type": "bool",
+                "live": true,
+                "source": "default",
+                "env": "PEARTUBE_GLOBAL_SEARCH",
+                "envSet": false,
+                "value": false
+              },
               "acquireConcurrency": {
                 "type": "number",
                 "live": true,
@@ -3463,6 +3521,14 @@
                 "envSet": false,
                 "value": false
               },
+              "globalSearch": {
+                "type": "bool",
+                "live": true,
+                "source": "default",
+                "env": "PEARTUBE_GLOBAL_SEARCH",
+                "envSet": false,
+                "value": false
+              },
               "acquireConcurrency": {
                 "type": "number",
                 "live": true,
@@ -3688,6 +3754,14 @@
                 "live": true,
                 "source": "default",
                 "env": "PEARTUBE_DIRECTORY",
+                "envSet": false,
+                "value": false
+              },
+              "globalSearch": {
+                "type": "bool",
+                "live": true,
+                "source": "default",
+                "env": "PEARTUBE_GLOBAL_SEARCH",
                 "envSet": false,
                 "value": false
               },
@@ -3921,6 +3995,14 @@
             "live": true,
             "source": "default",
             "env": "PEARTUBE_DIRECTORY",
+            "envSet": false,
+            "value": false
+          },
+          "globalSearch": {
+            "type": "bool",
+            "live": true,
+            "source": "default",
+            "env": "PEARTUBE_GLOBAL_SEARCH",
             "envSet": false,
             "value": false
           },
@@ -4167,6 +4249,14 @@
                 "envSet": false,
                 "value": false
               },
+              "globalSearch": {
+                "type": "bool",
+                "live": true,
+                "source": "default",
+                "env": "PEARTUBE_GLOBAL_SEARCH",
+                "envSet": false,
+                "value": false
+              },
               "acquireConcurrency": {
                 "type": "number",
                 "live": true,
@@ -4394,6 +4484,14 @@
                 "envSet": false,
                 "value": false
               },
+              "globalSearch": {
+                "type": "bool",
+                "live": true,
+                "source": "default",
+                "env": "PEARTUBE_GLOBAL_SEARCH",
+                "envSet": false,
+                "value": false
+              },
               "acquireConcurrency": {
                 "type": "number",
                 "live": true,
@@ -4618,6 +4716,14 @@
             "live": true,
             "source": "default",
             "env": "PEARTUBE_DIRECTORY",
+            "envSet": false,
+            "value": false
+          },
+          "globalSearch": {
+            "type": "bool",
+            "live": true,
+            "source": "default",
+            "env": "PEARTUBE_GLOBAL_SEARCH",
             "envSet": false,
             "value": false
           },
@@ -5055,6 +5161,14 @@
                 "envSet": false,
                 "value": false
               },
+              "globalSearch": {
+                "type": "bool",
+                "live": true,
+                "source": "default",
+                "env": "PEARTUBE_GLOBAL_SEARCH",
+                "envSet": false,
+                "value": false
+              },
               "acquireConcurrency": {
                 "type": "number",
                 "live": true,
@@ -5290,6 +5404,14 @@
                 "envSet": false,
                 "value": false
               },
+              "globalSearch": {
+                "type": "bool",
+                "live": true,
+                "source": "default",
+                "env": "PEARTUBE_GLOBAL_SEARCH",
+                "envSet": false,
+                "value": false
+              },
               "acquireConcurrency": {
                 "type": "number",
                 "live": true,
@@ -5517,6 +5639,14 @@
                 "live": true,
                 "source": "default",
                 "env": "PEARTUBE_DIRECTORY",
+                "envSet": false,
+                "value": false
+              },
+              "globalSearch": {
+                "type": "bool",
+                "live": true,
+                "source": "default",
+                "env": "PEARTUBE_GLOBAL_SEARCH",
                 "envSet": false,
                 "value": false
               },
@@ -5750,6 +5880,14 @@
             "envSet": false,
             "value": false
           },
+          "globalSearch": {
+            "type": "bool",
+            "live": true,
+            "source": "default",
+            "env": "PEARTUBE_GLOBAL_SEARCH",
+            "envSet": false,
+            "value": false
+          },
           "acquireConcurrency": {
             "type": "number",
             "live": true,
@@ -5977,6 +6115,14 @@
                 "live": true,
                 "source": "default",
                 "env": "PEARTUBE_DIRECTORY",
+                "envSet": false,
+                "value": false
+              },
+              "globalSearch": {
+                "type": "bool",
+                "live": true,
+                "source": "default",
+                "env": "PEARTUBE_GLOBAL_SEARCH",
                 "envSet": false,
                 "value": false
               },
@@ -6225,6 +6371,14 @@
                 "live": true,
                 "source": "default",
                 "env": "PEARTUBE_DIRECTORY",
+                "envSet": false,
+                "value": false
+              },
+              "globalSearch": {
+                "type": "bool",
+                "live": true,
+                "source": "default",
+                "env": "PEARTUBE_GLOBAL_SEARCH",
                 "envSet": false,
                 "value": false
               },
@@ -6483,6 +6637,14 @@
                 "envSet": false,
                 "value": false
               },
+              "globalSearch": {
+                "type": "bool",
+                "live": true,
+                "source": "default",
+                "env": "PEARTUBE_GLOBAL_SEARCH",
+                "envSet": false,
+                "value": false
+              },
               "acquireConcurrency": {
                 "type": "number",
                 "live": true,
@@ -6725,6 +6887,14 @@
                 "envSet": false,
                 "value": false
               },
+              "globalSearch": {
+                "type": "bool",
+                "live": true,
+                "source": "default",
+                "env": "PEARTUBE_GLOBAL_SEARCH",
+                "envSet": false,
+                "value": false
+              },
               "acquireConcurrency": {
                 "type": "number",
                 "live": true,
@@ -6964,6 +7134,14 @@
             "live": true,
             "source": "default",
             "env": "PEARTUBE_DIRECTORY",
+            "envSet": false,
+            "value": false
+          },
+          "globalSearch": {
+            "type": "bool",
+            "live": true,
+            "source": "default",
+            "env": "PEARTUBE_GLOBAL_SEARCH",
             "envSet": false,
             "value": false
           },
@@ -7219,6 +7397,14 @@
                 "envSet": false,
                 "value": false
               },
+              "globalSearch": {
+                "type": "bool",
+                "live": true,
+                "source": "default",
+                "env": "PEARTUBE_GLOBAL_SEARCH",
+                "envSet": false,
+                "value": false
+              },
               "acquireConcurrency": {
                 "type": "number",
                 "live": true,
@@ -7441,6 +7627,14 @@
                 "live": true,
                 "source": "default",
                 "env": "PEARTUBE_DIRECTORY",
+                "envSet": false,
+                "value": false
+              },
+              "globalSearch": {
+                "type": "bool",
+                "live": true,
+                "source": "default",
+                "env": "PEARTUBE_GLOBAL_SEARCH",
                 "envSet": false,
                 "value": false
               },
@@ -7676,6 +7870,14 @@
                 "envSet": false,
                 "value": false
               },
+              "globalSearch": {
+                "type": "bool",
+                "live": true,
+                "source": "default",
+                "env": "PEARTUBE_GLOBAL_SEARCH",
+                "envSet": false,
+                "value": false
+              },
               "acquireConcurrency": {
                 "type": "number",
                 "live": true,
@@ -7901,6 +8103,14 @@
                 "envSet": false,
                 "value": false
               },
+              "globalSearch": {
+                "type": "bool",
+                "live": true,
+                "source": "default",
+                "env": "PEARTUBE_GLOBAL_SEARCH",
+                "envSet": false,
+                "value": false
+              },
               "acquireConcurrency": {
                 "type": "number",
                 "live": true,
@@ -8123,6 +8333,14 @@
             "live": true,
             "source": "default",
             "env": "PEARTUBE_DIRECTORY",
+            "envSet": false,
+            "value": false
+          },
+          "globalSearch": {
+            "type": "bool",
+            "live": true,
+            "source": "default",
+            "env": "PEARTUBE_GLOBAL_SEARCH",
             "envSet": false,
             "value": false
           },
@@ -8353,6 +8571,14 @@
                 "live": true,
                 "source": "default",
                 "env": "PEARTUBE_DIRECTORY",
+                "envSet": false,
+                "value": false
+              },
+              "globalSearch": {
+                "type": "bool",
+                "live": true,
+                "source": "default",
+                "env": "PEARTUBE_GLOBAL_SEARCH",
                 "envSet": false,
                 "value": false
               },
@@ -8596,6 +8822,14 @@
                 "envSet": false,
                 "value": false
               },
+              "globalSearch": {
+                "type": "bool",
+                "live": true,
+                "source": "default",
+                "env": "PEARTUBE_GLOBAL_SEARCH",
+                "envSet": false,
+                "value": false
+              },
               "acquireConcurrency": {
                 "type": "number",
                 "live": true,
@@ -8826,6 +9060,14 @@
                 "live": true,
                 "source": "default",
                 "env": "PEARTUBE_DIRECTORY",
+                "envSet": false,
+                "value": false
+              },
+              "globalSearch": {
+                "type": "bool",
+                "live": true,
+                "source": "default",
+                "env": "PEARTUBE_GLOBAL_SEARCH",
                 "envSet": false,
                 "value": false
               },
@@ -9064,6 +9306,14 @@
                 "envSet": false,
                 "value": false
               },
+              "globalSearch": {
+                "type": "bool",
+                "live": true,
+                "source": "default",
+                "env": "PEARTUBE_GLOBAL_SEARCH",
+                "envSet": false,
+                "value": false
+              },
               "acquireConcurrency": {
                 "type": "number",
                 "live": true,
@@ -9291,6 +9541,14 @@
                 "envSet": false,
                 "value": false
               },
+              "globalSearch": {
+                "type": "bool",
+                "live": true,
+                "source": "default",
+                "env": "PEARTUBE_GLOBAL_SEARCH",
+                "envSet": false,
+                "value": false
+              },
               "acquireConcurrency": {
                 "type": "number",
                 "live": true,
@@ -9515,6 +9773,14 @@
             "live": true,
             "source": "default",
             "env": "PEARTUBE_DIRECTORY",
+            "envSet": false,
+            "value": false
+          },
+          "globalSearch": {
+            "type": "bool",
+            "live": true,
+            "source": "default",
+            "env": "PEARTUBE_GLOBAL_SEARCH",
             "envSet": false,
             "value": false
           },
@@ -9754,6 +10020,14 @@
                 "envSet": false,
                 "value": false
               },
+              "globalSearch": {
+                "type": "bool",
+                "live": true,
+                "source": "default",
+                "env": "PEARTUBE_GLOBAL_SEARCH",
+                "envSet": false,
+                "value": false
+              },
               "acquireConcurrency": {
                 "type": "number",
                 "live": true,
@@ -9990,6 +10264,14 @@
             "envSet": false,
             "value": false
           },
+          "globalSearch": {
+            "type": "bool",
+            "live": true,
+            "source": "default",
+            "env": "PEARTUBE_GLOBAL_SEARCH",
+            "envSet": false,
+            "value": false
+          },
           "acquireConcurrency": {
             "type": "number",
             "live": true,
@@ -10220,6 +10502,14 @@
                 "envSet": false,
                 "value": false
               },
+              "globalSearch": {
+                "type": "bool",
+                "live": true,
+                "source": "default",
+                "env": "PEARTUBE_GLOBAL_SEARCH",
+                "envSet": false,
+                "value": false
+              },
               "acquireConcurrency": {
                 "type": "number",
                 "live": true,
@@ -10447,6 +10737,14 @@
             "live": true,
             "source": "default",
             "env": "PEARTUBE_DIRECTORY",
+            "envSet": false,
+            "value": false
+          },
+          "globalSearch": {
+            "type": "bool",
+            "live": true,
+            "source": "default",
+            "env": "PEARTUBE_GLOBAL_SEARCH",
             "envSet": false,
             "value": false
           },
@@ -10682,6 +10980,14 @@
             "live": true,
             "source": "default",
             "env": "PEARTUBE_DIRECTORY",
+            "envSet": false,
+            "value": false
+          },
+          "globalSearch": {
+            "type": "bool",
+            "live": true,
+            "source": "default",
+            "env": "PEARTUBE_GLOBAL_SEARCH",
             "envSet": false,
             "value": false
           },
@@ -10922,6 +11228,14 @@
                 "envSet": false,
                 "value": false
               },
+              "globalSearch": {
+                "type": "bool",
+                "live": true,
+                "source": "default",
+                "env": "PEARTUBE_GLOBAL_SEARCH",
+                "envSet": false,
+                "value": false
+              },
               "acquireConcurrency": {
                 "type": "number",
                 "live": true,
@@ -11062,6 +11376,7 @@
             "allowedPeers": "[]",
             "publishChannel": "true",
             "directory": "false",
+            "globalSearch": "false",
             "acquireConcurrency": "4",
             "watchDir": "\"\"",
             "feeds": "[]",
@@ -11181,6 +11496,14 @@
                 "live": true,
                 "source": "default",
                 "env": "PEARTUBE_DIRECTORY",
+                "envSet": false,
+                "value": false
+              },
+              "globalSearch": {
+                "type": "bool",
+                "live": true,
+                "source": "default",
+                "env": "PEARTUBE_GLOBAL_SEARCH",
                 "envSet": false,
                 "value": false
               },
@@ -11428,6 +11751,14 @@
                 "envSet": false,
                 "value": false
               },
+              "globalSearch": {
+                "type": "bool",
+                "live": true,
+                "source": "default",
+                "env": "PEARTUBE_GLOBAL_SEARCH",
+                "envSet": false,
+                "value": false
+              },
               "acquireConcurrency": {
                 "type": "number",
                 "live": true,
@@ -11662,6 +11993,14 @@
                 "live": true,
                 "source": "default",
                 "env": "PEARTUBE_DIRECTORY",
+                "envSet": false,
+                "value": false
+              },
+              "globalSearch": {
+                "type": "bool",
+                "live": true,
+                "source": "default",
+                "env": "PEARTUBE_GLOBAL_SEARCH",
                 "envSet": false,
                 "value": false
               },
@@ -11902,6 +12241,14 @@
             "envSet": false,
             "value": false
           },
+          "globalSearch": {
+            "type": "bool",
+            "live": true,
+            "source": "default",
+            "env": "PEARTUBE_GLOBAL_SEARCH",
+            "envSet": false,
+            "value": false
+          },
           "acquireConcurrency": {
             "type": "number",
             "live": true,
@@ -12138,6 +12485,14 @@
                 "envSet": false,
                 "value": false
               },
+              "globalSearch": {
+                "type": "bool",
+                "live": true,
+                "source": "default",
+                "env": "PEARTUBE_GLOBAL_SEARCH",
+                "envSet": false,
+                "value": false
+              },
               "acquireConcurrency": {
                 "type": "number",
                 "live": true,
@@ -12280,6 +12635,7 @@
             "allowedPeers": "[]",
             "publishChannel": "true",
             "directory": "false",
+            "globalSearch": "false",
             "acquireConcurrency": "4",
             "watchDir": "\"\"",
             "feeds": "[]",
@@ -12401,6 +12757,14 @@
                 "live": true,
                 "source": "default",
                 "env": "PEARTUBE_DIRECTORY",
+                "envSet": false,
+                "value": false
+              },
+              "globalSearch": {
+                "type": "bool",
+                "live": true,
+                "source": "default",
+                "env": "PEARTUBE_GLOBAL_SEARCH",
                 "envSet": false,
                 "value": false
               },
@@ -12641,6 +13005,14 @@
             "envSet": false,
             "value": false
           },
+          "globalSearch": {
+            "type": "bool",
+            "live": true,
+            "source": "default",
+            "env": "PEARTUBE_GLOBAL_SEARCH",
+            "envSet": false,
+            "value": false
+          },
           "acquireConcurrency": {
             "type": "number",
             "live": true,
@@ -12877,6 +13249,14 @@
                 "envSet": false,
                 "value": false
               },
+              "globalSearch": {
+                "type": "bool",
+                "live": true,
+                "source": "default",
+                "env": "PEARTUBE_GLOBAL_SEARCH",
+                "envSet": false,
+                "value": false
+              },
               "acquireConcurrency": {
                 "type": "number",
                 "live": true,
@@ -13102,6 +13482,14 @@
                 "envSet": false,
                 "value": false
               },
+              "globalSearch": {
+                "type": "bool",
+                "live": true,
+                "source": "default",
+                "env": "PEARTUBE_GLOBAL_SEARCH",
+                "envSet": false,
+                "value": false
+              },
               "acquireConcurrency": {
                 "type": "number",
                 "live": true,
@@ -13324,6 +13712,14 @@
             "live": true,
             "source": "default",
             "env": "PEARTUBE_DIRECTORY",
+            "envSet": false,
+            "value": false
+          },
+          "globalSearch": {
+            "type": "bool",
+            "live": true,
+            "source": "default",
+            "env": "PEARTUBE_GLOBAL_SEARCH",
             "envSet": false,
             "value": false
           },
@@ -13568,6 +13964,14 @@
                 "envSet": false,
                 "value": false
               },
+              "globalSearch": {
+                "type": "bool",
+                "live": true,
+                "source": "default",
+                "env": "PEARTUBE_GLOBAL_SEARCH",
+                "envSet": false,
+                "value": false
+              },
               "acquireConcurrency": {
                 "type": "number",
                 "live": true,
@@ -13793,6 +14197,14 @@
                 "envSet": false,
                 "value": false
               },
+              "globalSearch": {
+                "type": "bool",
+                "live": true,
+                "source": "default",
+                "env": "PEARTUBE_GLOBAL_SEARCH",
+                "envSet": false,
+                "value": false
+              },
               "acquireConcurrency": {
                 "type": "number",
                 "live": true,
@@ -14015,6 +14427,14 @@
             "live": true,
             "source": "default",
             "env": "PEARTUBE_DIRECTORY",
+            "envSet": false,
+            "value": false
+          },
+          "globalSearch": {
+            "type": "bool",
+            "live": true,
+            "source": "default",
+            "env": "PEARTUBE_GLOBAL_SEARCH",
             "envSet": false,
             "value": false
           },
@@ -14328,6 +14748,14 @@
                 "envSet": false,
                 "value": true
               },
+              "globalSearch": {
+                "type": "bool",
+                "live": true,
+                "source": "default",
+                "env": "PEARTUBE_GLOBAL_SEARCH",
+                "envSet": false,
+                "value": false
+              },
               "acquireConcurrency": {
                 "type": "number",
                 "live": true,
@@ -14585,6 +15013,14 @@
                 "envSet": false,
                 "value": true
               },
+              "globalSearch": {
+                "type": "bool",
+                "live": true,
+                "source": "default",
+                "env": "PEARTUBE_GLOBAL_SEARCH",
+                "envSet": false,
+                "value": false
+              },
               "acquireConcurrency": {
                 "type": "number",
                 "live": true,
@@ -14749,6 +15185,7 @@
             "allowedPeers": "[\"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\",\"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\"]",
             "publishChannel": "false",
             "directory": "true",
+            "globalSearch": "false",
             "acquireConcurrency": "16",
             "watchDir": "\"/imports/watched\"",
             "feeds": "[\"https://feed.example/api?x=1\"]",
@@ -14873,6 +15310,14 @@
             "env": "PEARTUBE_DIRECTORY",
             "envSet": false,
             "value": true
+          },
+          "globalSearch": {
+            "type": "bool",
+            "live": true,
+            "source": "default",
+            "env": "PEARTUBE_GLOBAL_SEARCH",
+            "envSet": false,
+            "value": false
           },
           "acquireConcurrency": {
             "type": "number",
@@ -15128,6 +15573,14 @@
                 "envSet": false,
                 "value": false
               },
+              "globalSearch": {
+                "type": "bool",
+                "live": true,
+                "source": "default",
+                "env": "PEARTUBE_GLOBAL_SEARCH",
+                "envSet": false,
+                "value": false
+              },
               "acquireConcurrency": {
                 "type": "number",
                 "live": true,
@@ -15361,6 +15814,14 @@
                 "envSet": false,
                 "value": false
               },
+              "globalSearch": {
+                "type": "bool",
+                "live": true,
+                "source": "default",
+                "env": "PEARTUBE_GLOBAL_SEARCH",
+                "envSet": false,
+                "value": false
+              },
               "acquireConcurrency": {
                 "type": "number",
                 "live": true,
@@ -15591,6 +16052,14 @@
             "live": true,
             "source": "default",
             "env": "PEARTUBE_DIRECTORY",
+            "envSet": false,
+            "value": false
+          },
+          "globalSearch": {
+            "type": "bool",
+            "live": true,
+            "source": "default",
+            "env": "PEARTUBE_GLOBAL_SEARCH",
             "envSet": false,
             "value": false
           },

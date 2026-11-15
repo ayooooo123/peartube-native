@@ -506,6 +506,7 @@ async fn start_private(
             Box::new(move || close()),
             Vec::new(),
             Some(bytes),
+            Vec::new(),
         );
         network.private_peers.fetch_add(1, Ordering::AcqRel);
         let watched = handle.mux().clone();
@@ -555,6 +556,9 @@ struct ConnectionState {
     transport: Option<libudx::UdxStreamAbort>,
     /// Raw bytes through this connection, as the route counters see them.
     bytes: Option<WireBytes>,
+    /// The topics the swarm dialed this peer for (`peerInfo.topics`); empty for LAN, private
+    /// and accepted connections.
+    topics: Vec<[u8; 32]>,
     /// The transport pieces the mux does not own (socket handle, direct-dial runtime).
     _keepalive: Vec<Box<dyn Any + Send + Sync>>,
 }
@@ -578,6 +582,17 @@ impl ConnectionHandle {
     }
     pub fn mux(&self) -> &Mux {
         &self.0.mux
+    }
+    /// `peerInfo.topics`: what the swarm found this peer on, when it dialed it.
+    pub fn topics(&self) -> &[[u8; 32]] {
+        &self.0.topics
+    }
+    /// The peer's UDP address, when the transport knows it (the `/24` diversity check).
+    pub fn remote_addr(&self) -> Option<std::net::SocketAddr> {
+        self.0
+            .transport
+            .as_ref()
+            .and_then(|transport| transport.remote_addr())
     }
     pub fn close(&self) {
         if !self.0.closed.swap(true, Ordering::AcqRel) {
@@ -705,6 +720,8 @@ pub struct Network {
     up_bps: Mutex<f64>,
     inflight: Mutex<Option<(u32, u32)>>,
     closing: Arc<AtomicBool>,
+    /// Global search (`search`), set once the catalog exists; the swarm's suspend ends its lookup.
+    pub search: std::sync::OnceLock<crate::search::GlobalSearch>,
 }
 
 impl Network {
@@ -825,6 +842,7 @@ impl Network {
             up_bps: Mutex::new(0.0),
             inflight: Mutex::new(None),
             closing,
+            search: std::sync::OnceLock::new(),
         });
         let weak = network.weak.clone();
         tokio::spawn(async move {
@@ -913,6 +931,7 @@ impl Network {
             Box::new(|| {}),
             vec![Box::new(socket)],
             Some(bytes),
+            connection.topics.clone(),
         );
     }
 
@@ -926,6 +945,7 @@ impl Network {
         close: Box<dyn Fn() + Send + Sync>,
         keepalive: Vec<Box<dyn Any + Send + Sync>>,
         mut bytes: Option<WireBytes>,
+        topics: Vec<[u8; 32]>,
     ) -> ConnectionHandle {
         self.store.replicate(&mux);
         for sink in lock(&self.wakeups).iter() {
@@ -949,6 +969,7 @@ impl Network {
             _keepalive: keepalive,
             transport,
             bytes,
+            topics,
         }));
         {
             let mut connections = lock(&self.connections);
@@ -1440,6 +1461,7 @@ impl Network {
                 connection.close,
                 Vec::new(),
                 Some(connection.bytes),
+                Vec::new(),
             );
         }));
         *lock(&self.lan) = Some(LanState { binding, closer });
@@ -1549,6 +1571,7 @@ impl Network {
                 Box::new(|| {}),
                 vec![Box::new(socket)],
                 Some(bytes),
+                Vec::new(),
             );
         });
     }
@@ -1739,6 +1762,9 @@ impl super::api::Swarm for NetworkSwarm {
     type Error = std::io::Error;
 
     async fn suspend(&self) -> Result<(), Self::Error> {
+        if let Some(search) = self.network.search.get() {
+            search.suspend();
+        }
         for connection in self.network.connections() {
             connection.close();
         }

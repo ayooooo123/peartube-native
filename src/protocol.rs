@@ -134,6 +134,62 @@ pub fn describe_entry(id: &str, title: &str) -> EntryInfo {
     }
 }
 
+/// `mediaFormat(head)`: the container a file's first bytes name, or `None` when they name none of
+/// the formats `MEDIA_FILE` lists. A file's name and title are a publisher's claim; these bytes are
+/// what a relay holds. MPEG-TS and M2TS are checked at their second packet when `head` reaches it.
+pub fn media_format(head: &[u8]) -> Option<&'static str> {
+    if head.len() < 4 {
+        return None;
+    }
+    let at = |off: usize, text: &[u8]| head.get(off..off + text.len()) == Some(text);
+    if head[..4] == [0x1a, 0x45, 0xdf, 0xa3] {
+        let lead = &head[..head.len().min(128)];
+        let webm = lead.windows(4).any(|w| w.eq_ignore_ascii_case(b"webm"));
+        return Some(if webm { "webm" } else { "mkv" });
+    }
+    if [b"ftyp", b"moov", b"mdat", b"free", b"wide", b"skip"]
+        .iter()
+        .any(|bx| at(4, *bx))
+    {
+        return Some(if at(8, b"qt  ") { "mov" } else { "mp4" });
+    }
+    if at(0, b"RIFF") && at(8, b"AVI ") {
+        return Some("avi");
+    }
+    if at(0, b"RIFF") && at(8, b"WAVE") {
+        return Some("wav");
+    }
+    if at(0, b"OggS") {
+        return Some("ogg");
+    }
+    if at(0, b"fLaC") {
+        return Some("flac");
+    }
+    if at(0, b"ID3") {
+        return Some("mp3");
+    }
+    if at(0, b"FLV") && head[3] == 0x01 {
+        return Some("flv");
+    }
+    if head[..4] == [0x30, 0x26, 0xb2, 0x75] {
+        return Some("wmv");
+    }
+    if head[..4] == [0x00, 0x00, 0x01, 0xba] {
+        return Some("mpg");
+    }
+    if head[0] == 0x47 && (head.len() < 189 || head[188] == 0x47) {
+        return Some("ts");
+    }
+    if head.len() >= 5 && head[4] == 0x47 && (head.len() < 197 || head[196] == 0x47) {
+        return Some("m2ts");
+    }
+    // An MPEG audio frame header: an ADTS AAC frame has layer bits 00, an MP3 frame does not.
+    if head[0] == 0xff && head[1] & 0xe0 == 0xe0 {
+        return Some(if head[1] & 0x06 == 0 { "aac" } else { "mp3" });
+    }
+    None
+}
+
 /// Returns `(season, episode, byte index of the ':')` of a trailing `:sNNeNN(N)` suffix.
 fn episode_suffix(id: &str) -> Option<(u32, u32, usize)> {
     let len = id.len();

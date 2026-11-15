@@ -283,6 +283,8 @@ pub struct Api<N: Node> {
     cast: Mutex<Option<Arc<dyn CastBridge>>>,
     web_cache: Mutex<HashMap<String, Bytes>>,
     sse: Arc<Mutex<Vec<mpsc::Sender<Bytes>>>>,
+    /// Client address -> (query, when) of its newest global search.
+    global_searches: Mutex<HashMap<String, (String, std::time::Instant)>>,
 }
 
 impl<N: Node> Api<N> {
@@ -301,6 +303,7 @@ impl<N: Node> Api<N> {
             downloads: Mutex::new(HashMap::new()),
             web_cache: Mutex::new(HashMap::new()),
             sse: Arc::new(Mutex::new(Vec::new())),
+            global_searches: Mutex::new(HashMap::new()),
         }
     }
 
@@ -776,6 +779,64 @@ impl<N: Node> Api<N> {
                 return Err(HttpError::new(400, "Paste an http(s) link"));
             }
             return identify(link).await.map(Some);
+        }
+        // Global search asks relays across the network (`search`), so only the relay's owner
+        // starts one: the token when one is set, else a private address, and only from the relay's
+        // own page. A new query at most every 3 s per address; the same query again returns the
+        // answers that arrived since, without asking anyone again.
+        if *method == Method::POST && path == "/v1/search/global" {
+            if !settings_open {
+                return Err(HttpError::new(
+                    403,
+                    "Set PEARTUBE_API_TOKEN to search all relays over the internet",
+                ));
+            }
+            if !same_origin(req.headers) {
+                return Err(HttpError::new(
+                    403,
+                    "Search all relays from the relay’s own page",
+                ));
+            }
+            let node = node
+                .clone()
+                .ok_or_else(|| HttpError::new(503, "Node still starting"))?;
+            let body = self.read_body(req.body).await?;
+            let query_text = body
+                .get("query")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_owned();
+            let id = body.get("id").filter(|id| !id.is_null()).cloned();
+            let limit = body.get("limit").and_then(Value::as_u64).unwrap_or(0) as usize;
+            let key = format!(
+                "{query_text}\n{}",
+                id.as_ref().and_then(Value::as_str).unwrap_or_default()
+            );
+            {
+                let addr = req.remote.ip().to_string();
+                let mut searches = self.global_searches.lock().unwrap();
+                let now = std::time::Instant::now();
+                let last = searches.get(&addr).cloned();
+                if let Some((last_key, at)) = &last
+                    && last_key != &key
+                    && now.duration_since(*at) < std::time::Duration::from_secs(3)
+                {
+                    return Err(HttpError::new(429, "Wait a moment before the next search"));
+                }
+                if searches.len() >= 256 {
+                    searches.clear();
+                }
+                let at = match last {
+                    Some((last_key, at)) if last_key == key => at,
+                    _ => now,
+                };
+                searches.insert(addr, (key, at));
+            }
+            let results = node
+                .search_global(&query_text, id.as_ref(), limit)
+                .await
+                .map_err(|message| HttpError::new(400, message))?;
+            return Ok(Some(json!({ "results": results })));
         }
         if *method == Method::GET && path == "/v1/search" {
             let Some(id) = query(url, "id").filter(|id| !id.is_empty()) else {
@@ -2019,50 +2080,28 @@ async fn read_stream(
     }
 }
 
-/// `sniffDownloadFormat`: the container's extension and MIME from its first bytes.
+/// `sniffDownloadFormat`: the name and type a download is saved with, from the container its
+/// first bytes name (`media_format`).
 fn sniff_download_format(head: Option<&[u8]>) -> (String, String) {
-    let Some(head) = head else {
-        return (".mkv".to_owned(), "application/octet-stream".to_owned());
+    let (ext, mime) = match head.and_then(crate::protocol::media_format) {
+        Some("mkv") => (".mkv", "video/x-matroska"),
+        Some("webm") => (".webm", "video/webm"),
+        Some("mp4") => (".mp4", "video/mp4"),
+        Some("mov") => (".mov", "video/quicktime"),
+        Some("avi") => (".avi", "video/x-msvideo"),
+        Some("wav") => (".wav", "audio/wav"),
+        Some("ogg") => (".ogv", "video/ogg"),
+        Some("flac") => (".flac", "audio/flac"),
+        Some("mp3") => (".mp3", "audio/mpeg"),
+        Some("aac") => (".aac", "audio/aac"),
+        Some("flv") => (".flv", "video/x-flv"),
+        Some("wmv") => (".wmv", "video/x-ms-wmv"),
+        Some("mpg") => (".mpg", "video/mpeg"),
+        Some("ts") => (".ts", "video/mp2t"),
+        Some("m2ts") => (".m2ts", "video/mp2t"),
+        _ => (".mkv", "application/octet-stream"),
     };
-    if head.len() < 4 {
-        return (".mkv".to_owned(), "application/octet-stream".to_owned());
-    }
-    let at = |offset: usize| -> Option<&[u8]> { head.get(offset..offset + 4) };
-    if head[..4] == [0x1a, 0x45, 0xdf, 0xa3] {
-        let window: Vec<u8> = head[..head.len().min(128)]
-            .iter()
-            .map(u8::to_ascii_lowercase)
-            .collect();
-        if window.windows(4).any(|window| window == b"webm") {
-            return (".webm".to_owned(), "video/webm".to_owned());
-        }
-        return (".mkv".to_owned(), "video/x-matroska".to_owned());
-    }
-    if let Some(kind) = at(4)
-        && [&b"ftyp"[..], b"moov", b"mdat", b"free", b"wide", b"skip"].contains(&kind)
-    {
-        return if at(8) == Some(&b"qt  "[..]) {
-            (".mov".to_owned(), "video/quicktime".to_owned())
-        } else {
-            (".mp4".to_owned(), "video/mp4".to_owned())
-        };
-    }
-    if at(0) == Some(&b"RIFF"[..]) && at(8) == Some(&b"AVI "[..]) {
-        return (".avi".to_owned(), "video/x-msvideo".to_owned());
-    }
-    if at(0) == Some(&b"OggS"[..]) {
-        return (".ogv".to_owned(), "video/ogg".to_owned());
-    }
-    if at(0) == Some(&b"fLaC"[..]) {
-        return (".flac".to_owned(), "audio/flac".to_owned());
-    }
-    if head[0] == 0x49 && head[1] == 0x44 && head[2] == 0x33 {
-        return (".mp3".to_owned(), "audio/mpeg".to_owned());
-    }
-    if head[0] == 0x47 && (head.len() < 189 || head[188] == 0x47) {
-        return (".ts".to_owned(), "video/mp2t".to_owned());
-    }
-    (".mkv".to_owned(), "application/octet-stream".to_owned())
+    (ext.to_owned(), mime.to_owned())
 }
 
 /// `contentDispositionFor`: a safe ASCII name plus the full one, so saves keep their title.

@@ -68,6 +68,7 @@ where
         "normalizeSettings" => value(app.normalize_settings(decode(params)?).await),
         "status" => value(app.status().await),
         "search" => value(app.search(decode(params)?).await),
+        "searchGlobal" => value(app.search_global(decode(params)?).await),
         "focusSource" => value(app.focus_source(decode(params)?).await),
         "setPlayerActive" => value(app.set_player_active(decode(params)?).await),
         "warm" => value(app.warm(decode(params)?).await),

@@ -83,6 +83,18 @@ pub trait Node: Send + Sync + 'static {
         id: Option<&str>,
         options: SearchOptions,
     ) -> impl Future<Output = Result<Vec<Entry>, Self::Error>> + Send;
+    /// `searchGlobal({ query, id, limit })` (`search`): rows from relays this node does not
+    /// follow. A node without global search refuses.
+    fn search_global(
+        &self,
+        _query: &str,
+        _id: Option<&Value>,
+        _limit: usize,
+    ) -> impl Future<Output = Result<Vec<Value>, String>> + Send {
+        async { Err("Global search is not available".to_owned()) }
+    }
+    /// `serveSearch(opts)`: answer global searches with the files `is_media` accepts, or stop.
+    fn serve_search(&self, _is_media: Option<crate::search::IsMedia>) {}
     fn put(
         &self,
         meta: PutMeta,
