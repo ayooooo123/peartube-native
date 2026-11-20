@@ -83,7 +83,11 @@ impl std::error::Error for IdentifyError {}
 
 impl From<art::HttpError> for IdentifyError {
     fn from(error: art::HttpError) -> Self {
-        Self::new(error.message())
+        Self {
+            status: error.status(),
+            code: error.code(),
+            message: error.message().to_owned(),
+        }
     }
 }
 
@@ -647,6 +651,7 @@ pub struct ProbeOptions {
     pub config_dir: String,
     pub ubit: String,
     pub ubit_timeout: Duration,
+    pub allow_private: bool,
 }
 
 impl Default for ProbeOptions {
@@ -655,6 +660,7 @@ impl Default for ProbeOptions {
             config_dir: String::new(),
             ubit: String::new(),
             ubit_timeout: INFO_TIMEOUT,
+            allow_private: crate::ssrf::private_urls_allowed(),
         }
     }
 }
@@ -845,6 +851,7 @@ pub async fn probe(url: &str, opts: &ProbeOptions) -> Result<Link, IdentifyError
         url,
         SendOptions {
             method: hyper::Method::HEAD,
+            allow_private: opts.allow_private,
             ..Default::default()
         },
     )
@@ -1087,6 +1094,23 @@ pub async fn cinemeta_search(
     year: Option<u32>,
     season: Option<u32>,
 ) -> Result<Vec<Candidate>, IdentifyError> {
+    cinemeta_search_with(
+        base,
+        title,
+        year,
+        season,
+        crate::ssrf::private_urls_allowed(),
+    )
+    .await
+}
+
+pub async fn cinemeta_search_with(
+    base: &str,
+    title: &str,
+    year: Option<u32>,
+    season: Option<u32>,
+    allow_private: bool,
+) -> Result<Vec<Candidate>, IdentifyError> {
     if base.is_empty() || title.is_empty() {
         return Ok(Vec::new());
     }
@@ -1102,6 +1126,7 @@ pub async fn cinemeta_search(
         ),
         SendOptions {
             timeout: Duration::from_millis(8000),
+            allow_private,
             ..Default::default()
         },
     )
@@ -1510,11 +1535,23 @@ pub struct Identification {
 }
 
 /// How `identify` reaches Cinemeta and `ubit`.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct IdentifyOptions {
     pub cinemeta_url: String,
     pub config_dir: String,
     pub ubit: String,
+    pub allow_private: bool,
+}
+
+impl Default for IdentifyOptions {
+    fn default() -> Self {
+        Self {
+            cinemeta_url: String::new(),
+            config_dir: String::new(),
+            ubit: String::new(),
+            allow_private: crate::ssrf::private_urls_allowed(),
+        }
+    }
 }
 
 /// `identify`: what the link is, the release name inside it, and the suggestion to announce it under.
@@ -1525,6 +1562,7 @@ pub async fn identify(url: &str, opts: &IdentifyOptions) -> Result<Identificatio
             config_dir: opts.config_dir.clone(),
             ubit: opts.ubit.clone(),
             ubit_timeout: INFO_TIMEOUT,
+            allow_private: opts.allow_private,
         },
     )
     .await?;
@@ -1535,11 +1573,12 @@ pub async fn identify(url: &str, opts: &IdentifyOptions) -> Result<Identificatio
     // Page titles are free text; only ones that read like a release (a year or an episode) get suggestions.
     let lookup = link.kind() == "file" || parsed.year.is_some() || parsed.season.is_some();
     let candidates = if lookup {
-        cinemeta_search(
+        cinemeta_search_with(
             &opts.cinemeta_url,
             &parsed.title,
             parsed.year,
             parsed.season,
+            opts.allow_private,
         )
         .await
         .unwrap_or_default()

@@ -63,7 +63,6 @@ enum Kind {
     Number,
     Host,
     Key,
-    Path,
     Secret,
     Url,
     Keys,
@@ -79,7 +78,6 @@ impl Kind {
             Self::Number => "number",
             Self::Host => "host",
             Self::Key => "key",
-            Self::Path => "path",
             Self::Secret => "secret",
             Self::Url => "url",
             Self::Keys => "keys",
@@ -188,7 +186,7 @@ const SPEC: &[Spec] = &[
         Kind::Bool,
         Default::Bool(false),
     )
-    .env_parse(env_truthy),
+    .env_parse(env_flag),
     spec(
         "privateGuard",
         "PEARTUBE_PRIVATE_GUARD",
@@ -226,7 +224,7 @@ const SPEC: &[Spec] = &[
         Default::Bool(false),
     )
     .live()
-    .env_parse(env_truthy),
+    .env_parse(env_flag),
     // Answer other nodes' global searches (`search`) with the media this relay holds.
     spec(
         "globalSearch",
@@ -243,13 +241,6 @@ const SPEC: &[Spec] = &[
         Default::Num(4.0),
     )
     .range(1.0, 32.0)
-    .live(),
-    spec(
-        "watchDir",
-        "PEARTUBE_WATCH_DIR",
-        Kind::Path,
-        Default::Str(""),
-    )
     .live(),
     spec("feeds", "PEARTUBE_MIRROR_FEEDS", Kind::Urls, Default::List).live(),
     spec(
@@ -312,7 +303,7 @@ const SPEC: &[Spec] = &[
         Kind::Bool,
         Default::Bool(false),
     )
-    .env_parse(env_truthy),
+    .env_parse(env_flag),
     spec(
         "hiverelayReplicas",
         "PEARTUBE_HIVERELAY_REPLICAS",
@@ -426,7 +417,11 @@ impl Settings {
             .unwrap_or_default();
         // Files from before channels: `tracker` was this key, and the blob server had its own LAN port.
         let tracker = saved.remove("tracker");
-        let stream = [saved.remove("streamHost"), saved.remove("streamPort")];
+        let stream = [
+            saved.remove("streamHost"),
+            saved.remove("streamPort"),
+            saved.remove("watchDir"),
+        ];
         let migrate = tracker.is_some() || stream.iter().any(Option::is_some);
         if let Some(tracker) = tracker.filter(js_truthy)
             && !saved.contains_key("channel")
@@ -831,12 +826,6 @@ fn validate(key: &str, spec: &Spec, value: &Value) -> Result<Value, SettingsErro
                 Ok(Value::String(text.to_lowercase()))
             }
             _ => Err(bad(key, "must be a 64-character hex key")),
-        },
-        Kind::Path => match value {
-            Value::String(text) if text.is_empty() || text.starts_with('/') => {
-                Ok(Value::String(js_trim(text).to_owned()))
-            }
-            _ => Err(bad(key, "must be an absolute folder path")),
         },
         Kind::Secret => match value {
             Value::String(text) if text.encode_utf16().count() <= 512 => Ok(value.clone()),

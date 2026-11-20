@@ -26,6 +26,7 @@ use hyper_util::client::legacy::Client;
 use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::rt::{TokioExecutor, TokioIo};
 use serde_json::{Map, Number, Value, json};
+use sha2::{Digest, Sha256};
 use tokio::net::TcpListener;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinSet;
@@ -33,9 +34,11 @@ use url::Url;
 
 use crate::art::{self, CINEMETA_URL};
 use crate::node::Node;
-use crate::node::api::{Entry, SearchOptions, Source, SourceSpec, Status};
-use crate::protocol::{clean_text, encode_uri_component, is_media_file, parse_uri};
-use crate::resolution::{resolution_label, video_size};
+use crate::node::api::{Announce, Entry, SearchOptions, Source, SourceSpec, Status};
+use crate::protocol::{
+    clean_text, encode_uri_component, ipv6_groups, is_media_file, parse_uri, safe_equal,
+};
+use crate::resolution::{MediaInfo, VideoSize, media_info, resolution_label};
 use crate::settings::Settings;
 
 /// `MAX_BODY`: the largest JSON request body the app reads.
@@ -132,13 +135,17 @@ pub type Identify =
 
 /// The app's `metahub(kind, size)` lookups, which read Cinemeta through [`crate::art`].
 pub fn cinemeta_lookup(base: &str, art: Art) -> ArtLookup {
+    cinemeta_lookup_with(base, art, crate::ssrf::private_urls_allowed())
+}
+
+pub fn cinemeta_lookup_with(base: &str, art: Art, allow_private: bool) -> ArtLookup {
     let base = base.to_owned();
     Arc::new(move |imdb: String| {
         let base = base.clone();
         Box::pin(async move {
             match art {
-                Art::Poster => art::poster_url(&base, &imdb).await,
-                Art::Backdrop => art::backdrop_url(&base, &imdb).await,
+                Art::Poster => art::poster_url_with(&base, &imdb, allow_private).await,
+                Art::Backdrop => art::backdrop_url_with(&base, &imdb, allow_private).await,
             }
         })
     })
@@ -263,11 +270,11 @@ impl ApiServer {
     }
 }
 
-/// One cached stream resolution: the label, or the retry deadline for a file that gave none.
-struct Resolution {
+/// One cached stream media header: its info, or the retry deadline for a file that gave none.
+struct CachedMedia {
     at: Instant,
-    label: Option<Option<String>>,
-    shared: futures_util::future::Shared<BoxFuture<'static, Option<String>>>,
+    info: Option<Option<MediaInfo>>,
+    shared: futures_util::future::Shared<BoxFuture<'static, Option<MediaInfo>>>,
 }
 
 /// The API server and its request state.
@@ -275,13 +282,13 @@ pub struct Api<N: Node> {
     node: Mutex<Option<Arc<N>>>,
     options: Options,
     settings: Option<Arc<tokio::sync::Mutex<Settings>>>,
-    resolutions: Mutex<HashMap<String, Resolution>>,
+    media_infos: Mutex<Vec<(String, CachedMedia)>>,
     downloads: Mutex<HashMap<String, (String, String)>>,
     /// `state.node.blobServer`: where `/v1/blob` proxies; the relay sets it on each open.
     blob: Mutex<Option<BlobAddr>>,
     /// `state.cast`: the cast stack, set when the node opens and cleared when it closes.
     cast: Mutex<Option<Arc<dyn CastBridge>>>,
-    web_cache: Mutex<HashMap<String, Bytes>>,
+    web_cache: Mutex<HashMap<String, (Bytes, String)>>,
     sse: Arc<Mutex<Vec<mpsc::Sender<Bytes>>>>,
     /// Client address -> (query, when) of its newest global search.
     global_searches: Mutex<HashMap<String, (String, std::time::Instant)>>,
@@ -299,7 +306,7 @@ impl<N: Node> Api<N> {
             settings,
             blob,
             cast,
-            resolutions: Mutex::new(HashMap::new()),
+            media_infos: Mutex::new(Vec::new()),
             downloads: Mutex::new(HashMap::new()),
             web_cache: Mutex::new(HashMap::new()),
             sse: Arc::new(Mutex::new(Vec::new())),
@@ -444,7 +451,7 @@ impl<N: Node> Api<N> {
             return response;
         }
         if method == Method::GET && path == "/" {
-            let Some(page) = self.web_asset("index.html") else {
+            let Some((page, _)) = self.web_asset("index.html") else {
                 return plain(StatusCode::NOT_FOUND, "not found");
             };
             let mut response = full(page);
@@ -583,6 +590,7 @@ impl<N: Node> Api<N> {
             remote,
             body: &mut body,
         };
+        let restricted = is_write(&method) || is_owner_path(&path);
         let payload = match self.route(&mut request).await {
             Ok(Some(Value::Null)) | Ok(None) => {
                 (StatusCode::NOT_FOUND, json!({"error": "not found"}))
@@ -590,7 +598,7 @@ impl<N: Node> Api<N> {
             Ok(Some(payload)) => (StatusCode::OK, payload),
             Err(error) => (status(error.status()), json!({"error": error.message})),
         };
-        json_response(payload.0, &payload.1)
+        json_response(payload.0, &payload.1, restricted)
     }
 
     /// One `/v1` request: `None` is the app's `route` miss (a 404 `{"error":"not found"}`).
@@ -599,24 +607,12 @@ impl<N: Node> Api<N> {
         let url = req.url;
         let path = url.path();
         let node = self.node();
-        // Writes, and the settings themselves, need the token; reads of public state do not.
-        if let Some(token) = self.token()
-            && (matches!(*method, Method::POST | Method::PUT | Method::DELETE)
-                || path == "/v1/settings"
-                || path.starts_with("/v1/identity"))
-        {
-            let expected = format!("Bearer {token}");
-            if req
-                .headers
-                .get(header::AUTHORIZATION)
-                .and_then(|v| v.to_str().ok())
-                != Some(&expected)
-            {
-                return Err(HttpError::new(401, "Unauthorized"));
-            }
+        if is_write(method) || is_owner_path(path) {
+            self.require_owner(req)?;
         }
-        // An open relay already trusts its local network, so its settings do too.
-        let settings_open = self.token().is_some() || is_private(req.remote);
+        let host_header = req.headers.get(header::HOST).and_then(|v| v.to_str().ok());
+        let settings_open =
+            self.token().is_some() || (is_private(req.remote) && is_local_host(host_header));
         if *method == Method::GET && path == "/v1/status" {
             let mut status = match &node {
                 Some(node) => status_object(node.status().await),
@@ -637,20 +633,7 @@ impl<N: Node> Api<N> {
         if (path == "/v1/settings" || path == "/v1/restart")
             && let Some(settings) = self.settings.as_ref()
         {
-            if !settings_open {
-                return Err(HttpError::new(
-                    403,
-                    "Set PEARTUBE_API_TOKEN to change settings over the internet",
-                ));
-            }
-            // Other websites can reach a LAN relay through the visitor's browser; settings only
-            // from its own page.
-            if !same_origin(req.headers) {
-                return Err(HttpError::new(
-                    403,
-                    "Settings can only be changed from the relay’s own page",
-                ));
-            }
+            // Covered by require_owner above.
             if *method == Method::GET && path == "/v1/settings" {
                 return Ok(Some(settings.lock().await.view()));
             }
@@ -693,18 +676,7 @@ impl<N: Node> Api<N> {
             }
         }
         if path == "/v1/identity" || path.starts_with("/v1/identity/") {
-            if !settings_open {
-                return Err(HttpError::new(
-                    403,
-                    "Set PEARTUBE_API_TOKEN to manage channel identity over the internet",
-                ));
-            }
-            if !same_origin(req.headers) {
-                return Err(HttpError::new(
-                    403,
-                    "Channel identity can only be managed from the relay’s own page",
-                ));
-            }
+            // Covered by require_owner above.
             let node = node
                 .clone()
                 .ok_or_else(|| HttpError::new(503, "Node still starting"))?;
@@ -785,18 +757,7 @@ impl<N: Node> Api<N> {
         // own page. A new query at most every 3 s per address; the same query again within 10 s
         // returns the answers that arrived since, and after that asks again.
         if *method == Method::POST && path == "/v1/search/global" {
-            if !settings_open {
-                return Err(HttpError::new(
-                    403,
-                    "Set PEARTUBE_API_TOKEN to search all relays over the internet",
-                ));
-            }
-            if !same_origin(req.headers) {
-                return Err(HttpError::new(
-                    403,
-                    "Search all relays from the relay’s own page",
-                ));
-            }
+            // Covered by require_owner above.
             let node = node
                 .clone()
                 .ok_or_else(|| HttpError::new(503, "Node still starting"))?;
@@ -874,6 +835,57 @@ impl<N: Node> Api<N> {
                 None => Value::Array(Vec::new()),
             };
             return Ok(Some(json!({ "results": results })));
+        }
+        if *method == Method::GET && path == "/v1/entries/info" {
+            let node = node
+                .clone()
+                .ok_or_else(|| HttpError::new(503, "Node still starting"))?;
+            let key = query(url, "key").unwrap_or_default();
+            let raw = if key.is_empty() {
+                None
+            } else {
+                node.find_entry(&key).await.map_err(node_error)?
+            };
+            let Some(entry) = raw.and_then(|v| serde_json::from_value::<Announce>(v).ok()) else {
+                return Err(HttpError::new(404, "No such entry"));
+            };
+            if entry.blobs.is_empty() {
+                return Err(HttpError::new(404, "No such entry"));
+            }
+            let trusted = self.is_owner(req);
+            let health = node.entry_health(&entry);
+            let stream_url = node.stream_url(&entry).await;
+            let search_query = Url::parse(&stream_url)
+                .ok()
+                .and_then(|u| u.query().map(str::to_owned));
+            let cached_info = search_query.as_ref().is_some_and(|sq| {
+                self.media_infos
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .any(|(k, rec)| k == sq && matches!(rec.info, Some(Some(_))))
+            });
+            let readable = health.open
+                || cached_info
+                || node.held_bytes(&entry).await >= entry.size
+                || (trusted && query(url, "read").as_deref() == Some("1"));
+            let mut out = Map::new();
+            if readable
+                && let Ok(media) =
+                    tokio::time::timeout(Duration::from_secs(3), self.media_of(&stream_url)).await
+            {
+                out.insert(
+                    "media".to_owned(),
+                    media
+                        .and_then(|m| serde_json::to_value(m).ok())
+                        .unwrap_or(Value::Null),
+                );
+            }
+            out.insert("mediaDeferred".to_owned(), Value::Bool(!readable));
+            if trusted {
+                out.insert("health".to_owned(), value(node.entry_health(&entry))?);
+            }
+            return Ok(Some(Value::Object(out)));
         }
         if *method == Method::POST && path == "/v1/entries/remove" {
             let node = node
@@ -988,19 +1000,19 @@ impl<N: Node> Api<N> {
                 .map(Some)
                 .map_err(node_error);
         }
-        if (*method == Method::POST && path == "/v1/open")
-            || (*method == Method::GET && path == "/v1/resolve")
-        {
-            let uri = if *method == Method::GET {
-                query(url, "uri").unwrap_or_default()
-            } else {
-                self.read_body(req.body)
-                    .await?
-                    .get("uri")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_owned()
-            };
+        if *method == Method::GET && path == "/v1/resolve" {
+            let uri = query(url, "uri").unwrap_or_default();
+            let parsed = parse_uri(&uri).map_err(|e| HttpError::new(400, e.to_string()))?;
+            return Ok(Some(value(parsed)?));
+        }
+        if *method == Method::POST && path == "/v1/open" {
+            let uri = self
+                .read_body(req.body)
+                .await?
+                .get("uri")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_owned();
             if let Some(cast) = self.cast() {
                 // The app evaluates `parseUri(uri).action` only when cast is up, so a broken link
                 // fails here rather than reaching the node.
@@ -1286,61 +1298,132 @@ impl<N: Node> Api<N> {
         }
     }
 
-    /// `resolutionOf`: the stream's resolution label, read from the blob server and cached.
-    async fn resolution_of(&self, entry: &Entry) -> Option<String> {
+    fn has_token(&self, headers: &HeaderMap) -> bool {
+        let Some(token) = self.token() else {
+            return false;
+        };
+        let expected = format!("Bearer {token}");
+        let actual = headers
+            .get(header::AUTHORIZATION)
+            .and_then(|v| v.to_str().ok());
+        safe_equal(actual, Some(&expected))
+    }
+
+    fn is_owner(&self, req: &RequestContext<'_>) -> bool {
+        if !same_origin(req.headers) {
+            return false;
+        }
+        if self.token().is_some() {
+            self.has_token(req.headers)
+        } else {
+            let host = req.headers.get(header::HOST).and_then(|v| v.to_str().ok());
+            is_private(req.remote) && is_local_host(host)
+        }
+    }
+
+    fn require_owner(&self, req: &RequestContext<'_>) -> Result<(), HttpError> {
+        if self.token().is_some() {
+            if !self.has_token(req.headers) {
+                return Err(HttpError::new(401, "Unauthorized"));
+            }
+        } else if !is_private(req.remote) {
+            return Err(HttpError::new(
+                403,
+                "Set PEARTUBE_API_TOKEN to change this relay over the internet",
+            ));
+        } else {
+            let host = req.headers.get(header::HOST).and_then(|v| v.to_str().ok());
+            if !is_local_host(host) {
+                return Err(HttpError::new(
+                    403,
+                    "Open this relay by its IP address or .local name, or set PEARTUBE_API_TOKEN",
+                ));
+            }
+        }
+        if !same_origin(req.headers) {
+            return Err(HttpError::new(
+                403,
+                "This relay can only be changed from its own page",
+            ));
+        }
+        Ok(())
+    }
+
+    async fn media_of(&self, stream_url: &str) -> Option<MediaInfo> {
         let blob = self.blob()?;
-        // The app answers `null` without a bound port, before asking the blob server anything.
         if blob.port == 0 {
             return None;
         }
-        let search = Url::parse(&entry.stream_url).ok()?.query()?.to_owned();
+        let search = Url::parse(stream_url).ok()?.query()?.to_owned();
         let shared = {
-            let mut resolutions = self.resolutions.lock().unwrap();
-            match resolutions.get(&search) {
-                Some(known)
-                    if known.label != Some(None) || known.at.elapsed() < RESOLUTION_RETRY =>
-                {
-                    known.shared.clone()
-                }
-                _ => {
-                    let (host, port) = (blob.host().to_owned(), blob.port);
-                    let probe = search.clone();
-                    let shared: futures_util::future::Shared<BoxFuture<'static, Option<String>>> =
-                        Box::pin(async move {
-                            let read = |start: u64, len: usize| {
-                                let host = host.clone();
-                                let probe = probe.clone();
-                                async move {
-                                    read_stream(&host, port, &probe, start, len as u64)
-                                        .await
-                                        .map_err(|error| {
-                                            io::Error::other(error.message().to_owned())
-                                        })
+            let mut infos = self.media_infos.lock().unwrap();
+            if let Some((_, known)) = infos.iter().find(|(k, _)| *k == search)
+                && (matches!(known.info, Some(Some(_))) || known.at.elapsed() < RESOLUTION_RETRY)
+            {
+                known.shared.clone()
+            } else {
+                let (host, port) = (blob.host().to_owned(), blob.port);
+                let probe = search.clone();
+                let shared: futures_util::future::Shared<BoxFuture<'static, Option<MediaInfo>>> =
+                    Box::pin(async move {
+                        let read = |start: u64, len: usize| {
+                            let host = host.clone();
+                            let probe = probe.clone();
+                            async move {
+                                if len == 0 {
+                                    return Ok(Vec::new());
                                 }
-                            };
-                            let size = video_size(read).await.ok().flatten();
-                            size.map(resolution_label)
-                        })
-                        .boxed()
-                        .shared();
-                    resolutions.insert(
-                        search.clone(),
-                        Resolution {
-                            at: Instant::now(),
-                            label: None,
-                            shared: shared.clone(),
-                        },
-                    );
-                    shared
+                                read_stream(&host, port, &probe, start, start + (len as u64) - 1)
+                                    .await
+                                    .map_err(|error| io::Error::other(error.message().to_owned()))
+                            }
+                        };
+                        media_info(read).await.ok().flatten()
+                    })
+                    .boxed()
+                    .shared();
+                infos.retain(|(k, _)| k != &search);
+                if infos.len() >= 512 {
+                    infos.remove(0);
                 }
+                infos.push((
+                    search.clone(),
+                    CachedMedia {
+                        at: Instant::now(),
+                        info: None,
+                        shared: shared.clone(),
+                    },
+                ));
+                shared
             }
         };
-        let label = shared.await;
-        if let Some(known) = self.resolutions.lock().unwrap().get_mut(&search) {
-            known.label = Some(label.clone());
+        let info = shared.await;
+        if let Some((_, known)) = self
+            .media_infos
+            .lock()
+            .unwrap()
+            .iter_mut()
+            .find(|(k, _)| *k == search)
+        {
+            known.info = Some(info.clone());
             known.at = Instant::now();
         }
-        label
+        info
+    }
+
+    /// `resolutionOf`: the stream's resolution label, read from the blob server and cached.
+    async fn resolution_of(&self, entry: &Entry) -> Option<String> {
+        let info = self.media_of(&entry.stream_url).await?;
+        let picture = info
+            .video
+            .into_iter()
+            .find_map(|v| match (v.width, v.height) {
+                (Some(width), Some(height)) if width > 0 && height > 0 => {
+                    Some(VideoSize { width, height })
+                }
+                _ => None,
+            })?;
+        Some(resolution_label(picture))
     }
 
     /// `/v1/blob`: the same-origin path to the node's blob server, so browsers and clients that
@@ -1452,20 +1535,9 @@ impl<N: Node> Api<N> {
             .then(|| self.web_asset(&format!("{name}.gz")))
             .flatten();
         let asset = gz.clone().or_else(|| self.web_asset(name));
-        let Some(asset) = asset else {
+        let Some((asset, etag)) = asset else {
             return plain(StatusCode::NOT_FOUND, "not found");
         };
-        let etag = format!(
-            "\"{}-{}-{}{}\"",
-            asset.len(),
-            asset
-                .first()
-                .map_or("undefined".to_owned(), |b| b.to_string()),
-            asset
-                .last()
-                .map_or("undefined".to_owned(), |b| b.to_string()),
-            if gz.is_some() { "-gz" } else { "" },
-        );
         let mut response = Response::new(if *method == Method::HEAD {
             empty_body()
         } else {
@@ -1506,17 +1578,24 @@ impl<N: Node> Api<N> {
         response
     }
 
-    fn web_asset(&self, name: &str) -> Option<Bytes> {
+    fn web_asset(&self, name: &str) -> Option<(Bytes, String)> {
         if let Some(cached) = self.web_cache.lock().unwrap().get(name) {
             return Some(cached.clone());
         }
         let dir = self.options.web_dir.as_ref()?;
         let bytes = Bytes::from(std::fs::read(dir.join(name)).ok()?);
+        let digest = Sha256::digest(&bytes);
+        let mut hex = String::with_capacity(64);
+        for b in digest {
+            hex.push_str(&format!("{b:02x}"));
+        }
+        let etag = format!("\"{}\"", &hex[..32]);
+        let pair = (bytes, etag);
         self.web_cache
             .lock()
             .unwrap()
-            .insert(name.to_owned(), bytes.clone());
-        Some(bytes)
+            .insert(name.to_owned(), pair.clone());
+        Some(pair)
     }
 
     /// `/v1/events`: `srv.notify(event)` frames, one subscriber per response.
@@ -1558,8 +1637,16 @@ fn broadcast(sse: &Mutex<Vec<mpsc::Sender<Bytes>>>, event: &str) {
     clients.retain(|sender| sender.try_send(frame.clone()).is_ok());
 }
 
-/// The app's `CORS`: every route answers preflights and exposes the Range headers a player reads.
+fn corp(headers: &mut HeaderMap) {
+    headers.insert(
+        header::HeaderName::from_static("cross-origin-resource-policy"),
+        HeaderValue::from_static("cross-origin"),
+    );
+}
+
+/// The app's `CORS`: GET/HEAD/OPTIONS only, exposing Range headers for players.
 fn cors(headers: &mut HeaderMap) {
+    corp(headers);
     for (name, value) in [
         (
             header::HeaderName::from_static("access-control-allow-origin"),
@@ -1567,7 +1654,7 @@ fn cors(headers: &mut HeaderMap) {
         ),
         (
             header::HeaderName::from_static("access-control-allow-methods"),
-            "GET, HEAD, POST, PUT, DELETE, OPTIONS",
+            "GET, HEAD, OPTIONS",
         ),
         (
             header::HeaderName::from_static("access-control-allow-headers"),
@@ -1577,13 +1664,39 @@ fn cors(headers: &mut HeaderMap) {
             header::HeaderName::from_static("access-control-expose-headers"),
             "content-length, content-range, accept-ranges, content-disposition",
         ),
-        (
-            header::HeaderName::from_static("cross-origin-resource-policy"),
-            "cross-origin",
-        ),
     ] {
         headers.insert(name, HeaderValue::from_static(value));
     }
+}
+
+fn is_owner_path(path: &str) -> bool {
+    path == "/v1/settings" || path == "/v1/restart" || path.starts_with("/v1/identity")
+}
+
+fn is_write(method: &Method) -> bool {
+    matches!(*method, Method::POST | Method::PUT | Method::DELETE)
+}
+
+fn is_local_host(raw: Option<&str>) -> bool {
+    let Some(raw) = raw.filter(|s| !s.is_empty()) else {
+        return false;
+    };
+    let Ok(parsed) = Url::parse(&format!("http://{raw}")) else {
+        return false;
+    };
+    let Some(host) = parsed.host_str() else {
+        return false;
+    };
+    let clean = host
+        .strip_prefix('[')
+        .unwrap_or(host)
+        .strip_suffix(']')
+        .unwrap_or(host)
+        .to_lowercase();
+    clean == "localhost"
+        || clean.ends_with(".local")
+        || crate::ssrf::ipv4_parts(&clean).is_some()
+        || ipv6_groups(&clean).is_some()
 }
 
 /// The app's `ISOLATION`, for the pages and assets it serves itself.
@@ -1606,11 +1719,15 @@ fn full(bytes: Bytes) -> Response<Body> {
     Response::new(Full::new(bytes).map_err(|e| match e {}).boxed_unsync())
 }
 
-fn json_response(status: StatusCode, value: &Value) -> Response<Body> {
+fn json_response(status: StatusCode, value: &Value, restricted: bool) -> Response<Body> {
     let text = serde_json::to_string(value).unwrap_or_else(|_| "{}".to_owned());
     let mut response = full(Bytes::from(text));
     *response.status_mut() = status;
-    cors(response.headers_mut());
+    if restricted {
+        corp(response.headers_mut());
+    } else {
+        cors(response.headers_mut());
+    }
     response.headers_mut().insert(
         header::CONTENT_TYPE,
         HeaderValue::from_static("application/json"),

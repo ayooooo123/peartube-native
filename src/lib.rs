@@ -30,4 +30,5 @@ pub mod replicate;
 pub mod resolution;
 pub mod search;
 pub mod settings;
+pub mod ssrf;
 pub mod traffic;

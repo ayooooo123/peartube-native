@@ -17,7 +17,7 @@ use super::channel::Channel;
 use super::sources::{Item, Sources};
 use crate::protocol::{
     BlobPointer, ParsedUri, WatchEntry, clean_text, decode_op, describe_entry, format_watch_uri,
-    parse_uri,
+    is_hex64, parse_uri,
 };
 
 fn lock<T>(cell: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -39,6 +39,10 @@ fn parse_hex32(text: &str) -> Option<[u8; 32]> {
 pub trait CatalogBlobs: Send + Sync {
     fn owned(&self, blob: &[u8; 32]) -> bool;
     fn slot_contains(&self, blob: &[u8; 32]) -> bool;
+    fn is_kept(&self, _blob: &[u8; 32]) -> bool {
+        false
+    }
+    fn set_alternates(&self, _group: Vec<super::blobs::CopyMember>) {}
     fn slot_keys(&self) -> Vec<[u8; 32]>;
     fn open_core(&self, blob: &[u8; 32]) -> bool;
     fn cached_meta(&self, blob: &[u8; 32]) -> Option<(u64, u64, u64)>;
@@ -296,6 +300,7 @@ impl Catalog {
         // Insertion order, as the JS `Map` keeps it: listings must come back in catalog order.
         let mut files: Vec<(Entry, Announce)> = Vec::new();
         let mut positions: HashMap<String, usize> = HashMap::new();
+        let mut copies: Vec<(String, Vec<super::blobs::CopyMember>)> = Vec::new();
         for item in raw {
             let Some(announce) = announce_from(&item.entry) else {
                 continue;
@@ -317,7 +322,9 @@ impl Catalog {
             if !owned && cached > 0 && cached >= announce.size {
                 self.blobs.offer_copy(&blob);
             }
-            let local = owned || (self.blobs.slot_contains(&blob) && cached >= announce.size);
+            let local = owned
+                || ((self.blobs.slot_contains(&blob) || self.blobs.is_kept(&blob))
+                    && cached >= announce.size);
             let info = describe_entry(
                 &item.entry_id(),
                 &clean_text(Some(&announce.title), &announce.id),
@@ -344,6 +351,23 @@ impl Catalog {
                 magnet_url: format_watch_uri(&watch_entry(&announce), &item.source, "channel"),
             };
             let dedupe = format!("{}/{}", entry.id, entry.sha256);
+            if !private_entry && announce.epoch.unwrap_or(0) == 0 && is_hex64(&announce.sha256) {
+                let ck = format!("{}:{}", announce.sha256, announce.size);
+                let member = super::blobs::CopyMember {
+                    blobs: announce.blobs.clone(),
+                    blob: announce.blob.clone(),
+                };
+                match copies.iter_mut().find(|(k, _)| *k == ck) {
+                    Some((_, group)) => {
+                        if let Some(slot) = group.iter_mut().find(|m| m.blobs == member.blobs) {
+                            *slot = member;
+                        } else if group.len() < 8 {
+                            group.push(member);
+                        }
+                    }
+                    None => copies.push((ck, vec![member])),
+                }
+            }
             match positions.get(&dedupe).copied() {
                 Some(index) => {
                     let existing = &mut files[index];
@@ -358,6 +382,11 @@ impl Catalog {
             }
         }
 
+        for (_, group) in copies {
+            if group.len() > 1 {
+                self.blobs.set_alternates(group);
+            }
+        }
         files
     }
 

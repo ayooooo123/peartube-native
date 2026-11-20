@@ -98,6 +98,7 @@ struct Route {
 
 struct Slot {
     sealed_card: Vec<u8>,
+    session: Arc<Session>,
     expires_at: u64,
 }
 
@@ -116,6 +117,7 @@ struct Session {
     owned_rv_slots: Mutex<HashSet<([u8; 32], [u8; 16])>>,
     drops: Mutex<HashMap<u64, Arc<dyn Fn() + Send + Sync>>>,
     circuits: AtomicUsize,
+    dht_ops: Mutex<std::collections::VecDeque<u64>>,
 }
 
 impl Session {
@@ -125,6 +127,22 @@ impl Session {
 
     fn role(&self) -> Option<Role> {
         *self.role.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    fn allow_dht_op(&self) -> bool {
+        let now = now_ms();
+        let mut ops = self.dht_ops.lock().unwrap_or_else(|e| e.into_inner());
+        while ops
+            .front()
+            .is_some_and(|&at| now.saturating_sub(at) > 10_000)
+        {
+            ops.pop_front();
+        }
+        if ops.len() >= super::MAX_DHT_OPS_PER_10S {
+            return false;
+        }
+        ops.push_back(now);
+        true
     }
 }
 
@@ -318,17 +336,22 @@ impl Inner {
     }
 
     /// `removeRvSlot(tHex, sHex)`: drop the slot, and the topic with it when the last one goes.
-    fn remove_rv_slot(self: &Arc<Self>, topic: [u8; 32], slot: [u8; 16]) {
+    fn remove_rv_slot(self: &Arc<Self>, topic: [u8; 32], slot: [u8; 16], session: &Arc<Session>) {
         let removed = {
             let mut topics = self.rv_topics.lock().unwrap_or_else(|e| e.into_inner());
             let Some(entry) = topics.get(&topic).cloned() else {
                 return;
             };
-            entry
-                .slots
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .remove(&slot);
+            {
+                let mut slots = entry.slots.lock().unwrap_or_else(|e| e.into_inner());
+                let ours = slots
+                    .get(&slot)
+                    .is_some_and(|s| Arc::ptr_eq(&s.session, session));
+                if !ours {
+                    return;
+                }
+                slots.remove(&slot);
+            }
             let empty = entry
                 .slots
                 .lock()
@@ -595,11 +618,22 @@ pub async fn create_private_guard(dht: Arc<dyn Dht>, opts: GuardOptions) -> Resu
                 }
                 inner.announce_service().await;
                 let now = now_ms();
-                inner
-                    .routes
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .retain(|_, route| route.expires_at > now);
+                {
+                    let mut routes = inner.routes.lock().unwrap_or_else(|e| e.into_inner());
+                    routes.retain(|token, route| {
+                        if route.expires_at <= now {
+                            route
+                                .session
+                                .owned_routes
+                                .lock()
+                                .unwrap_or_else(|e| e.into_inner())
+                                .remove(token);
+                            false
+                        } else {
+                            true
+                        }
+                    });
+                }
                 let topics: Vec<(Arc<RvEntry>, [u8; 32])> = {
                     let topics = inner.rv_topics.lock().unwrap_or_else(|e| e.into_inner());
                     topics
@@ -608,20 +642,25 @@ pub async fn create_private_guard(dht: Arc<dyn Dht>, opts: GuardOptions) -> Resu
                         .collect()
                 };
                 for (entry, topic) in topics {
-                    let expired: Vec<[u8; 16]> = entry
+                    let expired: Vec<([u8; 16], Arc<Session>)> = entry
                         .slots
                         .lock()
                         .unwrap_or_else(|e| e.into_inner())
                         .iter()
                         .filter(|(_, slot)| slot.expires_at <= now)
-                        .map(|(id, _)| *id)
+                        .map(|(id, slot)| (*id, Arc::clone(&slot.session)))
                         .collect();
-                    for slot in expired {
+                    for (slot, owner) in expired {
                         entry
                             .slots
                             .lock()
                             .unwrap_or_else(|e| e.into_inner())
                             .remove(&slot);
+                        owner
+                            .owned_rv_slots
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner())
+                            .remove(&(topic, slot));
                     }
                     let empty = entry
                         .slots
@@ -843,6 +882,7 @@ async fn handle_connection(inner: Arc<Inner>, conn: Arc<dyn Connection>) {
         owned_rv_slots: Mutex::new(HashSet::new()),
         drops: Mutex::new(HashMap::new()),
         circuits: AtomicUsize::new(0),
+        dht_ops: Mutex::new(std::collections::VecDeque::new()),
     });
     inner
         .sessions
@@ -922,7 +962,7 @@ async fn handle_connection(inner: Arc<Inner>, conn: Arc<dyn Connection>) {
             .drain()
             .collect();
         for (topic, slot) in slots {
-            inner_closed.remove_rv_slot(topic, slot);
+            inner_closed.remove_rv_slot(topic, slot, &session);
         }
     });
 }
@@ -972,32 +1012,46 @@ async fn handle_request(
             let mut token = [0u8; 32];
             token.copy_from_slice(&payload[..32]);
             let ttl = u32_at(&payload, 32);
-            let over_limit = {
-                let routes = inner.routes.lock().unwrap_or_else(|e| e.into_inner());
-                !routes.contains_key(&token)
-                    && (routes.len() >= MAX_ROUTES_TOTAL
-                        || session
-                            .owned_routes
-                            .lock()
-                            .unwrap_or_else(|e| e.into_inner())
-                            .len()
-                            >= MAX_ROUTES_PER_CONN)
-            };
-            if over_limit {
-                send.send(op::REGISTER_ACK, frame.id, &[0]);
-                return Ok(());
-            }
-            inner
-                .routes
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .insert(
+            let now = now_ms();
+            let evict_owner = {
+                let mut routes = inner.routes.lock().unwrap_or_else(|e| e.into_inner());
+                let cur = routes.get(&token);
+                let mine = cur.is_some_and(|r| Arc::ptr_eq(&r.session, &session));
+                if let Some(cur) = cur
+                    && !mine
+                    && cur.expires_at > now
+                {
+                    drop(routes);
+                    send.send(op::REGISTER_ACK, frame.id, &[0]);
+                    return Ok(());
+                }
+                let occupied = routes.len().saturating_sub(usize::from(cur.is_some()));
+                let own_count = session
+                    .owned_routes
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .len();
+                if !mine && (occupied >= MAX_ROUTES_TOTAL || own_count >= MAX_ROUTES_PER_CONN) {
+                    drop(routes);
+                    send.send(op::REGISTER_ACK, frame.id, &[0]);
+                    return Ok(());
+                }
+                let prev_owner = cur.filter(|_| !mine).map(|r| Arc::clone(&r.session));
+                routes.insert(
                     token,
                     Route {
                         session: Arc::clone(&session),
-                        expires_at: now_ms() + route_lifetime(ttl),
+                        expires_at: now + route_lifetime(ttl),
                     },
                 );
+                prev_owner
+            };
+            if let Some(prev) = evict_owner {
+                prev.owned_routes
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .remove(&token);
+            }
             session
                 .owned_routes
                 .lock()
@@ -1006,7 +1060,10 @@ async fn handle_request(
             send.send(op::REGISTER_ACK, frame.id, &[1]);
         }
         op::PUT_MUTABLE => {
-            if session.role() != Some(Role::Endpoint) || payload.len() <= 100 {
+            if session.role() != Some(Role::Endpoint)
+                || payload.len() <= 100
+                || !session.allow_dht_op()
+            {
                 send.send(op::PUT_MUTABLE_ACK, frame.id, &[0]);
                 return Ok(());
             }
@@ -1043,7 +1100,10 @@ async fn handle_request(
             }
         }
         op::GET_MUTABLE => {
-            if session.role() != Some(Role::Endpoint) || payload.len() != 32 {
+            if session.role() != Some(Role::Endpoint)
+                || payload.len() != 32
+                || !session.allow_dht_op()
+            {
                 send.send(op::GET_MUTABLE_REPLY, frame.id, &[0]);
                 return Ok(());
             }
@@ -1097,20 +1157,40 @@ async fn handle_request(
                     }
                 }
             };
-            {
+            let now = now_ms();
+            let evict_owner = {
                 let mut slots = entry.slots.lock().unwrap_or_else(|e| e.into_inner());
-                if !slots.contains_key(&slot_id) && slots.len() >= MAX_RV_SLOTS_PER_TOPIC {
+                let cur = slots.get(&slot_id);
+                let mine = cur.is_some_and(|s| Arc::ptr_eq(&s.session, &session));
+                if let Some(cur) = cur
+                    && !mine
+                    && cur.expires_at > now
+                {
                     drop(slots);
                     send.send(op::RV_REGISTER_ACK, frame.id, &[0]);
                     return Ok(());
                 }
+                if cur.is_none() && slots.len() >= MAX_RV_SLOTS_PER_TOPIC {
+                    drop(slots);
+                    send.send(op::RV_REGISTER_ACK, frame.id, &[0]);
+                    return Ok(());
+                }
+                let prev_owner = cur.filter(|_| !mine).map(|s| Arc::clone(&s.session));
                 slots.insert(
                     slot_id,
                     Slot {
                         sealed_card,
-                        expires_at: now_ms() + route_lifetime(ttl),
+                        session: Arc::clone(&session),
+                        expires_at: now + route_lifetime(ttl),
                     },
                 );
+                prev_owner
+            };
+            if let Some(prev) = evict_owner {
+                prev.owned_rv_slots
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .remove(&(topic, slot_id));
             }
             session
                 .owned_rv_slots
@@ -1132,7 +1212,7 @@ async fn handle_request(
                     .lock()
                     .unwrap_or_else(|e| e.into_inner())
                     .remove(&(topic, slot_id));
-                inner.remove_rv_slot(topic, slot_id);
+                inner.remove_rv_slot(topic, slot_id, &session);
             }
         }
         op::RV_FETCH => {
@@ -1168,7 +1248,10 @@ async fn handle_request(
             send.send(op::RV_FETCH_REPLY, frame.id, &super::encode_buf_arr(&cards));
         }
         op::RV_LOOKUP => {
-            if session.role() != Some(Role::Endpoint) || payload.len() != 32 {
+            if session.role() != Some(Role::Endpoint)
+                || payload.len() != 32
+                || !session.allow_dht_op()
+            {
                 send.send(op::RV_LOOKUP_REPLY, frame.id, &super::encode_buf_arr(&[]));
                 return Ok(());
             }

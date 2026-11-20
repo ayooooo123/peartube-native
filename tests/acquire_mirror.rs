@@ -602,7 +602,7 @@ impl Node for FakeNode {
     }
 
     async fn find_entry(&self, _key: &str) -> Result<Option<Value>, Self::Error> {
-        unimplemented!("acquire/mirror do not read raw entries")
+        Ok(None)
     }
 
     async fn blob_core(&self, _key: &str) -> Result<Self::Core, Self::Error> {
@@ -1072,6 +1072,7 @@ fn add_film(harness: &Harness, id: &str, title: &str, url: &str, headers: &[(&st
             channel: None,
             private: false,
             plugin: None,
+            existing: None,
         })
         .unwrap();
 }
@@ -1200,6 +1201,7 @@ async fn acquirer_matches_the_app() {
                 channel: None,
                 private: false,
                 plugin: None,
+                existing: None,
             })
             .unwrap();
         settle(&harness).await;
@@ -1494,6 +1496,7 @@ async fn cancelling_a_queued_job_drops_its_core() {
             channel: None,
             private: false,
             plugin: None,
+            existing: None,
         })
         .expect("add");
     let store = queued["store"].as_str().expect("store").to_owned();
@@ -1733,10 +1736,18 @@ struct MirrorHarness {
 
 impl MirrorHarness {
     async fn new(seed_jobs: Value) -> Self {
-        Self::with_feeds(seed_jobs, Feeds::new()).await
+        Self::with_options(seed_jobs, Feeds::new(), None).await
+    }
+
+    async fn with_watch_dir(dir: &str) -> Self {
+        Self::with_options(Value::Array(Vec::new()), Feeds::new(), Some(dir.to_owned())).await
     }
 
     async fn with_feeds(seed_jobs: Value, feeds: Arc<Feeds>) -> Self {
+        Self::with_options(seed_jobs, feeds, None).await
+    }
+
+    async fn with_options(seed_jobs: Value, feeds: Arc<Feeds>, watch_dir: Option<String>) -> Self {
         let node = FakeNode::new();
         let files = Files::new();
         files.mkdirs("/data");
@@ -1771,7 +1782,7 @@ impl MirrorHarness {
                 storage: "/data".to_owned(),
                 mirror_channel: false,
                 rechunk: false,
-                watch_dir: None,
+                watch_dir,
                 feeds: Vec::new(),
                 plugins_dir: Some("/data/plugins".to_owned()),
                 poll_interval_ms: 0,
@@ -1949,7 +1960,7 @@ async fn mirror_host_matches_the_app() {
     }
 
     {
-        let harness = MirrorHarness::new(Value::Array(Vec::new())).await;
+        let harness = MirrorHarness::with_watch_dir("/data/import").await;
         harness.files.mkdirs("/data/import");
         harness.files.set("/data/import/Some.Film.2019.mkv", "film");
         harness.files.set("/data/import/Show.S01E02.mkv", "episode");

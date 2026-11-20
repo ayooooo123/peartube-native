@@ -26,40 +26,41 @@ there is no Rust code to compare.
 
 | JS module | Rust module | Status | JS commit last absorbed |
 | --- | --- | --- | --- |
-| `bin/private-relay.js` | `relay` (`PEARTUBE_PRIVATE_RELAY` standalone guard), `private_overlay::guard` | `match` | `8326afa2c` |
+| `bin/private-relay.js` | `relay` (`PEARTUBE_PRIVATE_RELAY` standalone guard), `private_overlay::guard` | `match` | `15298dd16` |
 | `bin/rebuild-view.js` | — | `JS-only:` one-off repair tool, run with the relay stopped; no Rust runtime path | — |
-| `bin/relay.js` | `relay`, `src/bin/peartube-relay.rs` | `match` (cast routes, `hiverelay-seed`, standalone guard, `status.lan` as `{host, port}`, `globalSearch`) | `2c97f5b7d` |
-| `src/acquire.js` | `acquire` | `match` | `8326afa2c` |
+| `bin/relay.js` | `relay`, `src/bin/peartube-relay.rs` | `match` (cast routes, `hiverelay-seed`, standalone guard, `status.lan` as `{host, port}`, `globalSearch`, `PEARTUBE_WATCH_DIR` env-only, `0`/`false` env flags, `SIGTERM` exit 0) | `15298dd16` |
+| `src/acquire.js` | `acquire` | `match` (`existing` peer-copy + SHA-256 verification, `keepCopy`, `Retry-After` 300 s cap, rotated-source response close, SSRF guard) | `15298dd16` |
 | `src/app-settings.js` | `app_settings` | `match` | `8326afa2c` |
 | `src/apply.js` | `node/apply` | `match` | `8326afa2c` |
-| `src/art.js` | `art` | `debt:` artwork HTTP timeout covers the whole exchange, unlike the app's socket inactivity timeout — see README "Known gaps" | `8326afa2c` |
-| `src/blob-server.js` | `node/blobs`, `http` (Range streaming) | `match` | `8326afa2c` |
+| `src/art.js` | `art` | `debt:` artwork HTTP timeout covers the whole exchange, unlike the app's socket inactivity timeout — see README "Known gaps" (SSRF guard absorbed) | `15298dd16` |
+| `src/blob-server.js` | `node/blobs`, `http` (Range streaming) | `debt:` `byte-stream-rs`'s `Resolved` carries only `session` (not an overridden `blob` span), which matches whole-core `sameBytes` failover (`blockOffset == 0` and equal `length`/`byteLength`) — see `src/node/blobs.js` | `15298dd16` |
 | `src/cast-control.js` | `cast/control` | `match` | `2c97f5b7d` |
-| `src/control-channel.js` | `control_channel` | `match` | `2c97f5b7d` |
-| `src/cast.js` | `cast/` (`controller`, `receiver`, `pairing`, `state`, `media`, `mdns`, `http`, `disk`) | `match` (the live LAN cast test needs working multicast; see `src/lan.js`) | `8326afa2c` |
+| `src/control-channel.js` | `control_channel` | `match` (symmetric request-before-reply dispatch) | `15298dd16` |
+| `src/cast.js` | `cast/` (`controller`, `receiver`, `pairing`, `state`, `media`, `mdns`, `http`, `disk`) | `match` (per-peer pairing lockout, `leavePeer`; the live LAN cast test needs working multicast; see `src/lan.js`) | `15298dd16` |
 | `src/hiverelay.js` | `hiverelay`, `hiverelay::seeder` | `match` (on stop the relay leaves its topics; it has no `leavePeer` for recruited relays, and the process closes right after) | `8326afa2c` |
-| `src/http.js` | `http` | `match` (`POST /v1/search/global`; download names from `media_format`) | `d6b9fc3ce` |
-| `src/identify.js` | `identify` | `match` | `8326afa2c` |
-| `src/index.js` | `node/core`, `node/factory` | `match` | `2c97f5b7d` |
+| `src/http.js` | `http` | `match` (`requireOwner` + DNS-rebinding `localHost` guard, read-only `GET /v1/resolve`, `/v1/entries/info` `mediaInfo` + owner `health`, SHA-256 web ETags, dead-SSE pruning, `GET`/`HEAD`-only CORS) | `15298dd16` |
+| `src/identify.js` | `identify` | `match` | `15298dd16` |
+| `src/index.js` | `node/core`, `node/factory` | `match` (`entryHealth`, `keepCopy`, `copyExisting`, `search.close()` order) | `15298dd16` |
 | `src/lan.js` | `lan/` (`discovery`, `mdns`, `host`) | `debt:` `tests/lan_mdns.rs::mdns_interop_with_bonjour_service` fails (bonjour-service never reports the Rust record; seen on Linux CI and a Mac, and at `d9a520e` before this alignment) while JS↔Rust LAN discovery in `tests/lan_interop.rs` passes on Linux; macOS runners have no LAN multicast, so CI skips the mDNS discovery tests there — see README "Known gaps" | `8326afa2c` |
-| `src/mirror.js` | `mirror`, `replicate`, `media_check` | `match` | `2c97f5b7d` |
+| `src/mirror.js` | `mirror`, `replicate`, `media_check` | `match` (`feed-mirror` `existing` handoff, env-only `watch-dir`) | `15298dd16` |
 | `src/mnemonic.js` | `mnemonic` | `match` | `8326afa2c` |
-| `src/node/blobs.js` | `node/blobs`, `node/hash_state` | `match` | `8326afa2c` |
-| `src/node/catalog.js` | `node/catalog` | `match` (`publicEntries`, opened watch links capped at 32) | `2c97f5b7d` |
-| `src/node/channel.js` | `node/channel` | `match` | `8326afa2c` |
-| `src/node/identity.js` | `identity` | `match` | `8326afa2c` |
-| `src/node/network.js` | `node/network` | `match` | `8326afa2c` |
+| `src/node/blobs.js` | `node/blobs`, `node/hash_state` | `debt:` `entryHealth` (`wholePeers`/`lanPeers`) approximates per-peer replicator counts from `hypercore-rs`'s public session API (`remote_contiguous_length >= length` for 0/1 `wholePeers` and node-level `is_lan()` connections for `lanPeers`); Merkle `sameBytes` failover and `kept-copies.json` match | `15298dd16` |
+| `src/node/catalog.js` | `node/catalog` | `match` (`publicEntries`, `isKept` `local: true`, opened watch links capped at 32) | `15298dd16` |
+| `src/node/channel.js` | `node/channel` | `match` (startup `saveIdentity` best-effort) | `15298dd16` |
+| `src/node/identity.js` | `identity` | `match` (`dirty` startup guard, rollback + throw on explicit mutations) | `15298dd16` |
+| `src/node/network.js` | `node/network` | `match` (`destroySwarm` `clear()` before force-destroy) | `15298dd16` |
 | `src/node/sources.js` | `node/sources` | `debt:` with no `findingPeers` guard held, hypercore-rs `update()` still waits for a first peer where Hypercore returns at once; every app path holds the guard, so the node behaves the same | `8326afa2c` |
-| `src/node/storage.js` | `node/storage` | `match` | `8326afa2c` |
-| `src/private-overlay.js` | `private_overlay` | `match` | `8326afa2c` |
-| `src/protocol.js` | `protocol` | `match` (`media_format`) | `2c97f5b7d` |
+| `src/node/storage.js` | `node/storage` | `match` | `15298dd16` |
+| `src/private-overlay.js` | `private_overlay` | `match` (session-owned routes & RV slots, canonical IPv6 `/48` buckets, 64 KiB frame cap, 256/10 s DHT op rate limit) | `15298dd16` |
+| `src/protocol.js` | `protocol` | `match` (`safe_equal`, `ipv6_groups`, `media_format`) | `15298dd16` |
 | `src/qr.js` | `cast/qr` | `match` | `8326afa2c` |
 | `src/rebuild-view.js` | — | `JS-only:` the library behind `bin/rebuild-view.js`; an operator repair tool, not a runtime path | — |
-| `src/resolution.js` | `resolution` | `match` | `8326afa2c` |
-| `src/search.js` | `search` | `debt:` peeroxide's `join` has no per-lookup `limit`, so a Rust searcher dials every relay the search-topic lookup returns where hyperswarm stops at 4; it still asks at most 4 (2 per `/24`) and closes the search-only connections a minute after the last search — see README "Known gaps". A search run lives 10 s (`FRESH`), as in the app | `d6b9fc3ce` |
-| `src/settings.js` | `settings` | `match` | `2c97f5b7d` |
+| `src/resolution.js` | `resolution` | `match` (`media_info` container/duration/tracks + string/track caps) | `15298dd16` |
+| `src/search.js` | `search` | `debt:` peeroxide's `join` has no per-lookup `limit`, so a Rust searcher dials every relay the search-topic lookup returns where hyperswarm stops at 4; it still asks at most 4 (2 per `/24`) and closes the search-only connections a minute after the last search — see README "Known gaps". Keyed per peer, `serve(null)` before `closed`, `FRESH` 10 s | `15298dd16` |
+| `src/settings.js` | `settings` | `match` (`watchDir` migrated out of saved settings) | `15298dd16` |
+| `src/ssrf.js` | `ssrf` | `match` (pre-connect IP/DNS + NAT64 `64:ff9b::/96` guard, no pooled-socket bypass, `PEARTUBE_ALLOW_PRIVATE_URLS`) | `15298dd16` |
 | `src/traffic.js` | `traffic` | `match` | `8326afa2c` |
-| `src/ui.js` | — | `JS-only:` shared asset; `relay.Dockerfile` copies the app's own file to `web/index.html` at image build and the relay serves it | `8326afa2c` |
+| `src/ui.js` | — | `JS-only:` shared asset; `relay.Dockerfile` copies the app's own file to `web/index.html` at image build and the relay serves it | `15298dd16` |
 | `worklet/worker.js` | `app`, `lifecycle`, `ipc`, `backend` | `match` (`searchGlobal`) | `d6b9fc3ce` |
 | `<storage>/plugins/*.mjs (user plugins)` | — | `JS-only:` Rust cannot execute JS plugins; the built-in plugins are ports of the app's own (`http-acquire`, `channel-backfill`, `blob-rechunk`, `watch-dir`, `feed-mirror`, `p2p-replicate`, `hiverelay-seed`, `media-check`) | — |
 

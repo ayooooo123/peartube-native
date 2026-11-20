@@ -43,8 +43,8 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use crate::mnemonic::{unwrap_video_key, wrap_video_key};
 use crate::node::PutSource;
 use crate::node::api::{
-    Announce, Blob, CacheCeiling, CacheCleared, Published, PutMeta, RechunkResult, StorageGc,
-    SyncResult,
+    Announce, Blob, CacheCeiling, CacheCleared, EntryHealth, Published, PutMeta, RechunkResult,
+    StorageGc, SyncResult,
 };
 use crate::node::hash_state::{SHA256_STATE_BYTES, Sha256State, base64_decode};
 use crate::protocol::{
@@ -450,6 +450,38 @@ impl BlockCounter {
     }
 }
 
+/// Download speed per video core over the last 10 s, from Hypercore's `Download` events.
+struct Meter {
+    at: u64,
+    buckets: [u64; 10],
+    peers: HashMap<[u8; 32], u64>,
+}
+
+impl Meter {
+    fn new(now: u64) -> Self {
+        Self {
+            at: now,
+            buckets: [0; 10],
+            peers: HashMap::new(),
+        }
+    }
+
+    fn roll(&mut self, now: u64) {
+        let start = (self.at + 1).max(now.saturating_sub(9));
+        for s in start..=now {
+            self.buckets[(s % 10) as usize] = 0;
+        }
+        self.at = self.at.max(now);
+        self.peers.retain(|_, seen| now.saturating_sub(*seen) < 10);
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CopyMember {
+    pub blobs: String,
+    pub blob: Blob,
+}
+
 struct Inner<C: ChannelView, S: ContentSwarm, H: BlobHost> {
     store: Corestore,
     storage: PathBuf,
@@ -467,6 +499,11 @@ struct Inner<C: ChannelView, S: ContentSwarm, H: BlobHost> {
     /// `sourcePeers`: peers that have sent this node verified blocks, forgotten with the peer's
     /// last connection. Only their `peartube/bulk-busy` claims count.
     source_peers: Mutex<HashSet<[u8; 32]>>,
+    kept: Mutex<Vec<[u8; 32]>>,
+    meters: Mutex<Vec<([u8; 32], Meter)>>,
+    alternates: Mutex<Vec<(String, Vec<CopyMember>)>>,
+    failovers: Mutex<HashMap<String, CopyMember>>,
+    refused: Mutex<HashSet<String>>,
     http_owned: Mutex<HashMap<[u8; 32], HttpOwned>>,
     http_generation: AtomicU64,
     evicted_to: Mutex<HashMap<[u8; 32], u64>>,
@@ -546,6 +583,11 @@ where
             warm: Mutex::new(Warm::default()),
             block_counts: Mutex::new(HashMap::new()),
             source_peers: Mutex::new(HashSet::new()),
+            kept: Mutex::new(Vec::new()),
+            meters: Mutex::new(Vec::new()),
+            alternates: Mutex::new(Vec::new()),
+            failovers: Mutex::new(HashMap::new()),
+            refused: Mutex::new(HashSet::new()),
             http_owned: Mutex::new(HashMap::new()),
             http_generation: AtomicU64::new(0),
             evicted_to: Mutex::new(HashMap::new()),
@@ -574,6 +616,7 @@ where
             cores.map.insert(key, CoreEntry { session, seq });
         }
         blobs.load_lru();
+        blobs.load_kept();
         blobs.hydrate_owned().await?;
         Ok(blobs)
     }
@@ -600,6 +643,327 @@ where
 
     pub fn is_owned_blob(&self, key: &[u8; 32]) -> bool {
         self.inner.slot_set.contains(key) || lock(&self.inner.ledger).owned.contains_key(key)
+    }
+    pub fn is_kept(&self, key: &[u8; 32]) -> bool {
+        lock(&self.inner.kept).contains(key)
+    }
+
+    pub fn keep_copy(&self, hex_key: &str, on: bool) {
+        if !is_hex64(hex_key) {
+            return;
+        }
+        let Some(key) = parse_hex32(hex_key) else {
+            return;
+        };
+        let payload = {
+            let mut kept = lock(&self.inner.kept);
+            let has = kept.contains(&key);
+            if has == on {
+                return;
+            }
+            if on {
+                kept.push(key);
+            } else {
+                kept.retain(|k| *k != key);
+            }
+            let list: Vec<Value> = kept.iter().map(|k| Value::String(hex(k))).collect();
+            Value::Array(list).to_string()
+        };
+        let path = self.inner.storage.join("kept-copies.json");
+        write_private(&path, payload.as_bytes());
+    }
+
+    fn load_kept(&self) {
+        let path = self.inner.storage.join("kept-copies.json");
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            return;
+        };
+        let Ok(list) = serde_json::from_str::<Vec<String>>(&text) else {
+            return;
+        };
+        let mut kept = lock(&self.inner.kept);
+        for item in list {
+            if is_hex64(&item)
+                && let Some(key) = parse_hex32(&item)
+                && !kept.contains(&key)
+            {
+                kept.push(key);
+            }
+        }
+    }
+
+    fn meter(&self, key: [u8; 32], byte_length: u64, from: Option<[u8; 32]>) {
+        let now = self.inner.host.now_ms() / 1000;
+        let mut meters = lock(&self.inner.meters);
+        if let Some((_, m)) = meters.iter_mut().find(|(k, _)| *k == key) {
+            m.roll(now);
+            m.buckets[(now % 10) as usize] += byte_length;
+            if let Some(peer) = from {
+                m.peers.insert(peer, now);
+            }
+            return;
+        }
+        if meters.len() >= 64 {
+            meters.remove(0);
+        }
+        let mut m = Meter::new(now);
+        m.buckets[(now % 10) as usize] += byte_length;
+        if let Some(peer) = from {
+            m.peers.insert(peer, now);
+        }
+        meters.push((key, m));
+    }
+
+    fn read_meter(&self, key: &[u8; 32]) -> (u64, u64) {
+        let now = self.inner.host.now_ms() / 1000;
+        let mut meters = lock(&self.inner.meters);
+        let Some((_, m)) = meters.iter_mut().find(|(k, _)| k == key) else {
+            return (0, 0);
+        };
+        m.roll(now);
+        let sum: u64 = m.buckets.iter().sum();
+        let rate_bps = ((sum as f64) / 10.0).round() as u64;
+        (rate_bps, m.peers.len() as u64)
+    }
+
+    pub fn set_alternates(&self, group: Vec<CopyMember>) {
+        let capped: Vec<CopyMember> = group.into_iter().take(8).collect();
+        let mut alternates = lock(&self.inner.alternates);
+        for member in &capped {
+            let tag = format!("{}:{}", member.blobs, member.blob.block_offset);
+            if let Some((_, slot)) = alternates.iter_mut().find(|(k, _)| *k == tag) {
+                *slot = capped.clone();
+                continue;
+            }
+            if alternates.len() >= 4096 {
+                alternates.remove(0);
+            }
+            alternates.push((tag, capped.clone()));
+        }
+    }
+
+    pub fn entry_health(
+        &self,
+        entry: &Announce,
+        lan_peers_for: impl Fn(&[u8; 32]) -> u64,
+    ) -> EntryHealth {
+        let tag = format!("{}:{}", entry.blobs, entry.blob.block_offset);
+        let serving = lock(&self.inner.failovers)
+            .get(&tag)
+            .map(|m| m.blobs.clone())
+            .unwrap_or_else(|| entry.blobs.clone());
+        let other_copies = lock(&self.inner.alternates)
+            .iter()
+            .find(|(k, _)| *k == tag)
+            .map(|(_, group)| group.iter().filter(|b| b.blobs != entry.blobs).count() as u64)
+            .unwrap_or(0);
+        let using_other_copy = serving != entry.blobs;
+        let Some(key) = parse_hex32(&serving) else {
+            return EntryHealth {
+                other_copies,
+                using_other_copy,
+                ..EntryHealth::default()
+            };
+        };
+        let shared = self.inner.slot_set.contains(&key);
+        let session = self
+            .open_core(&key)
+            .or_else(|| {
+                lock(&self.inner.http_owned)
+                    .get(&key)
+                    .map(|h| h.session.clone())
+            })
+            .or_else(|| {
+                self.inner
+                    .slots
+                    .iter()
+                    .find(|s| s.key == key)
+                    .map(|s| s.session.clone())
+            });
+        let Some(session) = session.filter(|s| !s.is_closed()) else {
+            return EntryHealth {
+                open: false,
+                shared,
+                other_copies,
+                using_other_copy,
+                peers: 0,
+                whole_peers: 0,
+                lan_peers: 0,
+                rate_bps: 0,
+                sources: 0,
+            };
+        };
+        let peers = session.core().peer_count() as u64;
+        let whole_peers = u64::from(
+            peers > 0
+                && session.length() > 0
+                && session.remote_contiguous_length() >= session.length(),
+        );
+        let (rate_bps, sources) = self.read_meter(&key);
+        EntryHealth {
+            open: true,
+            shared,
+            other_copies,
+            using_other_copy,
+            peers,
+            whole_peers,
+            lan_peers: lan_peers_for(&key),
+            rate_bps,
+            sources,
+        }
+    }
+
+    fn whole_here(&self, session: &Session) -> bool {
+        let len = session.length();
+        len > 0 && self.local_blocks(session.key()) >= len
+    }
+
+    async fn wait_for_peer(session: &Session, wait: Duration) -> bool {
+        if session.core().peer_count() > 0 {
+            return true;
+        }
+        let mut events = session.events();
+        if session.core().peer_count() > 0 {
+            return true;
+        }
+        let fut = async {
+            loop {
+                match events.recv().await {
+                    Ok(CoreEvent::PeerAdd) => return true,
+                    Ok(CoreEvent::Close) | Err(_) => return false,
+                    _ => {
+                        if session.core().peer_count() > 0 {
+                            return true;
+                        }
+                    }
+                }
+            }
+        };
+        tokio::time::timeout(wait, fut).await.unwrap_or(false)
+    }
+
+    async fn same_bytes(
+        core: &Session,
+        blob: &Blob,
+        alt: &Session,
+        alt_blob: &Blob,
+    ) -> Option<bool> {
+        let whole = |c: &Session, b: &Blob| {
+            b.block_offset == 0 && c.length() > 0 && b.block_length == c.length()
+        };
+        if !whole(core, blob) || !core.has(core.length() - 1) {
+            return None;
+        }
+        let verify = Duration::from_secs(10);
+        let _ = tokio::time::timeout(verify, alt.update(Some(verify))).await;
+        if alt.length() == 0 {
+            return None;
+        }
+        if !whole(alt, alt_blob)
+            || alt.length() != core.length()
+            || alt_blob.byte_length != blob.byte_length
+        {
+            return None;
+        }
+        let (mine, theirs) = tokio::join!(
+            tokio::time::timeout(verify, core.tree_hash(core.length())),
+            tokio::time::timeout(verify, alt.tree_hash(alt.length()))
+        );
+        match (mine, theirs) {
+            (Ok(Ok(m)), Ok(Ok(t))) => Some(m == t),
+            _ => None,
+        }
+    }
+
+    async fn pick_copy(&self, key: [u8; 32]) -> Option<[u8; 32]> {
+        if self.inner.slot_set.contains(&key) {
+            return None;
+        }
+        let hex_key = hex(&key);
+        let tag = format!("{hex_key}:0");
+        let (self_member, others): (CopyMember, Vec<CopyMember>) = {
+            let alternates = lock(&self.inner.alternates);
+            let (_, group) = alternates.iter().find(|(k, _)| *k == tag)?;
+            let me = group.iter().find(|b| b.blobs == hex_key)?.clone();
+            let rest = group
+                .iter()
+                .filter(|b| b.blobs != hex_key)
+                .cloned()
+                .collect::<Vec<_>>();
+            if rest.is_empty() {
+                return None;
+            }
+            (me, rest)
+        };
+        let core = self.open_core(&key).filter(|c| !c.is_closed())?;
+        if self.whole_here(&core) {
+            return None;
+        }
+        let current = lock(&self.inner.failovers).get(&tag).cloned();
+        if let Some(current) = current {
+            if let Some(alt_key) = parse_hex32(&current.blobs)
+                && let Some(alt) = self.open_core(&alt_key).filter(|c| !c.is_closed())
+                && (alt.core().peer_count() > 0 || self.whole_here(&alt))
+            {
+                return Some(alt_key);
+            }
+            lock(&self.inner.failovers).remove(&tag);
+        }
+        // While the listed core has peers, take its last block so a later failover can compute its
+        // tree hash without them.
+        if core.core().peer_count() > 0 && core.length() > 0 {
+            let last = core.length() - 1;
+            let bg = core.clone();
+            tokio::spawn(async move {
+                let _ = bg.get(last, GetOptions::default()).await;
+            });
+        }
+        let peer_wait = Duration::from_secs(5);
+        if Self::wait_for_peer(&core, peer_wait).await {
+            return None;
+        }
+        if core.length() == 0 || !core.has(core.length() - 1) {
+            return None;
+        }
+        for alt in others.into_iter().take(3) {
+            let Some(alt_key) = parse_hex32(&alt.blobs) else {
+                continue;
+            };
+            let pair = format!("{tag}>{}", alt.blobs);
+            if lock(&self.inner.ledger).encrypted.contains_key(&alt_key)
+                || lock(&self.inner.refused).contains(&pair)
+            {
+                continue;
+            }
+            let alt_owned = self.is_owned_blob(&alt_key);
+            let alt_holds = self.holds_all(&alt_key);
+            self.inner.swarm.want(alt_key, alt_owned, alt_holds);
+            let Ok(alt_core) = self.blob_core(&alt_key).await else {
+                continue;
+            };
+            let ready =
+                self.whole_here(&alt_core) || Self::wait_for_peer(&alt_core, peer_wait).await;
+            let same = if ready {
+                Self::same_bytes(&core, &self_member.blob, &alt_core, &alt.blob).await
+            } else {
+                None
+            };
+            match same {
+                Some(true) => {
+                    lock(&self.inner.failovers).insert(tag, alt);
+                    return Some(alt_key);
+                }
+                Some(false) => {
+                    let mut refused = lock(&self.inner.refused);
+                    if refused.len() >= 4096 {
+                        refused.clear();
+                    }
+                    refused.insert(pair);
+                }
+                None => {}
+            }
+        }
+        None
     }
 
     pub fn owned(&self, key: &[u8; 32]) -> Option<OwnedMeta> {
@@ -954,6 +1318,7 @@ where
                             counter.blocks(),
                         );
                         blobs.touch_cached(Some(key));
+                        blobs.meter(key, byte_length, from);
                         blobs.grew(byte_length);
                     }
                     CoreEvent::Append { .. } => {
@@ -1435,7 +1800,11 @@ where
         let Some(session) = self.open_core(key).filter(|s| !s.is_closed()) else {
             return 0;
         };
-        if blob.block_length <= 16 || self.is_owned_blob(key) || session.writable() {
+        if blob.block_length <= 16
+            || self.is_owned_blob(key)
+            || self.is_kept(key)
+            || session.writable()
+        {
             return 0;
         }
         let bs = 4096.max(
@@ -1534,7 +1903,11 @@ where
                 .collect()
         };
         for (key, session) in open {
-            if self.is_owned_blob(&key) || session.length() == 0 || content_bytes(&session) == 0 {
+            if self.is_owned_blob(&key)
+                || self.is_kept(&key)
+                || session.length() == 0
+                || content_bytes(&session) == 0
+            {
                 continue;
             }
             self.ensure_block_counter(&session).await;
@@ -1559,6 +1932,7 @@ where
         };
         for (key, meta) in closed {
             if self.is_owned_blob(&key)
+                || self.is_kept(&key)
                 || meta.blocks == 0
                 || meta.length == 0
                 || meta.byte_length == 0
@@ -1693,7 +2067,7 @@ where
         }
         let mut victims: Vec<([u8; 32], u64, u64)> = keys
             .into_iter()
-            .filter(|key| !self.is_owned_blob(key))
+            .filter(|key| !self.is_owned_blob(key) && !self.is_kept(key))
             .filter(|key| Some(*key) != playing && !streaming.contains(key))
             .filter(|key| !self.is_warming(key))
             .map(|key| {
@@ -1720,6 +2094,7 @@ where
         if total > target
             && let Some(playing) = playing
             && !self.is_owned_blob(&playing)
+            && !self.is_kept(&playing)
             && let Some(core) = self.open_core(&playing)
             && !core.is_closed()
             && core.length() > 16
@@ -1920,7 +2295,7 @@ where
             keys
         };
         for blobs in all {
-            if Some(blobs) == keep_blobs_hex {
+            if Some(blobs) == keep_blobs_hex || self.is_kept(&blobs) {
                 continue;
             }
             cleared += self.clear_blob_hex(&blobs).await;
@@ -2767,7 +3142,12 @@ where
             // `blob_core` keeps the counter, ledger and ceiling side effects; the response gets
             // its own session so the request can close it independently.
             self.blob_core(&key).await.ok()?;
-            let session = self.open_key(key, false).await.ok()?;
+            let serve_key = if encryption_key.is_none() {
+                self.pick_copy(key).await.unwrap_or(key)
+            } else {
+                key
+            };
+            let session = self.open_key(serve_key, false).await.ok()?;
             return Some(Resolved { session });
         }
         // The HTTP session lingers for 30 s so a seeking player does not reopen the core per range.

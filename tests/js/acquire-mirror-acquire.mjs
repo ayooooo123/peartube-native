@@ -26,6 +26,8 @@ const rewrites = {
   "'node:https'": stub('acquire-mirror-http.mjs'),
   "'b4a'": stub('acquire-mirror-b4a.mjs'),
   "'streamx'": stub('acquire-mirror-streamx.mjs'),
+  "'hypercore-byte-stream'": stub('acquire-mirror-streamx.mjs'),
+  "'./ssrf.js'": stub('acquire-mirror-plants.mjs'),
   "'./identify.js'": stub('acquire-mirror-identify.mjs')
 }
 let patched = source

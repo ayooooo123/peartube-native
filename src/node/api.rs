@@ -148,6 +148,19 @@ pub struct Entry {
     pub stream_url: String,
     pub magnet_url: String,
 }
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EntryHealth {
+    pub open: bool,
+    pub shared: bool,
+    pub other_copies: u64,
+    pub using_other_copy: bool,
+    pub peers: u64,
+    pub whole_peers: u64,
+    pub lan_peers: u64,
+    pub rate_bps: u64,
+    pub sources: u64,
+}
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct SearchOptions {
     #[serde(

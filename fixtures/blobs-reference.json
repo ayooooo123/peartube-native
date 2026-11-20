@@ -62,7 +62,7 @@
         "byteLength": 1100000
       },
       "epoch": 1,
-      "wrappedKey": "2bf82b5f0470e24c0b0748d665b6264082662d469035dcf6fd0cea3993914f438ab2333a7b52b1a7efd3a5b00037ac111d38253068312f70df7de91b208c304c9450c6c64540fdc7"
+      "wrappedKey": "a34d51d171686b7621e40cba42e8e84d3b867b9299296e2e1cd506c664405adb58dda707f5d355188029c5436165ae901f0dfd106ec5b8b9f7f51db1c3321f3307c99129a30eeca3"
     },
     "unwrapped": "4444444444444444444444444444444444444444444444444444444444444444",
     "core": {
@@ -81,7 +81,7 @@
       ]
     },
     "ops": [
-      "{\"type\":\"announce\",\"id\":\"youtube:fixtureenc\",\"title\":\"Encrypted Ingest\",\"size\":1100000,\"sha256\":\"ee22b6b66bb9d5c10e931027b8fbb4d816a2fc6c27af4c7a5149ee975549d7dd\",\"blobs\":\"304c4f9855857c3e151d189bb09a499fad7a34f495afd574034db19ed4b04c1c\",\"blob\":{\"blockOffset\":0,\"byteOffset\":0,\"blockLength\":3,\"byteLength\":1100000},\"epoch\":1,\"wrappedKey\":\"2bf82b5f0470e24c0b0748d665b6264082662d469035dcf6fd0cea3993914f438ab2333a7b52b1a7efd3a5b00037ac111d38253068312f70df7de91b208c304c9450c6c64540fdc7\"}"
+      "{\"type\":\"announce\",\"id\":\"youtube:fixtureenc\",\"title\":\"Encrypted Ingest\",\"size\":1100000,\"sha256\":\"ee22b6b66bb9d5c10e931027b8fbb4d816a2fc6c27af4c7a5149ee975549d7dd\",\"blobs\":\"304c4f9855857c3e151d189bb09a499fad7a34f495afd574034db19ed4b04c1c\",\"blob\":{\"blockOffset\":0,\"byteOffset\":0,\"blockLength\":3,\"byteLength\":1100000},\"epoch\":1,\"wrappedKey\":\"a34d51d171686b7621e40cba42e8e84d3b867b9299296e2e1cd506c664405adb58dda707f5d355188029c5436165ae901f0dfd106ec5b8b9f7f51db1c3321f3307c99129a30eeca3\"}"
     ]
   },
   "cacheTrim": {

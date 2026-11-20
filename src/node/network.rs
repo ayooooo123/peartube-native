@@ -1500,37 +1500,68 @@ impl Network {
     /// Returns whether a dial was started. A private-routed node dials nothing: the public DHT is
     /// not its route, and the private overlay that would carry the dial is not in this build.
     pub fn join_peer(&self, key_hex: &str, lan_first: bool) -> bool {
-        let Some(key) = parse_hex32(key_hex) else {
+        let Some((started, _)) = self.join_peer_inner(key_hex, lan_first) else {
             return false;
         };
+        started
+    }
+
+    pub fn join_peer_with_handle(
+        &self,
+        key_hex: &str,
+        lan_first: bool,
+    ) -> Option<tokio::task::JoinHandle<()>> {
+        self.join_peer_inner(key_hex, lan_first)
+            .and_then(|(_, h)| h)
+    }
+
+    fn join_peer_inner(
+        &self,
+        key_hex: &str,
+        lan_first: bool,
+    ) -> Option<(bool, Option<tokio::task::JoinHandle<()>>)> {
+        let key = parse_hex32(key_hex)?;
         if key == self.peer_key() {
-            return false;
+            return Some((false, None));
         }
         if !self.can_announce() {
-            // `swarm.joinPeer`: the private overlay dials through the guards, never the DHT.
-            let private = { lock(&self.private).clone() };
-            let Some(private) = private else {
-                return false;
-            };
+            let private = { lock(&self.private).clone() }?;
             private.join_peer(key);
-            return true;
+            return Some((true, None));
         }
         if lan_first && self.has_lan() {
-            // The LAN dial is already in flight. JS joins through the DHT 1.5 s later rather
-            // than not at all: a LAN path that never lands must not cost the peer.
             let weak = self.weak.clone();
-            tokio::spawn(async move {
+            let handle = tokio::spawn(async move {
                 tokio::time::sleep(Duration::from_millis(1500)).await;
                 if let Some(network) = weak.upgrade()
                     && !network.closing.load(Ordering::Acquire)
+                    && !network.has_lan_peer(&key)
                 {
                     network.dial_public(key);
                 }
             });
-            return true;
+            return Some((true, Some(handle)));
         }
         self.dial_public(key);
-        true
+        Some((true, None))
+    }
+
+    pub fn leave_peer(&self, key_hex: &str) {
+        let Some(key) = parse_hex32(key_hex) else {
+            return;
+        };
+        if !self.can_announce() {
+            let private = { lock(&self.private).clone() };
+            if let Some(private) = private {
+                private.leave_peer(key);
+            }
+        }
+    }
+
+    pub fn has_lan_peer(&self, peer: &[u8; 32]) -> bool {
+        self.connections()
+            .iter()
+            .any(|c| c.is_lan() && &c.0.peer == peer)
     }
 
     /// The DHT half of `joinPeer`: connect by key and wire the stream into replication.

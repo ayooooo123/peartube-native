@@ -1,9 +1,10 @@
 {
   "meta": {
-    "source": "fixtures/gen (copied from the PearTube app)",
+    "source": "fixtures/gen/gen.mjs from the PEARTUBE_APP checkout",
+    "commit": "15298dd1629f9441bbbbe1339c63f864755c7ba0",
     "node": "v24.18.0",
-    "hypercore": "11.40.3",
-    "hypercoreCrypto": "3.7.0",
+    "hypercore": "github:ayooooo123/hypercore#ca652cae7aca0430a1e9d86c1acd4f783243a265",
+    "hypercoreCrypto": "^3.7.0",
     "sodiumNative": "5.1.0"
   },
   "identities": [
@@ -1072,55 +1073,55 @@
     {
       "videoKey": "5eafc7ae898c4542bdb20e661367ae18ba282e904350658a92e8b320affd0ec1",
       "epochKey": "8810524237cb7b224bb08c9ec5756dd75e0ad3672d85265818c1522cec43d21e",
-      "wrapped": "193af128a7744b93563db289c3735ec8729201cb8a7de87c577636ae4f1c0b0c44128ea9ba6fc0de62e64eefb64c008d61a236bc0642a296039be015de1563a1adee2ff08d2202aa",
+      "wrapped": "8b5494dc000f563b96b521af89d063478f9874a67e6a6ce304ecb83b4ab636aa95722011db39731ef129e4efc2c204baa7e5236b40be96a385933057864f317286cb211da152443b",
       "unwrap": "5eafc7ae898c4542bdb20e661367ae18ba282e904350658a92e8b320affd0ec1"
     },
     {
       "videoKey": "ba34a12b1d152ae563cfd8a24670fd40e1107b706f98160c3e9b8248590a8a65",
       "epochKey": "c1d3760fb2296891ffeb2484fcffdee9ef0b7cd6ac801b4a1f4be21793f05b83",
-      "wrapped": "779483f1c9b45d0667a77925d102ef3b4b9b108cb00e63abaca34307390cfb35a3c5ddd48a1fd1ed2727afcf2ded87c0cb3ab847b8e7d3b42a4f4585d021854a72d3b8bd6d33ce6c",
+      "wrapped": "0b7252ac99e134cc9894f25d6d5775625b28f7093c06ed296a855c0921119894c45cdddd2b03998d28394018dbb23608cd357435b1f31f354447345d7fabf48cfda8182c6ea3a33e",
       "unwrap": "ba34a12b1d152ae563cfd8a24670fd40e1107b706f98160c3e9b8248590a8a65"
     },
     {
       "videoKey": "b1450907d0487cd9df114d4cdc1d68b1caf769cfda7fe03855a18311be61ba20",
       "epochKey": "ed80545268123c55c6fdfa8b02b020a88d4a9c6ade11dd31cf2a2b151f5e74c9",
-      "wrapped": "381035e66e28c5fd145858f4e1347687c328ef995c089445902c3325f862b7bcb0a0c40e09435d57f9e5e1f18f0a5dd505a5204797fb3e18fe2bd354021584aa0d5d4323f17638b2",
+      "wrapped": "2734593bbb01fa758b34156e79c8d0ae05f5d1528e500081a80baf94e561436d984e4c663bba2cfa6d89840d875303a2a61fecf99e045be5a63655b84bbd4ecd48e1ce6c7a51ef8f",
       "unwrap": "b1450907d0487cd9df114d4cdc1d68b1caf769cfda7fe03855a18311be61ba20"
     },
     {
       "videoKey": "7d43473e1d934954cb0b2c92ee1e7ddf",
       "epochKey": "9d92905ac166724b3f7f16b635a021fb533bb977efcc58baac878d778b0c5546",
-      "wrapped": "a6e064ec949f74eeaa00296a3196efd7b6548e04f49e2b0261d82461903012957e41e63ad77662fe4bde41da268a5a8ab0c4bba7a446a0ce",
+      "wrapped": "0663ed87fc945d47fe3ae6d318addf9455d3ac2d136484d5f2655138cc7378471266e4d591f0fb4a18bc700832cdf522c2d0aabf042b4e33",
       "unwrap": null
     },
     {
       "videoKey": "7f512c1e2532f8057027169d3102109a6754b22f047b094b",
       "epochKey": "8d471307eb39a88386724223d10f33866113900f3268ca4deda85f6833d446a3",
-      "wrapped": "0c90a6f826f1502b35119c2f16479a2dbb2d0a579509bc3ab4bdc8f811f33d69a36e5f693896b616862402b726655de02a18ec97b3462dd2a9a6465d3b3b6658",
+      "wrapped": "1cd21d945db7f31bd01928fd73ddc96f3c8df8f410c8c91b58ec56ef2296a6b9cd4350fa76baff5992b606851703172be3edfec1b67b3ab9b1d63dcb0563d85c",
       "unwrap": null
     },
     {
       "videoKey": "e0",
       "epochKey": "80129e0486da4f6f3df1281e258d47acc451d24765972d263c19c6b9c3152e96",
-      "wrapped": "7843c91c146ca6fe3d9b20ee8e9ca9a0537e0505ef1208d9992c22f0756664b59c70dd431d7ce6fa6f",
+      "wrapped": "d9829faffd1ed1925053a9b78ed1c6ad05bcdecceba86f07ecaa0f05878318586b3164aea3b75d7f16",
       "unwrap": null
     },
     {
       "videoKey": "4d21c96ef035cfbb4569cbef13cd1cd72effaeeeadc2860213ae2ef5a7133dd1",
       "epochKey": "79171fa394068289d7ab74354a4ce9fcf9aadb43afedddb8944faa098e312c9d",
-      "wrapped": "37e84ff73de92e3d4230aa60013c6a2cf2ba78075cf3c71a872998f9a2bc849de012c58e3947a777f837a1845e6610990ae2d4461b76bab0ce231b0d8d2bd3b7695e8a047cb522b5",
+      "wrapped": "cf54d4043d7d567e8437af37f012f8262e2d1a461996b931a6a3d159f781848b741ecffd874f2005c9c00dc42368f1dad47124b6425ea876fb42f600b90df72dc8900d3fbe19983f",
       "unwrap": "4d21c96ef035cfbb4569cbef13cd1cd72effaeeeadc2860213ae2ef5a7133dd1"
     },
     {
       "videoKey": "6cc45cca23f6aeffb2dfe573c76fb0ce8f318a5e97a38ddb01e5704cf51e4f16",
       "epochKey": "4748b8b9e0e9fbb8c5142ba6487e46e967cd7d1d4edfcca609123b7f58de9f91",
-      "wrapped": "f7c8a90874ade0b5a0ad6a83019c10794ffcf0b69260cca897bf8a69195038520431e7ecf3c11430c9d430814eb2b6e96e29a32f6f591853a256d1bde1be95d1bdbf7a14d003f25f",
+      "wrapped": "67ff0f5438eec7bec5be937b55ee5ddbcc0fab33d9d389935015c6d1f9c17a4cdd42d540812a992f340d1c41189c6337719ca2a5139f8056af9994edbd44d933658d86bbaeded93d",
       "unwrap": "6cc45cca23f6aeffb2dfe573c76fb0ce8f318a5e97a38ddb01e5704cf51e4f16"
     },
     {
       "videoKey": "5eafc7ae898c4542bdb20e661367ae18ba282e904350658a92e8b320affd0ec1",
       "epochKey": "8810524237cb7b224bb08c9ec5756dd75e0ad3672d85265818c1522cec43d21e",
-      "wrapped": "a6bc0642a296039be015de1563a1adee2ff08d2202aa",
+      "wrapped": "a36b40be96a385933057864f317286cb211da152443b",
       "unwrap": null
     }
   ],

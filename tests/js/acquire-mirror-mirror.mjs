@@ -37,6 +37,8 @@ const acquireRewrites = {
   "'node:https'": stub('acquire-mirror-http.mjs'),
   "'b4a'": stub('acquire-mirror-b4a.mjs'),
   "'streamx'": stub('acquire-mirror-streamx.mjs'),
+  "'hypercore-byte-stream'": stub('acquire-mirror-streamx.mjs'),
+  "'./ssrf.js'": stub('acquire-mirror-plants.mjs'),
   "'./identify.js'": stub('acquire-mirror-identify.mjs')
 }
 
@@ -148,7 +150,7 @@ async function settleRechunk (node) {
 
 const PORTED = ['http-acquire', 'channel-backfill', 'blob-rechunk', 'watch-dir', 'feed-mirror']
 
-async function harness (seedJobs = []) {
+async function harness (seedJobs = [], watchDir = null) {
   fsStub.reset()
   cryptoStub.reset()
   if (seedJobs.length) fsStub.setFile('/work/jobs.json', JSON.stringify(seedJobs))
@@ -161,7 +163,7 @@ async function harness (seedJobs = []) {
     acquirer,
     mirrorChannel: false,
     rechunk: false,
-    watchDir: null,
+    watchDir,
     feeds: [],
     pollIntervalMs: 0,
     replicate: false,
@@ -229,7 +231,7 @@ const traces = {}
 }
 
 {
-  const ctx = await harness()
+  const ctx = await harness([], '/data/import')
   fsStub.mkdirSync('/data/import')
   fsStub.setFile('/data/import/Some.Film.2019.mkv', 'film')
   fsStub.setFile('/data/import/Show.S01E02.mkv', 'episode')

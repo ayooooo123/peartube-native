@@ -29,3 +29,7 @@ export async function send (url, options = {}) {
     body: typeof plan.body === 'string' ? plan.body : JSON.stringify(plan.body)
   }
 }
+
+export const privateUrlsAllowed = () => true
+export function checkUrlHost () {}
+export function guardedLookup () { return undefined }

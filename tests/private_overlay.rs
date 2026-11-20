@@ -123,7 +123,7 @@ const FIXTURES: &str = r#"{
       "host": "fe80::1",
       "port": null,
       "allowLoopback": false,
-      "bucket": "ipv6:fe80:0000:0001/48"
+      "bucket": "ipv6:fe80:0000:0000/48"
     },
     {
       "host": "example.com",

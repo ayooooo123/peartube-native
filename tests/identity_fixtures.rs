@@ -192,10 +192,10 @@ fn run_step(
                 "mnemonic": vault.mnemonic,
             }))
         }
-        "save" => {
-            identity.save_identity();
-            Ok(Value::Null)
-        }
+        "save" => identity
+            .save_identity()
+            .map(|()| Value::Null)
+            .map_err(|error| error.message().to_owned()),
         "foundedKey" => Ok(Value::String(identity.founded_key().to_owned())),
         "markFounded" => {
             identity.mark_founded(step["key"].as_str().unwrap_or_default());

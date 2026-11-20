@@ -1,5 +1,6 @@
-use peartube_native::resolution::{VideoSize, resolution_label, video_size};
+use peartube_native::resolution::{VideoSize, media_info, resolution_label};
 use serde::Deserialize;
+use serde_json::Value;
 use std::{
     future::Future,
     task::{Context, Poll, Waker},
@@ -14,7 +15,7 @@ struct Fixtures {
 struct Media {
     name: String,
     hex: String,
-    expected: Option<VideoSize>,
+    expected: Value,
 }
 #[derive(Deserialize)]
 struct Label {
@@ -45,7 +46,7 @@ fn resolution_fixtures() {
             .iter()
             .map(|b: &[u8; 2]| u8::from_str_radix(std::str::from_utf8(b).unwrap(), 16).unwrap())
             .collect();
-        let actual = run(video_size(|offset, len| {
+        let actual = run(media_info(|offset, len| {
             let start = usize::try_from(offset)
                 .unwrap_or(usize::MAX)
                 .min(data.len());
@@ -53,7 +54,8 @@ fn resolution_fixtures() {
             std::future::ready(Ok(data[start..end].to_vec()))
         }))
         .unwrap();
-        assert_eq!(actual, case.expected, "{}", case.name);
+        let actual_json = serde_json::to_value(&actual).unwrap();
+        assert_eq!(actual_json, case.expected, "{}", case.name);
     }
     for case in fixtures.labels {
         assert_eq!(

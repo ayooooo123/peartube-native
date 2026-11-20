@@ -49,7 +49,10 @@ where
                     .get("status")
                     .and_then(Value::as_str)
                     .unwrap_or_default();
-                let status = matches!(status, "queued" | "running" | "announcing" | "done");
+                let status = matches!(
+                    status,
+                    "queued" | "copying" | "running" | "announcing" | "done"
+                );
                 let same_id =
                     id.is_some_and(|id| job.get("id").and_then(Value::as_str) == Some(id));
                 let same_sha = sha256
@@ -86,6 +89,7 @@ where
                 channel: Some(spec.channel),
                 private: false,
                 plugin: Some(spec.plugin),
+                existing: spec.existing,
             })
             .map_err(|error| MirrorError::plain(error.message()))?;
         self.changed();
@@ -194,6 +198,7 @@ pub struct Enqueue {
     pub source: SourceSpec,
     pub channel: bool,
     pub plugin: String,
+    pub existing: Option<Value>,
 }
 
 /// A plugin failure; `status` is the HTTP status `run` reports (404 for an unknown plugin).
@@ -347,7 +352,17 @@ pub trait FeedFetch: Send + Sync {
 }
 
 /// The real feed fetcher: 60 s, 8 MiB, JSON accept.
-pub struct ArtFeed;
+pub struct ArtFeed {
+    pub allow_private_urls: bool,
+}
+
+impl Default for ArtFeed {
+    fn default() -> Self {
+        Self {
+            allow_private_urls: crate::ssrf::private_urls_allowed(),
+        }
+    }
+}
 
 impl FeedFetch for ArtFeed {
     fn get(
@@ -356,6 +371,7 @@ impl FeedFetch for ArtFeed {
         headers: Vec<(String, String)>,
     ) -> Pin<Box<dyn Future<Output = Result<art::HttpResponse, art::HttpError>> + Send>> {
         let url = url.to_owned();
+        let allow_private = self.allow_private_urls;
         Box::pin(async move {
             let mut all = vec![("accept".to_owned(), "application/json".to_owned())];
             all.extend(headers);
@@ -365,6 +381,7 @@ impl FeedFetch for ArtFeed {
                     headers: all,
                     timeout: Duration::from_millis(60_000),
                     max_bytes: Some(8 * 1024 * 1024),
+                    allow_private,
                     ..art::SendOptions::default()
                 },
             )
@@ -859,6 +876,7 @@ where
                 },
                 channel,
                 plugin: self.name().to_owned(),
+                existing: None,
             })?;
             Ok(json!({"queued": true, "job": job}))
         })
@@ -881,7 +899,7 @@ where
         };
         json!({
             "totalJobs": list.len(),
-            "activeJobs": count(&["queued", "running", "announcing"]),
+            "activeJobs": count(&["queued", "copying", "running", "announcing"]),
             "doneJobs": count(&["done"]),
         })
     }
@@ -1040,21 +1058,26 @@ where
     }
 
     fn description(&self) -> &str {
-        "Ingests media files dropped into a local folder (PEARTUBE_WATCH_DIR) once, tracking fingerprints in mirror-watch.json"
+        "Ingests media files dropped into the import folder (PEARTUBE_WATCH_DIR) once, tracking fingerprints in mirror-watch.json"
     }
 
     fn run<'a>(
         &'a self,
-        payload: Value,
+        _payload: Value,
         ctx: &'a Ctx<N>,
     ) -> Pin<Box<dyn Future<Output = Result<Value, MirrorError>> + Send + 'a>> {
         Box::pin(async move {
-            let dir = payload
-                .get("dir")
-                .and_then(Value::as_str)
-                .map(str::to_owned)
-                .or_else(|| self.state.watch_dir.lock().expect("watch dir").clone());
-            self.state.scan(dir.as_deref(), ctx).await
+            let dir = self.state.watch_dir.lock().expect("watch dir").clone();
+            match dir {
+                Some(dir) => self.state.scan(Some(&dir), ctx).await,
+                None => Ok(json!({
+                    "skipped": true,
+                    "reason": "watch_dir_not_configured",
+                    "scanned": 0,
+                    "ingested": 0,
+                    "items": []
+                })),
+            }
         })
     }
 
@@ -1097,6 +1120,7 @@ impl FeedMirrorPlugin {
         let mut enqueued = 0u64;
         let mut skipped = 0u64;
         let mut jobs = Vec::new();
+        let mut by_sha: Option<std::collections::HashMap<String, crate::node::api::Entry>> = None;
         for item in items {
             if !item.is_object() {
                 continue;
@@ -1151,6 +1175,46 @@ impl FeedMirrorPlugin {
                 .and_then(Value::as_str)
                 .unwrap_or(&id)
                 .to_owned();
+            let existing = if let Some(sha) = &sha256 {
+                if by_sha.is_none() {
+                    let mut map = std::collections::HashMap::new();
+                    for entry in ctx
+                        .node
+                        .search(None, SearchOptions::default())
+                        .await
+                        .map_err(|e| MirrorError::plain(e.to_string()))?
+                    {
+                        if !entry.sha256.is_empty()
+                            && !entry.private_entry
+                            && !entry.locked
+                            && entry.epoch == 0
+                        {
+                            map.insert(entry.sha256.clone(), entry);
+                        }
+                    }
+                    by_sha = Some(map);
+                }
+                let candidate = by_sha.as_ref().and_then(|m| m.get(sha)).cloned();
+                if let Some(entry) = candidate {
+                    let op = ctx.node.find_entry(&entry.key).await.ok().flatten();
+                    op.filter(|op| {
+                        op.get("blobs").is_some_and(|v| !v.is_null())
+                            && op.get("blob").is_some_and(|v| !v.is_null())
+                            && op.get("wrappedKey").is_none_or(Value::is_null)
+                            && op.get("epoch").and_then(Value::as_u64).unwrap_or(0) == 0
+                    })
+                    .map(|mut op| {
+                        if let Some(map) = op.as_object_mut() {
+                            map.insert("key".into(), json!(entry.key));
+                        }
+                        op
+                    })
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
             let job = ctx.enqueue(Enqueue {
                 id,
                 title,
@@ -1162,6 +1226,7 @@ impl FeedMirrorPlugin {
                 },
                 channel: ctx.mirror_channel,
                 plugin: "feed-mirror".to_owned(),
+                existing,
             })?;
             enqueued += 1;
             jobs.push(job);
@@ -1269,7 +1334,6 @@ pub struct MirrorHost<N: Node> {
     stats: Arc<Mutex<std::collections::HashMap<String, Stats>>>,
     acquirer: Option<Acquirer<N>>,
     watch_state: Arc<WatchState>,
-    watch_dir: Arc<Mutex<Option<String>>>,
     feeds: Arc<Mutex<Vec<String>>>,
     rechunk_progress: Arc<Mutex<Value>>,
     closed: Arc<AtomicBool>,
@@ -1307,7 +1371,6 @@ where
             files: files.clone(),
             now_ms: opts.now_ms.clone(),
         });
-        let watch_dir = Arc::new(Mutex::new(opts.watch_dir.clone()));
         let feeds = Arc::new(Mutex::new(opts.feeds.clone()));
         let rechunk_progress = Arc::new(Mutex::new(json!({
             "running": false,
@@ -1335,7 +1398,6 @@ where
             stats: Arc::new(Mutex::new(std::collections::HashMap::new())),
             acquirer: acquirer.clone(),
             watch_state,
-            watch_dir,
             feeds,
             rechunk_progress,
             closed,
@@ -1610,19 +1672,10 @@ where
             .collect()
     }
 
-    /// `configure`: the watch folder and followed feeds take effect without a restart.
+    /// `configure`: followed feeds take effect without a restart. The import folder is fixed at start.
     ///
     /// `replicate*` keys go to `crate::replicate::Replicator::configure`.
-    pub fn configure(&self, watch_dir: Option<Option<String>>, feeds: Option<Vec<String>>) {
-        if let Some(dir) = watch_dir
-            && dir != *self.watch_dir.lock().expect("watch dir")
-        {
-            *self.watch_dir.lock().expect("watch dir") = dir.clone();
-            if let Some(dir) = dir {
-                self.ctx.files.mkdirs(&dir);
-                self.spawn_run("watch-dir", Value::Null);
-            }
-        }
+    pub fn configure(&self, feeds: Option<Vec<String>>) {
         if let Some(next) = feeds {
             let added: Vec<String> = {
                 let mut configured = self.feeds.lock().expect("feeds");

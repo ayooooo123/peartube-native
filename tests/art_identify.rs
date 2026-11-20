@@ -493,6 +493,7 @@ async fn sends_match() {
             timeout: Duration::from_millis(timeout),
             max_bytes: case["maxBytes"].as_u64(),
             redirects: 0,
+            allow_private: true,
         };
         let name = case["name"].as_str().unwrap_or_default();
         match art::send(url.as_str().expect("url"), options).await {
@@ -534,6 +535,7 @@ async fn a_reply_over_max_bytes_is_refused() {
         &format!("{}/big", server.base),
         SendOptions {
             max_bytes: Some(10),
+            allow_private: true,
             ..Default::default()
         },
     )
@@ -566,7 +568,7 @@ async fn cinemeta_searches_match() {
         let title = case["title"].as_str().unwrap_or_default();
         let year = case["year"].as_u64().map(|year| year as u32);
         let season = case["season"].as_u64().map(|season| season as u32);
-        let found = identify::cinemeta_search(&base, title, year, season)
+        let found = identify::cinemeta_search_with(&base, title, year, season, true)
             .await
             .expect("search");
         same_json(
@@ -591,9 +593,9 @@ async fn metadata_lookups_match() {
         for step in case["steps"].as_array().expect("steps") {
             let server = serve(step["routes"].clone()).await;
             let actual = json!({
-                "meta": art::meta_for(&server.base, imdb).await,
-                "poster": art::poster_url(&server.base, imdb).await,
-                "backdrop": art::backdrop_url(&server.base, imdb).await,
+                "meta": art::meta_for_with(&server.base, imdb, true).await,
+                "poster": art::poster_url_with(&server.base, imdb, true).await,
+                "backdrop": art::backdrop_url_with(&server.base, imdb, true).await,
                 "requests": seen_json(&server.seen.lock().expect("seen")),
             });
             let expected = json!({
@@ -649,6 +651,7 @@ async fn probes_match() {
             ubit: fake
                 .as_ref()
                 .map_or_else(|| "/nonexistent/ubit".to_owned(), FakeUbit::program),
+            allow_private: true,
             ..Default::default()
         };
         let name = case["name"].as_str().unwrap_or_default();
@@ -693,6 +696,7 @@ async fn identify_matches() {
             ubit: fake
                 .as_ref()
                 .map_or_else(|| "/nonexistent/ubit".to_owned(), FakeUbit::program),
+            allow_private: true,
         };
         let name = case["name"].as_str().unwrap_or_default();
         let found = identify::identify(url.as_str().expect("url"), &options)

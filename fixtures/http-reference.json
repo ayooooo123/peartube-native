@@ -1,5 +1,5 @@
 {
-  "host": "relay.test:8174",
+  "host": "relay.local:8174",
   "scenarios": [
     {
       "name": "node",
@@ -8,32 +8,32 @@
           "method": "GET",
           "path": "/v1/status",
           "requestHeaders": {
-            "host": "relay.test:8174"
+            "host": "relay.local:8174"
           },
           "requestBody": null,
           "status": 200,
           "headers": {
             "content-type": "application/json",
             "access-control-allow-origin": "*",
-            "access-control-allow-methods": "GET, HEAD, POST, PUT, DELETE, OPTIONS",
+            "access-control-allow-methods": "GET, HEAD, OPTIONS",
             "access-control-allow-headers": "content-type, authorization, range",
             "access-control-expose-headers": "content-length, content-range, accept-ranges, content-disposition",
             "cross-origin-resource-policy": "cross-origin"
           },
-          "body": "{\"tracker\":\"trk\",\"channel\":\"chan\",\"writer\":\"wr\",\"writable\":true,\"blobs\":\"bl\",\"blobBytes\":3,\"cachedBytes\":4,\"cacheMaxBytes\":5,\"peers\":1,\"lanPeers\":0,\"downBps\":0,\"upBps\":0,\"rxBytes\":6,\"txBytes\":7,\"routes\":{\"private\":{\"peers\":1,\"rxBytes\":6,\"txBytes\":7,\"downBps\":0,\"upBps\":0},\"public\":{\"peers\":0,\"rxBytes\":0,\"txBytes\":0,\"downBps\":0,\"upBps\":0},\"lan\":{\"peers\":0,\"rxBytes\":0,\"txBytes\":0,\"downBps\":0,\"upBps\":0}},\"inflightBlocks\":0,\"rtt\":0,\"retransmits\":0,\"sources\":[],\"reciprocity\":{\"tier\":\"leecher\",\"seededBytes\":0,\"contributingPeers\":0,\"ratio\":0,\"inflightMax\":0},\"lan\":null,\"apiUrl\":\"http://relay.test:8174\",\"tokenRequired\":false,\"settingsOpen\":true}"
+          "body": "{\"tracker\":\"trk\",\"channel\":\"chan\",\"writer\":\"wr\",\"writable\":true,\"blobs\":\"bl\",\"blobBytes\":3,\"cachedBytes\":4,\"cacheMaxBytes\":5,\"peers\":1,\"lanPeers\":0,\"downBps\":0,\"upBps\":0,\"rxBytes\":6,\"txBytes\":7,\"routes\":{\"private\":{\"peers\":1,\"rxBytes\":6,\"txBytes\":7,\"downBps\":0,\"upBps\":0},\"public\":{\"peers\":0,\"rxBytes\":0,\"txBytes\":0,\"downBps\":0,\"upBps\":0},\"lan\":{\"peers\":0,\"rxBytes\":0,\"txBytes\":0,\"downBps\":0,\"upBps\":0}},\"inflightBlocks\":0,\"rtt\":0,\"retransmits\":0,\"sources\":[],\"reciprocity\":{\"tier\":\"leecher\",\"seededBytes\":0,\"contributingPeers\":0,\"ratio\":0,\"inflightMax\":0},\"lan\":null,\"apiUrl\":\"http://relay.local:8174\",\"tokenRequired\":false,\"settingsOpen\":true}"
         },
         {
           "method": "GET",
           "path": "/nope",
           "requestHeaders": {
-            "host": "relay.test:8174"
+            "host": "relay.local:8174"
           },
           "requestBody": null,
           "status": 404,
           "headers": {
             "content-type": "application/json",
             "access-control-allow-origin": "*",
-            "access-control-allow-methods": "GET, HEAD, POST, PUT, DELETE, OPTIONS",
+            "access-control-allow-methods": "GET, HEAD, OPTIONS",
             "access-control-allow-headers": "content-type, authorization, range",
             "access-control-expose-headers": "content-length, content-range, accept-ranges, content-disposition",
             "cross-origin-resource-policy": "cross-origin"
@@ -44,16 +44,12 @@
           "method": "POST",
           "path": "/v1/entries/remove",
           "requestHeaders": {
-            "host": "relay.test:8174"
+            "host": "relay.local:8174"
           },
           "requestBody": "{\"key\":\"abc\"}",
           "status": 200,
           "headers": {
             "content-type": "application/json",
-            "access-control-allow-origin": "*",
-            "access-control-allow-methods": "GET, HEAD, POST, PUT, DELETE, OPTIONS",
-            "access-control-allow-headers": "content-type, authorization, range",
-            "access-control-expose-headers": "content-length, content-range, accept-ranges, content-disposition",
             "cross-origin-resource-policy": "cross-origin"
           },
           "body": "{\"removed\":true,\"key\":\"abc\"}"
@@ -62,16 +58,12 @@
           "method": "POST",
           "path": "/v1/entries/remove",
           "requestHeaders": {
-            "host": "relay.test:8174"
+            "host": "relay.local:8174"
           },
           "requestBody": "{\"key\":\"  \"}",
           "status": 400,
           "headers": {
             "content-type": "application/json",
-            "access-control-allow-origin": "*",
-            "access-control-allow-methods": "GET, HEAD, POST, PUT, DELETE, OPTIONS",
-            "access-control-allow-headers": "content-type, authorization, range",
-            "access-control-expose-headers": "content-length, content-range, accept-ranges, content-disposition",
             "cross-origin-resource-policy": "cross-origin"
           },
           "body": "{\"error\":\"key is required\"}"
@@ -80,17 +72,13 @@
           "method": "POST",
           "path": "/v1/entries/remove",
           "requestHeaders": {
-            "host": "relay.test:8174",
+            "host": "relay.local:8174",
             "content-type": "application/json"
           },
           "requestBody": "{oops",
           "status": 400,
           "headers": {
             "content-type": "application/json",
-            "access-control-allow-origin": "*",
-            "access-control-allow-methods": "GET, HEAD, POST, PUT, DELETE, OPTIONS",
-            "access-control-allow-headers": "content-type, authorization, range",
-            "access-control-expose-headers": "content-length, content-range, accept-ranges, content-disposition",
             "cross-origin-resource-policy": "cross-origin"
           },
           "body": "{\"error\":\"Body must be JSON\"}"
@@ -99,14 +87,14 @@
           "method": "GET",
           "path": "/v1/search",
           "requestHeaders": {
-            "host": "relay.test:8174"
+            "host": "relay.local:8174"
           },
           "requestBody": null,
           "status": 400,
           "headers": {
             "content-type": "application/json",
             "access-control-allow-origin": "*",
-            "access-control-allow-methods": "GET, HEAD, POST, PUT, DELETE, OPTIONS",
+            "access-control-allow-methods": "GET, HEAD, OPTIONS",
             "access-control-allow-headers": "content-type, authorization, range",
             "access-control-expose-headers": "content-length, content-range, accept-ranges, content-disposition",
             "cross-origin-resource-policy": "cross-origin"
@@ -117,50 +105,50 @@
           "method": "GET",
           "path": "/v1/search?id=imdb:tt1234567&limit=5&offset=2",
           "requestHeaders": {
-            "host": "relay.test:8174"
+            "host": "relay.local:8174"
           },
           "requestBody": null,
           "status": 200,
           "headers": {
             "content-type": "application/json",
             "access-control-allow-origin": "*",
-            "access-control-allow-methods": "GET, HEAD, POST, PUT, DELETE, OPTIONS",
+            "access-control-allow-methods": "GET, HEAD, OPTIONS",
             "access-control-allow-headers": "content-type, authorization, range",
             "access-control-expose-headers": "content-length, content-range, accept-ranges, content-disposition",
             "cross-origin-resource-policy": "cross-origin"
           },
-          "body": "{\"results\":[{\"key\":\"k1\",\"id\":\"imdb:tt1234567\",\"title\":\"Film\",\"size\":10485760,\"sha256\":\"h\",\"local\":false,\"cachedBytes\":0,\"private\":false,\"epoch\":0,\"locked\":false,\"source\":\"source-key-1\",\"sourceKind\":\"channel\",\"season\":null,\"episode\":null,\"seriesKey\":\"film\",\"baseTitle\":\"Film\",\"year\":\"2019\",\"streamUrl\":\"http://relay.test:8174/v1/blob?key=aaa&blob=bbb&type=video%2Fmp4\",\"magnetUrl\":\"pear://watch/film\"}]}"
+          "body": "{\"results\":[{\"key\":\"k1\",\"id\":\"imdb:tt1234567\",\"title\":\"Film\",\"size\":10485760,\"sha256\":\"h\",\"local\":false,\"cachedBytes\":0,\"private\":false,\"epoch\":0,\"locked\":false,\"source\":\"source-key-1\",\"sourceKind\":\"channel\",\"season\":null,\"episode\":null,\"seriesKey\":\"film\",\"baseTitle\":\"Film\",\"year\":\"2019\",\"streamUrl\":\"http://relay.local:8174/v1/blob?key=aaa&blob=bbb&type=video%2Fmp4\",\"magnetUrl\":\"pear://watch/film\"}]}"
         },
         {
           "method": "GET",
           "path": "/v1/entries?source=source-key-1&q=film",
           "requestHeaders": {
-            "host": "relay.test:8174"
+            "host": "relay.local:8174"
           },
           "requestBody": null,
           "status": 200,
           "headers": {
             "content-type": "application/json",
             "access-control-allow-origin": "*",
-            "access-control-allow-methods": "GET, HEAD, POST, PUT, DELETE, OPTIONS",
+            "access-control-allow-methods": "GET, HEAD, OPTIONS",
             "access-control-allow-headers": "content-type, authorization, range",
             "access-control-expose-headers": "content-length, content-range, accept-ranges, content-disposition",
             "cross-origin-resource-policy": "cross-origin"
           },
-          "body": "{\"results\":[{\"key\":\"k1\",\"id\":\"imdb:tt1234567\",\"title\":\"Film\",\"size\":10485760,\"sha256\":\"h\",\"local\":false,\"cachedBytes\":0,\"private\":false,\"epoch\":0,\"locked\":false,\"source\":\"source-key-1\",\"sourceKind\":\"channel\",\"season\":null,\"episode\":null,\"seriesKey\":\"film\",\"baseTitle\":\"Film\",\"year\":\"2019\",\"streamUrl\":\"http://relay.test:8174/v1/blob?key=aaa&blob=bbb&type=video%2Fmp4\",\"magnetUrl\":\"pear://watch/film\"},{\"key\":\"k2\",\"id\":\"imdb:tt7654321:s01e02\",\"title\":\"Show\",\"size\":10485760,\"sha256\":\"h\",\"local\":true,\"cachedBytes\":0,\"private\":false,\"epoch\":0,\"locked\":false,\"source\":\"source-key-2\",\"sourceKind\":\"followed\",\"season\":1,\"episode\":2,\"seriesKey\":\"show\",\"baseTitle\":\"Show\",\"year\":null,\"streamUrl\":\"http://relay.test:8174/v1/blob?key=aaa&blob=bbb&type=video%2Fmp4\",\"magnetUrl\":\"pear://watch/film\"}]}"
+          "body": "{\"results\":[{\"key\":\"k1\",\"id\":\"imdb:tt1234567\",\"title\":\"Film\",\"size\":10485760,\"sha256\":\"h\",\"local\":false,\"cachedBytes\":0,\"private\":false,\"epoch\":0,\"locked\":false,\"source\":\"source-key-1\",\"sourceKind\":\"channel\",\"season\":null,\"episode\":null,\"seriesKey\":\"film\",\"baseTitle\":\"Film\",\"year\":\"2019\",\"streamUrl\":\"http://relay.local:8174/v1/blob?key=aaa&blob=bbb&type=video%2Fmp4\",\"magnetUrl\":\"pear://watch/film\"},{\"key\":\"k2\",\"id\":\"imdb:tt7654321:s01e02\",\"title\":\"Show\",\"size\":10485760,\"sha256\":\"h\",\"local\":true,\"cachedBytes\":0,\"private\":false,\"epoch\":0,\"locked\":false,\"source\":\"source-key-2\",\"sourceKind\":\"followed\",\"season\":1,\"episode\":2,\"seriesKey\":\"show\",\"baseTitle\":\"Show\",\"year\":null,\"streamUrl\":\"http://relay.local:8174/v1/blob?key=aaa&blob=bbb&type=video%2Fmp4\",\"magnetUrl\":\"pear://watch/film\"}]}"
         },
         {
           "method": "GET",
           "path": "/v1/sources",
           "requestHeaders": {
-            "host": "relay.test:8174"
+            "host": "relay.local:8174"
           },
           "requestBody": null,
           "status": 200,
           "headers": {
             "content-type": "application/json",
             "access-control-allow-origin": "*",
-            "access-control-allow-methods": "GET, HEAD, POST, PUT, DELETE, OPTIONS",
+            "access-control-allow-methods": "GET, HEAD, OPTIONS",
             "access-control-allow-headers": "content-type, authorization, range",
             "access-control-expose-headers": "content-length, content-range, accept-ranges, content-disposition",
             "cross-origin-resource-policy": "cross-origin"
@@ -171,16 +159,12 @@
           "method": "POST",
           "path": "/v1/sources",
           "requestHeaders": {
-            "host": "relay.test:8174"
+            "host": "relay.local:8174"
           },
           "requestBody": "{\"uri\":\"pear://channel/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"}",
           "status": 200,
           "headers": {
             "content-type": "application/json",
-            "access-control-allow-origin": "*",
-            "access-control-allow-methods": "GET, HEAD, POST, PUT, DELETE, OPTIONS",
-            "access-control-allow-headers": "content-type, authorization, range",
-            "access-control-expose-headers": "content-length, content-range, accept-ranges, content-disposition",
             "cross-origin-resource-policy": "cross-origin"
           },
           "body": "{\"source\":{\"key\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"kind\":\"channel\",\"alias\":\"\",\"primary\":true,\"writable\":true},\"sources\":[{\"key\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"kind\":\"channel\",\"alias\":\"home\",\"primary\":true,\"writable\":true}]}"
@@ -189,16 +173,12 @@
           "method": "DELETE",
           "path": "/v1/sources/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
           "requestHeaders": {
-            "host": "relay.test:8174"
+            "host": "relay.local:8174"
           },
           "requestBody": null,
           "status": 200,
           "headers": {
             "content-type": "application/json",
-            "access-control-allow-origin": "*",
-            "access-control-allow-methods": "GET, HEAD, POST, PUT, DELETE, OPTIONS",
-            "access-control-allow-headers": "content-type, authorization, range",
-            "access-control-expose-headers": "content-length, content-range, accept-ranges, content-disposition",
             "cross-origin-resource-policy": "cross-origin"
           },
           "body": "{\"removed\":true,\"sources\":[{\"key\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"kind\":\"channel\",\"alias\":\"home\",\"primary\":true,\"writable\":true}]}"
@@ -207,16 +187,12 @@
           "method": "POST",
           "path": "/v1/channel/publish",
           "requestHeaders": {
-            "host": "relay.test:8174"
+            "host": "relay.local:8174"
           },
           "requestBody": "{\"type\":\"source\",\"sourceKey\":\"ABCDEF\",\"title\":\"T\"}",
           "status": 200,
           "headers": {
             "content-type": "application/json",
-            "access-control-allow-origin": "*",
-            "access-control-allow-methods": "GET, HEAD, POST, PUT, DELETE, OPTIONS",
-            "access-control-allow-headers": "content-type, authorization, range",
-            "access-control-expose-headers": "content-length, content-range, accept-ranges, content-disposition",
             "cross-origin-resource-policy": "cross-origin"
           },
           "body": "{\"type\":\"source\",\"sourceKey\":\"abcdef\",\"kind\":\"channel\",\"title\":\"T\"}"
@@ -225,16 +201,12 @@
           "method": "POST",
           "path": "/v1/channel/publish",
           "requestHeaders": {
-            "host": "relay.test:8174"
+            "host": "relay.local:8174"
           },
           "requestBody": "{\"id\":\"imdb:tt1234567\"}",
           "status": 200,
           "headers": {
             "content-type": "application/json",
-            "access-control-allow-origin": "*",
-            "access-control-allow-methods": "GET, HEAD, POST, PUT, DELETE, OPTIONS",
-            "access-control-allow-headers": "content-type, authorization, range",
-            "access-control-expose-headers": "content-length, content-range, accept-ranges, content-disposition",
             "cross-origin-resource-policy": "cross-origin"
           },
           "body": "{\"type\":\"announce\",\"id\":\"imdb:tt1234567\",\"title\":\"Film\",\"size\":3,\"sha256\":\"h\",\"blobs\":\"bl\",\"blob\":{\"blockOffset\":0,\"blockLength\":1,\"byteOffset\":0,\"byteLength\":3},\"key\":\"k1\",\"channel\":\"chan\",\"streamUrl\":\"http://127.0.0.1:9/?key=aaa&blob=bbb&type=video%2Fmp4\",\"magnetUrl\":\"pear://watch/film\"}"
@@ -243,16 +215,12 @@
           "method": "DELETE",
           "path": "/v1/channel/sources/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
           "requestHeaders": {
-            "host": "relay.test:8174"
+            "host": "relay.local:8174"
           },
           "requestBody": null,
           "status": 200,
           "headers": {
             "content-type": "application/json",
-            "access-control-allow-origin": "*",
-            "access-control-allow-methods": "GET, HEAD, POST, PUT, DELETE, OPTIONS",
-            "access-control-allow-headers": "content-type, authorization, range",
-            "access-control-expose-headers": "content-length, content-range, accept-ranges, content-disposition",
             "cross-origin-resource-policy": "cross-origin"
           },
           "body": "{\"unpublished\":true,\"key\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"}"
@@ -261,52 +229,44 @@
           "method": "POST",
           "path": "/v1/open",
           "requestHeaders": {
-            "host": "relay.test:8174"
+            "host": "relay.local:8174"
           },
-          "requestBody": "{\"uri\":\"pear://watch/film\"}",
-          "status": 400,
+          "requestBody": "{\"uri\":\"peartube://watch/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:0:1:0:3?id=imdb%3Att1234567&title=Film\"}",
+          "status": 200,
           "headers": {
             "content-type": "application/json",
-            "access-control-allow-origin": "*",
-            "access-control-allow-methods": "GET, HEAD, POST, PUT, DELETE, OPTIONS",
-            "access-control-allow-headers": "content-type, authorization, range",
-            "access-control-expose-headers": "content-length, content-range, accept-ranges, content-disposition",
             "cross-origin-resource-policy": "cross-origin"
           },
-          "body": "{\"error\":\"Invalid PearTube URI or 64-hex key\"}"
+          "body": "{\"action\":\"watch\",\"entry\":{\"key\":\"k1\",\"id\":\"imdb:tt1234567\",\"title\":\"Film\",\"size\":10485760,\"sha256\":\"h\",\"local\":false,\"cachedBytes\":0,\"private\":false,\"epoch\":0,\"locked\":false,\"source\":\"source-key-1\",\"sourceKind\":\"channel\",\"season\":null,\"episode\":null,\"seriesKey\":\"film\",\"baseTitle\":\"Film\",\"year\":\"2019\",\"streamUrl\":\"http://127.0.0.1:9/?key=aaa&blob=bbb&type=video%2Fmp4\",\"magnetUrl\":\"pear://watch/film\"}}"
         },
         {
           "method": "GET",
-          "path": "/v1/resolve?uri=pear://watch/film",
+          "path": "/v1/resolve?uri=peartube%3A%2F%2Fwatch%2Faaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa%3A0%3A1%3A0%3A3%3Fid%3Dimdb%253Att1234567%26title%3DFilm",
           "requestHeaders": {
-            "host": "relay.test:8174"
+            "host": "relay.local:8174"
           },
           "requestBody": null,
-          "status": 400,
+          "status": 200,
           "headers": {
             "content-type": "application/json",
             "access-control-allow-origin": "*",
-            "access-control-allow-methods": "GET, HEAD, POST, PUT, DELETE, OPTIONS",
+            "access-control-allow-methods": "GET, HEAD, OPTIONS",
             "access-control-allow-headers": "content-type, authorization, range",
             "access-control-expose-headers": "content-length, content-range, accept-ranges, content-disposition",
             "cross-origin-resource-policy": "cross-origin"
           },
-          "body": "{\"error\":\"Invalid PearTube URI or 64-hex key\"}"
+          "body": "{\"action\":\"watch\",\"sourceKey\":null,\"sourceKind\":\"channel\",\"entry\":{\"type\":\"announce\",\"id\":\"imdb:tt1234567\",\"title\":\"Film\",\"size\":3,\"sha256\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"blobs\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"blob\":{\"blockOffset\":0,\"blockLength\":1,\"byteOffset\":0,\"byteLength\":3}}}"
         },
         {
           "method": "POST",
           "path": "/v1/cache/clear",
           "requestHeaders": {
-            "host": "relay.test:8174"
+            "host": "relay.local:8174"
           },
           "requestBody": "{}",
           "status": 200,
           "headers": {
             "content-type": "application/json",
-            "access-control-allow-origin": "*",
-            "access-control-allow-methods": "GET, HEAD, POST, PUT, DELETE, OPTIONS",
-            "access-control-allow-headers": "content-type, authorization, range",
-            "access-control-expose-headers": "content-length, content-range, accept-ranges, content-disposition",
             "cross-origin-resource-policy": "cross-origin"
           },
           "body": "{\"clearedBytes\":1,\"reclaimedBytes\":2}"
@@ -315,16 +275,12 @@
           "method": "POST",
           "path": "/v1/acquire",
           "requestHeaders": {
-            "host": "relay.test:8174"
+            "host": "relay.local:8174"
           },
           "requestBody": "{\"id\":\"i\",\"title\":\"t\",\"source\":\"s\",\"channel\":\"c\"}",
           "status": 200,
           "headers": {
             "content-type": "application/json",
-            "access-control-allow-origin": "*",
-            "access-control-allow-methods": "GET, HEAD, POST, PUT, DELETE, OPTIONS",
-            "access-control-allow-headers": "content-type, authorization, range",
-            "access-control-expose-headers": "content-length, content-range, accept-ranges, content-disposition",
             "cross-origin-resource-policy": "cross-origin"
           },
           "body": "{\"jobId\":\"job-1\",\"id\":\"i\",\"title\":\"t\"}"
@@ -333,14 +289,14 @@
           "method": "GET",
           "path": "/v1/jobs",
           "requestHeaders": {
-            "host": "relay.test:8174"
+            "host": "relay.local:8174"
           },
           "requestBody": null,
           "status": 200,
           "headers": {
             "content-type": "application/json",
             "access-control-allow-origin": "*",
-            "access-control-allow-methods": "GET, HEAD, POST, PUT, DELETE, OPTIONS",
+            "access-control-allow-methods": "GET, HEAD, OPTIONS",
             "access-control-allow-headers": "content-type, authorization, range",
             "access-control-expose-headers": "content-length, content-range, accept-ranges, content-disposition",
             "cross-origin-resource-policy": "cross-origin"
@@ -351,14 +307,14 @@
           "method": "GET",
           "path": "/v1/jobs/0123456789abcdef0123456789abcdef0123",
           "requestHeaders": {
-            "host": "relay.test:8174"
+            "host": "relay.local:8174"
           },
           "requestBody": null,
           "status": 200,
           "headers": {
             "content-type": "application/json",
             "access-control-allow-origin": "*",
-            "access-control-allow-methods": "GET, HEAD, POST, PUT, DELETE, OPTIONS",
+            "access-control-allow-methods": "GET, HEAD, OPTIONS",
             "access-control-allow-headers": "content-type, authorization, range",
             "access-control-expose-headers": "content-length, content-range, accept-ranges, content-disposition",
             "cross-origin-resource-policy": "cross-origin"
@@ -369,16 +325,12 @@
           "method": "DELETE",
           "path": "/v1/jobs/0123456789abcdef0123456789abcdef0123",
           "requestHeaders": {
-            "host": "relay.test:8174"
+            "host": "relay.local:8174"
           },
           "requestBody": null,
           "status": 200,
           "headers": {
             "content-type": "application/json",
-            "access-control-allow-origin": "*",
-            "access-control-allow-methods": "GET, HEAD, POST, PUT, DELETE, OPTIONS",
-            "access-control-allow-headers": "content-type, authorization, range",
-            "access-control-expose-headers": "content-length, content-range, accept-ranges, content-disposition",
             "cross-origin-resource-policy": "cross-origin"
           },
           "body": "{\"jobId\":\"0123456789abcdef0123456789abcdef0123\",\"state\":\"cancelled\"}"
@@ -387,14 +339,14 @@
           "method": "GET",
           "path": "/v1/plugins",
           "requestHeaders": {
-            "host": "relay.test:8174"
+            "host": "relay.local:8174"
           },
           "requestBody": null,
           "status": 200,
           "headers": {
             "content-type": "application/json",
             "access-control-allow-origin": "*",
-            "access-control-allow-methods": "GET, HEAD, POST, PUT, DELETE, OPTIONS",
+            "access-control-allow-methods": "GET, HEAD, OPTIONS",
             "access-control-allow-headers": "content-type, authorization, range",
             "access-control-expose-headers": "content-length, content-range, accept-ranges, content-disposition",
             "cross-origin-resource-policy": "cross-origin"
@@ -405,16 +357,12 @@
           "method": "POST",
           "path": "/v1/plugins/http-acquire/run",
           "requestHeaders": {
-            "host": "relay.test:8174"
+            "host": "relay.local:8174"
           },
           "requestBody": "{\"url\":\"http://x\"}",
           "status": 200,
           "headers": {
             "content-type": "application/json",
-            "access-control-allow-origin": "*",
-            "access-control-allow-methods": "GET, HEAD, POST, PUT, DELETE, OPTIONS",
-            "access-control-allow-headers": "content-type, authorization, range",
-            "access-control-expose-headers": "content-length, content-range, accept-ranges, content-disposition",
             "cross-origin-resource-policy": "cross-origin"
           },
           "body": "{\"plugin\":\"http-acquire\",\"payload\":{\"url\":\"http://x\"}}"
@@ -423,16 +371,12 @@
           "method": "POST",
           "path": "/v1/mirror",
           "requestHeaders": {
-            "host": "relay.test:8174"
+            "host": "relay.local:8174"
           },
           "requestBody": "{}",
           "status": 200,
           "headers": {
             "content-type": "application/json",
-            "access-control-allow-origin": "*",
-            "access-control-allow-methods": "GET, HEAD, POST, PUT, DELETE, OPTIONS",
-            "access-control-allow-headers": "content-type, authorization, range",
-            "access-control-expose-headers": "content-length, content-range, accept-ranges, content-disposition",
             "cross-origin-resource-policy": "cross-origin"
           },
           "body": "{\"plugin\":\"http-acquire\",\"payload\":{}}"
@@ -441,14 +385,14 @@
           "method": "GET",
           "path": "/manifest.json",
           "requestHeaders": {
-            "host": "relay.test:8174"
+            "host": "relay.local:8174"
           },
           "requestBody": null,
           "status": 200,
           "headers": {
             "content-type": "application/json",
             "access-control-allow-origin": "*",
-            "access-control-allow-methods": "GET, HEAD, POST, PUT, DELETE, OPTIONS",
+            "access-control-allow-methods": "GET, HEAD, OPTIONS",
             "access-control-allow-headers": "content-type, authorization, range",
             "access-control-expose-headers": "content-length, content-range, accept-ranges, content-disposition",
             "cross-origin-resource-policy": "cross-origin"
@@ -459,43 +403,43 @@
           "method": "GET",
           "path": "/catalog/movie/peartube-movies.json",
           "requestHeaders": {
-            "host": "relay.test:8174"
+            "host": "relay.local:8174"
           },
           "requestBody": null,
           "status": 200,
           "headers": {
             "content-type": "application/json",
             "access-control-allow-origin": "*",
-            "access-control-allow-methods": "GET, HEAD, POST, PUT, DELETE, OPTIONS",
+            "access-control-allow-methods": "GET, HEAD, OPTIONS",
             "access-control-allow-headers": "content-type, authorization, range",
             "access-control-expose-headers": "content-length, content-range, accept-ranges, content-disposition",
             "cross-origin-resource-policy": "cross-origin"
           },
-          "body": "{\"metas\":[{\"id\":\"tt1234567\",\"type\":\"movie\",\"name\":\"Film\",\"poster\":\"http://relay.test:8174/v1/poster/tt1234567\"}]}"
+          "body": "{\"metas\":[{\"id\":\"tt1234567\",\"type\":\"movie\",\"name\":\"Film\",\"poster\":\"http://relay.local:8174/v1/poster/tt1234567\"}]}"
         },
         {
           "method": "GET",
           "path": "/catalog/series/peartube-series.json",
           "requestHeaders": {
-            "host": "relay.test:8174"
+            "host": "relay.local:8174"
           },
           "requestBody": null,
           "status": 200,
           "headers": {
             "content-type": "application/json",
             "access-control-allow-origin": "*",
-            "access-control-allow-methods": "GET, HEAD, POST, PUT, DELETE, OPTIONS",
+            "access-control-allow-methods": "GET, HEAD, OPTIONS",
             "access-control-allow-headers": "content-type, authorization, range",
             "access-control-expose-headers": "content-length, content-range, accept-ranges, content-disposition",
             "cross-origin-resource-policy": "cross-origin"
           },
-          "body": "{\"metas\":[{\"id\":\"tt7654321\",\"type\":\"series\",\"name\":\"Show\",\"poster\":\"http://relay.test:8174/v1/poster/tt7654321\"}]}"
+          "body": "{\"metas\":[{\"id\":\"tt7654321\",\"type\":\"series\",\"name\":\"Show\",\"poster\":\"http://relay.local:8174/v1/poster/tt7654321\"}]}"
         },
         {
           "method": "GET",
           "path": "/catalog/movie/peartube-movies.json",
           "requestHeaders": {
-            "host": "relay.test:8174",
+            "host": "relay.local:8174",
             "x-forwarded-proto": "https"
           },
           "requestBody": null,
@@ -503,72 +447,72 @@
           "headers": {
             "content-type": "application/json",
             "access-control-allow-origin": "*",
-            "access-control-allow-methods": "GET, HEAD, POST, PUT, DELETE, OPTIONS",
+            "access-control-allow-methods": "GET, HEAD, OPTIONS",
             "access-control-allow-headers": "content-type, authorization, range",
             "access-control-expose-headers": "content-length, content-range, accept-ranges, content-disposition",
             "cross-origin-resource-policy": "cross-origin"
           },
-          "body": "{\"metas\":[{\"id\":\"tt1234567\",\"type\":\"movie\",\"name\":\"Film\",\"poster\":\"https://relay.test:8174/v1/poster/tt1234567\"}]}"
+          "body": "{\"metas\":[{\"id\":\"tt1234567\",\"type\":\"movie\",\"name\":\"Film\",\"poster\":\"https://relay.local:8174/v1/poster/tt1234567\"}]}"
         },
         {
           "method": "GET",
           "path": "/stream/movie/tt1234567.json",
           "requestHeaders": {
-            "host": "relay.test:8174"
+            "host": "relay.local:8174"
           },
           "requestBody": null,
           "status": 200,
           "headers": {
             "content-type": "application/json",
             "access-control-allow-origin": "*",
-            "access-control-allow-methods": "GET, HEAD, POST, PUT, DELETE, OPTIONS",
+            "access-control-allow-methods": "GET, HEAD, OPTIONS",
             "access-control-allow-headers": "content-type, authorization, range",
             "access-control-expose-headers": "content-length, content-range, accept-ranges, content-disposition",
             "cross-origin-resource-policy": "cross-origin"
           },
-          "body": "{\"streams\":[{\"name\":\"PearTube (channel)\",\"title\":\"Film\\n10.0 MB · source-k…\",\"url\":\"http://relay.test:8174/v1/blob?key=aaa&blob=bbb&type=video%2Fmp4\",\"behaviorHints\":{\"bingeGroup\":\"peartube-source-key-1\",\"notWebReady\":true,\"videoSize\":10485760}}]}"
+          "body": "{\"streams\":[{\"name\":\"PearTube (channel)\",\"title\":\"Film\\n10.0 MB · source-k…\",\"url\":\"http://relay.local:8174/v1/blob?key=aaa&blob=bbb&type=video%2Fmp4\",\"behaviorHints\":{\"bingeGroup\":\"peartube-source-key-1\",\"notWebReady\":true,\"videoSize\":10485760}}]}"
         },
         {
           "method": "GET",
           "path": "/stream/series/tt1234567:1:2.json",
           "requestHeaders": {
-            "host": "relay.test:8174"
+            "host": "relay.local:8174"
           },
           "requestBody": null,
           "status": 200,
           "headers": {
             "content-type": "application/json",
             "access-control-allow-origin": "*",
-            "access-control-allow-methods": "GET, HEAD, POST, PUT, DELETE, OPTIONS",
+            "access-control-allow-methods": "GET, HEAD, OPTIONS",
             "access-control-allow-headers": "content-type, authorization, range",
             "access-control-expose-headers": "content-length, content-range, accept-ranges, content-disposition",
             "cross-origin-resource-policy": "cross-origin"
           },
-          "body": "{\"streams\":[{\"name\":\"PearTube (Local)\",\"title\":\"Show S01E02\\n10.0 MB · source-k…\",\"url\":\"http://relay.test:8174/v1/blob?key=aaa&blob=bbb&type=video%2Fmp4\",\"behaviorHints\":{\"bingeGroup\":\"peartube-source-key-2\",\"notWebReady\":true,\"videoSize\":10485760}}]}"
+          "body": "{\"streams\":[{\"name\":\"PearTube (Local)\",\"title\":\"Show S01E02\\n10.0 MB · source-k…\",\"url\":\"http://relay.local:8174/v1/blob?key=aaa&blob=bbb&type=video%2Fmp4\",\"behaviorHints\":{\"bingeGroup\":\"peartube-source-key-2\",\"notWebReady\":true,\"videoSize\":10485760}}]}"
         },
         {
           "method": "GET",
           "path": "/v1/playlist.m3u",
           "requestHeaders": {
-            "host": "relay.test:8174"
+            "host": "relay.local:8174"
           },
           "requestBody": null,
           "status": 200,
           "headers": {
             "content-type": "audio/x-mpegurl; charset=utf-8",
             "access-control-allow-origin": "*",
-            "access-control-allow-methods": "GET, HEAD, POST, PUT, DELETE, OPTIONS",
+            "access-control-allow-methods": "GET, HEAD, OPTIONS",
             "access-control-allow-headers": "content-type, authorization, range",
             "access-control-expose-headers": "content-length, content-range, accept-ranges, content-disposition",
             "cross-origin-resource-policy": "cross-origin"
           },
-          "body": "#EXTM3U\n#EXTINF:-1 tvg-id=\"imdb:tt1234567\" group-title=\"channel:source-k\",Film (imdb:tt1234567)\nhttp://relay.test:8174/v1/blob?key=aaa&blob=bbb&type=video%2Fmp4\n#EXTINF:-1 tvg-id=\"imdb:tt7654321:s01e02\" group-title=\"followed:source-k\",Show (imdb:tt7654321:s01e02)\nhttp://relay.test:8174/v1/blob?key=aaa&blob=bbb&type=video%2Fmp4\n"
+          "body": "#EXTM3U\n#EXTINF:-1 tvg-id=\"imdb:tt1234567\" group-title=\"channel:source-k\",Film (imdb:tt1234567)\nhttp://relay.local:8174/v1/blob?key=aaa&blob=bbb&type=video%2Fmp4\n#EXTINF:-1 tvg-id=\"imdb:tt7654321:s01e02\" group-title=\"followed:source-k\",Show (imdb:tt7654321:s01e02)\nhttp://relay.local:8174/v1/blob?key=aaa&blob=bbb&type=video%2Fmp4\n"
         },
         {
           "method": "GET",
           "path": "/v1/poster/tt1234567",
           "requestHeaders": {
-            "host": "relay.test:8174"
+            "host": "relay.local:8174"
           },
           "requestBody": null,
           "status": 302,
@@ -576,7 +520,7 @@
             "location": "https://img.test/poster.jpg",
             "cache-control": "max-age=86400",
             "access-control-allow-origin": "*",
-            "access-control-allow-methods": "GET, HEAD, POST, PUT, DELETE, OPTIONS",
+            "access-control-allow-methods": "GET, HEAD, OPTIONS",
             "access-control-allow-headers": "content-type, authorization, range",
             "access-control-expose-headers": "content-length, content-range, accept-ranges, content-disposition",
             "cross-origin-resource-policy": "cross-origin"
@@ -587,13 +531,13 @@
           "method": "GET",
           "path": "/v1/backdrop/tt1234567",
           "requestHeaders": {
-            "host": "relay.test:8174"
+            "host": "relay.local:8174"
           },
           "requestBody": null,
           "status": 404,
           "headers": {
             "access-control-allow-origin": "*",
-            "access-control-allow-methods": "GET, HEAD, POST, PUT, DELETE, OPTIONS",
+            "access-control-allow-methods": "GET, HEAD, OPTIONS",
             "access-control-allow-headers": "content-type, authorization, range",
             "access-control-expose-headers": "content-length, content-range, accept-ranges, content-disposition",
             "cross-origin-resource-policy": "cross-origin"
@@ -604,14 +548,14 @@
           "method": "GET",
           "path": "/v1/poster/nope",
           "requestHeaders": {
-            "host": "relay.test:8174"
+            "host": "relay.local:8174"
           },
           "requestBody": null,
           "status": 404,
           "headers": {
             "content-type": "application/json",
             "access-control-allow-origin": "*",
-            "access-control-allow-methods": "GET, HEAD, POST, PUT, DELETE, OPTIONS",
+            "access-control-allow-methods": "GET, HEAD, OPTIONS",
             "access-control-allow-headers": "content-type, authorization, range",
             "access-control-expose-headers": "content-length, content-range, accept-ranges, content-disposition",
             "cross-origin-resource-policy": "cross-origin"
@@ -622,13 +566,13 @@
           "method": "OPTIONS",
           "path": "/v1/status",
           "requestHeaders": {
-            "host": "relay.test:8174"
+            "host": "relay.local:8174"
           },
           "requestBody": null,
           "status": 204,
           "headers": {
             "access-control-allow-origin": "*",
-            "access-control-allow-methods": "GET, HEAD, POST, PUT, DELETE, OPTIONS",
+            "access-control-allow-methods": "GET, HEAD, OPTIONS",
             "access-control-allow-headers": "content-type, authorization, range",
             "access-control-expose-headers": "content-length, content-range, accept-ranges, content-disposition",
             "cross-origin-resource-policy": "cross-origin"
@@ -639,16 +583,12 @@
           "method": "POST",
           "path": "/v1/identify",
           "requestHeaders": {
-            "host": "relay.test:8174"
+            "host": "relay.local:8174"
           },
           "requestBody": "{\"url\":\"ftp://x\"}",
           "status": 400,
           "headers": {
             "content-type": "application/json",
-            "access-control-allow-origin": "*",
-            "access-control-allow-methods": "GET, HEAD, POST, PUT, DELETE, OPTIONS",
-            "access-control-allow-headers": "content-type, authorization, range",
-            "access-control-expose-headers": "content-length, content-range, accept-ranges, content-disposition",
             "cross-origin-resource-policy": "cross-origin"
           },
           "body": "{\"error\":\"Paste an http(s) link\"}"
@@ -657,16 +597,12 @@
           "method": "POST",
           "path": "/v1/identify",
           "requestHeaders": {
-            "host": "relay.test:8174"
+            "host": "relay.local:8174"
           },
           "requestBody": "{\"url\":\" http://x \"}",
           "status": 200,
           "headers": {
             "content-type": "application/json",
-            "access-control-allow-origin": "*",
-            "access-control-allow-methods": "GET, HEAD, POST, PUT, DELETE, OPTIONS",
-            "access-control-allow-headers": "content-type, authorization, range",
-            "access-control-expose-headers": "content-length, content-range, accept-ranges, content-disposition",
             "cross-origin-resource-policy": "cross-origin"
           },
           "body": "{\"title\":\"Identified\",\"url\":\"http://x\"}"
@@ -675,16 +611,12 @@
           "method": "GET",
           "path": "/v1/identity?reveal=1",
           "requestHeaders": {
-            "host": "relay.test:8174"
+            "host": "relay.local:8174"
           },
           "requestBody": null,
           "status": 200,
           "headers": {
             "content-type": "application/json",
-            "access-control-allow-origin": "*",
-            "access-control-allow-methods": "GET, HEAD, POST, PUT, DELETE, OPTIONS",
-            "access-control-allow-headers": "content-type, authorization, range",
-            "access-control-expose-headers": "content-length, content-range, accept-ranges, content-disposition",
             "cross-origin-resource-policy": "cross-origin"
           },
           "body": "{\"channel\":\"chan\",\"writer\":\"wr\",\"role\":\"owner\",\"writable\":true,\"mnemonicSet\":true,\"writers\":[{\"key\":\"wr\",\"role\":\"owner\",\"alias\":\"main\",\"self\":true}],\"epoch\":1,\"mnemonic\":\"a b c\"}"
@@ -693,16 +625,12 @@
           "method": "POST",
           "path": "/v1/identity/writers",
           "requestHeaders": {
-            "host": "relay.test:8174"
+            "host": "relay.local:8174"
           },
           "requestBody": "{\"writer\":\"w2\"}",
           "status": 200,
           "headers": {
             "content-type": "application/json",
-            "access-control-allow-origin": "*",
-            "access-control-allow-methods": "GET, HEAD, POST, PUT, DELETE, OPTIONS",
-            "access-control-allow-headers": "content-type, authorization, range",
-            "access-control-expose-headers": "content-length, content-range, accept-ranges, content-disposition",
             "cross-origin-resource-policy": "cross-origin"
           },
           "body": "{\"granted\":true,\"writer\":\"wr\",\"role\":\"owner\",\"alias\":\"\",\"channel\":\"chan\",\"writable\":true,\"mnemonicSet\":true,\"writers\":[{\"key\":\"wr\",\"role\":\"owner\",\"alias\":\"main\",\"self\":true}],\"epoch\":1}"
@@ -711,16 +639,12 @@
           "method": "DELETE",
           "path": "/v1/identity/writers/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa?purge=1",
           "requestHeaders": {
-            "host": "relay.test:8174"
+            "host": "relay.local:8174"
           },
           "requestBody": null,
           "status": 200,
           "headers": {
             "content-type": "application/json",
-            "access-control-allow-origin": "*",
-            "access-control-allow-methods": "GET, HEAD, POST, PUT, DELETE, OPTIONS",
-            "access-control-allow-headers": "content-type, authorization, range",
-            "access-control-expose-headers": "content-length, content-range, accept-ranges, content-disposition",
             "cross-origin-resource-policy": "cross-origin"
           },
           "body": "{\"revoked\":true,\"writer\":\"wr\",\"purgeEntries\":true,\"channel\":\"chan\",\"role\":\"owner\",\"writable\":true,\"mnemonicSet\":true,\"writers\":[{\"key\":\"wr\",\"role\":\"owner\",\"alias\":\"main\",\"self\":true}],\"epoch\":1}"
@@ -729,16 +653,12 @@
           "method": "POST",
           "path": "/v1/identity/epoch",
           "requestHeaders": {
-            "host": "relay.test:8174"
+            "host": "relay.local:8174"
           },
           "requestBody": null,
           "status": 200,
           "headers": {
             "content-type": "application/json",
-            "access-control-allow-origin": "*",
-            "access-control-allow-methods": "GET, HEAD, POST, PUT, DELETE, OPTIONS",
-            "access-control-allow-headers": "content-type, authorization, range",
-            "access-control-expose-headers": "content-length, content-range, accept-ranges, content-disposition",
             "cross-origin-resource-policy": "cross-origin"
           },
           "body": "{\"epoch\":1,\"epochKey\":\"ek\",\"accessUri\":\"pear://access\",\"channel\":\"chan\",\"writer\":\"wr\",\"role\":\"owner\",\"writable\":true,\"mnemonicSet\":true,\"writers\":[{\"key\":\"wr\",\"role\":\"owner\",\"alias\":\"main\",\"self\":true}]}"
@@ -747,16 +667,12 @@
           "method": "POST",
           "path": "/v1/identity/recover",
           "requestHeaders": {
-            "host": "relay.test:8174"
+            "host": "relay.local:8174"
           },
           "requestBody": "{\"mnemonic\":\"a b c\"}",
           "status": 200,
           "headers": {
             "content-type": "application/json",
-            "access-control-allow-origin": "*",
-            "access-control-allow-methods": "GET, HEAD, POST, PUT, DELETE, OPTIONS",
-            "access-control-allow-headers": "content-type, authorization, range",
-            "access-control-expose-headers": "content-length, content-range, accept-ranges, content-disposition",
             "cross-origin-resource-policy": "cross-origin"
           },
           "body": "{\"claimed\":true,\"reopenNeeded\":false,\"channel\":\"chan\",\"writer\":\"wr\",\"role\":\"owner\",\"writable\":true,\"mnemonicSet\":true,\"writers\":[{\"key\":\"wr\",\"role\":\"owner\",\"alias\":\"main\",\"self\":true}],\"epoch\":1}"
@@ -765,53 +681,73 @@
           "method": "GET",
           "path": "/v1/identity",
           "requestHeaders": {
-            "host": "relay.test:8174",
+            "host": "relay.local:8174",
             "origin": "http://evil.test"
           },
           "requestBody": null,
           "status": 403,
           "headers": {
             "content-type": "application/json",
-            "access-control-allow-origin": "*",
-            "access-control-allow-methods": "GET, HEAD, POST, PUT, DELETE, OPTIONS",
-            "access-control-allow-headers": "content-type, authorization, range",
-            "access-control-expose-headers": "content-length, content-range, accept-ranges, content-disposition",
             "cross-origin-resource-policy": "cross-origin"
           },
-          "body": "{\"error\":\"Channel identity can only be managed from the relay’s own page\"}"
+          "body": "{\"error\":\"This relay can only be changed from its own page\"}"
         },
         {
           "method": "GET",
           "path": "/v1/settings",
           "requestHeaders": {
-            "host": "relay.test:8174"
+            "host": "relay.local:8174"
           },
           "requestBody": null,
           "status": 404,
           "headers": {
             "content-type": "application/json",
-            "access-control-allow-origin": "*",
-            "access-control-allow-methods": "GET, HEAD, POST, PUT, DELETE, OPTIONS",
-            "access-control-allow-headers": "content-type, authorization, range",
-            "access-control-expose-headers": "content-length, content-range, accept-ranges, content-disposition",
             "cross-origin-resource-policy": "cross-origin"
           },
           "body": "{\"error\":\"not found\"}"
         },
         {
+          "method": "GET",
+          "path": "/v1/status",
+          "requestHeaders": {
+            "host": "relay.test:8174"
+          },
+          "requestBody": null,
+          "status": 200,
+          "headers": {
+            "content-type": "application/json",
+            "access-control-allow-origin": "*",
+            "access-control-allow-methods": "GET, HEAD, OPTIONS",
+            "access-control-allow-headers": "content-type, authorization, range",
+            "access-control-expose-headers": "content-length, content-range, accept-ranges, content-disposition",
+            "cross-origin-resource-policy": "cross-origin"
+          },
+          "body": "{\"tracker\":\"trk\",\"channel\":\"chan\",\"writer\":\"wr\",\"writable\":true,\"blobs\":\"bl\",\"blobBytes\":3,\"cachedBytes\":4,\"cacheMaxBytes\":5,\"peers\":1,\"lanPeers\":0,\"downBps\":0,\"upBps\":0,\"rxBytes\":6,\"txBytes\":7,\"routes\":{\"private\":{\"peers\":1,\"rxBytes\":6,\"txBytes\":7,\"downBps\":0,\"upBps\":0},\"public\":{\"peers\":0,\"rxBytes\":0,\"txBytes\":0,\"downBps\":0,\"upBps\":0},\"lan\":{\"peers\":0,\"rxBytes\":0,\"txBytes\":0,\"downBps\":0,\"upBps\":0}},\"inflightBlocks\":0,\"rtt\":0,\"retransmits\":0,\"sources\":[],\"reciprocity\":{\"tier\":\"leecher\",\"seededBytes\":0,\"contributingPeers\":0,\"ratio\":0,\"inflightMax\":0},\"lan\":null,\"apiUrl\":\"http://relay.local:8174\",\"tokenRequired\":false,\"settingsOpen\":false}"
+        },
+        {
+          "method": "POST",
+          "path": "/v1/entries/remove",
+          "requestHeaders": {
+            "host": "relay.test:8174"
+          },
+          "requestBody": "{\"key\":\"abc\"}",
+          "status": 403,
+          "headers": {
+            "content-type": "application/json",
+            "cross-origin-resource-policy": "cross-origin"
+          },
+          "body": "{\"error\":\"Open this relay by its IP address or .local name, or set PEARTUBE_API_TOKEN\"}"
+        },
+        {
           "method": "POST",
           "path": "/v1/cast/pair",
           "requestHeaders": {
-            "host": "relay.test:8174"
+            "host": "relay.local:8174"
           },
           "requestBody": "{}",
           "status": 200,
           "headers": {
             "content-type": "application/json",
-            "access-control-allow-origin": "*",
-            "access-control-allow-methods": "GET, HEAD, POST, PUT, DELETE, OPTIONS",
-            "access-control-allow-headers": "content-type, authorization, range",
-            "access-control-expose-headers": "content-length, content-range, accept-ranges, content-disposition",
             "cross-origin-resource-policy": "cross-origin"
           },
           "body": "{\"deviceId\":\"d1\",\"name\":\"TV\"}"
@@ -820,13 +756,13 @@
           "method": "GET",
           "path": "/v1/blob?key=a&blob=b",
           "requestHeaders": {
-            "host": "relay.test:8174"
+            "host": "relay.local:8174"
           },
           "requestBody": null,
           "status": 502,
           "headers": {
             "access-control-allow-origin": "*",
-            "access-control-allow-methods": "GET, HEAD, POST, PUT, DELETE, OPTIONS",
+            "access-control-allow-methods": "GET, HEAD, OPTIONS",
             "access-control-allow-headers": "content-type, authorization, range",
             "access-control-expose-headers": "content-length, content-range, accept-ranges, content-disposition",
             "cross-origin-resource-policy": "cross-origin"
@@ -842,34 +778,30 @@
           "method": "GET",
           "path": "/v1/status",
           "requestHeaders": {
-            "host": "relay.test:8174"
+            "host": "relay.local:8174"
           },
           "requestBody": null,
           "status": 200,
           "headers": {
             "content-type": "application/json",
             "access-control-allow-origin": "*",
-            "access-control-allow-methods": "GET, HEAD, POST, PUT, DELETE, OPTIONS",
+            "access-control-allow-methods": "GET, HEAD, OPTIONS",
             "access-control-allow-headers": "content-type, authorization, range",
             "access-control-expose-headers": "content-length, content-range, accept-ranges, content-disposition",
             "cross-origin-resource-policy": "cross-origin"
           },
-          "body": "{\"tracker\":\"trk\",\"channel\":\"chan\",\"writer\":\"wr\",\"writable\":true,\"blobs\":\"bl\",\"blobBytes\":3,\"cachedBytes\":4,\"cacheMaxBytes\":5,\"peers\":1,\"lanPeers\":0,\"downBps\":0,\"upBps\":0,\"rxBytes\":6,\"txBytes\":7,\"routes\":{\"private\":{\"peers\":1,\"rxBytes\":6,\"txBytes\":7,\"downBps\":0,\"upBps\":0},\"public\":{\"peers\":0,\"rxBytes\":0,\"txBytes\":0,\"downBps\":0,\"upBps\":0},\"lan\":{\"peers\":0,\"rxBytes\":0,\"txBytes\":0,\"downBps\":0,\"upBps\":0}},\"inflightBlocks\":0,\"rtt\":0,\"retransmits\":0,\"sources\":[],\"reciprocity\":{\"tier\":\"leecher\",\"seededBytes\":0,\"contributingPeers\":0,\"ratio\":0,\"inflightMax\":0},\"lan\":null,\"apiUrl\":\"http://relay.test:8174\",\"tokenRequired\":true,\"settingsOpen\":true}"
+          "body": "{\"tracker\":\"trk\",\"channel\":\"chan\",\"writer\":\"wr\",\"writable\":true,\"blobs\":\"bl\",\"blobBytes\":3,\"cachedBytes\":4,\"cacheMaxBytes\":5,\"peers\":1,\"lanPeers\":0,\"downBps\":0,\"upBps\":0,\"rxBytes\":6,\"txBytes\":7,\"routes\":{\"private\":{\"peers\":1,\"rxBytes\":6,\"txBytes\":7,\"downBps\":0,\"upBps\":0},\"public\":{\"peers\":0,\"rxBytes\":0,\"txBytes\":0,\"downBps\":0,\"upBps\":0},\"lan\":{\"peers\":0,\"rxBytes\":0,\"txBytes\":0,\"downBps\":0,\"upBps\":0}},\"inflightBlocks\":0,\"rtt\":0,\"retransmits\":0,\"sources\":[],\"reciprocity\":{\"tier\":\"leecher\",\"seededBytes\":0,\"contributingPeers\":0,\"ratio\":0,\"inflightMax\":0},\"lan\":null,\"apiUrl\":\"http://relay.local:8174\",\"tokenRequired\":true,\"settingsOpen\":true}"
         },
         {
           "method": "POST",
           "path": "/v1/entries/remove",
           "requestHeaders": {
-            "host": "relay.test:8174"
+            "host": "relay.local:8174"
           },
           "requestBody": "{\"key\":\"abc\"}",
           "status": 401,
           "headers": {
             "content-type": "application/json",
-            "access-control-allow-origin": "*",
-            "access-control-allow-methods": "GET, HEAD, POST, PUT, DELETE, OPTIONS",
-            "access-control-allow-headers": "content-type, authorization, range",
-            "access-control-expose-headers": "content-length, content-range, accept-ranges, content-disposition",
             "cross-origin-resource-policy": "cross-origin"
           },
           "body": "{\"error\":\"Unauthorized\"}"
@@ -878,17 +810,13 @@
           "method": "POST",
           "path": "/v1/entries/remove",
           "requestHeaders": {
-            "host": "relay.test:8174",
+            "host": "relay.local:8174",
             "authorization": "Bearer nope"
           },
           "requestBody": "{\"key\":\"abc\"}",
           "status": 401,
           "headers": {
             "content-type": "application/json",
-            "access-control-allow-origin": "*",
-            "access-control-allow-methods": "GET, HEAD, POST, PUT, DELETE, OPTIONS",
-            "access-control-allow-headers": "content-type, authorization, range",
-            "access-control-expose-headers": "content-length, content-range, accept-ranges, content-disposition",
             "cross-origin-resource-policy": "cross-origin"
           },
           "body": "{\"error\":\"Unauthorized\"}"
@@ -897,17 +825,13 @@
           "method": "POST",
           "path": "/v1/entries/remove",
           "requestHeaders": {
-            "host": "relay.test:8174",
+            "host": "relay.local:8174",
             "authorization": "Bearer secret"
           },
           "requestBody": "{\"key\":\"abc\"}",
           "status": 200,
           "headers": {
             "content-type": "application/json",
-            "access-control-allow-origin": "*",
-            "access-control-allow-methods": "GET, HEAD, POST, PUT, DELETE, OPTIONS",
-            "access-control-allow-headers": "content-type, authorization, range",
-            "access-control-expose-headers": "content-length, content-range, accept-ranges, content-disposition",
             "cross-origin-resource-policy": "cross-origin"
           },
           "body": "{\"removed\":true,\"key\":\"abc\"}"
@@ -916,16 +840,12 @@
           "method": "GET",
           "path": "/v1/settings",
           "requestHeaders": {
-            "host": "relay.test:8174"
+            "host": "relay.local:8174"
           },
           "requestBody": null,
           "status": 401,
           "headers": {
             "content-type": "application/json",
-            "access-control-allow-origin": "*",
-            "access-control-allow-methods": "GET, HEAD, POST, PUT, DELETE, OPTIONS",
-            "access-control-allow-headers": "content-type, authorization, range",
-            "access-control-expose-headers": "content-length, content-range, accept-ranges, content-disposition",
             "cross-origin-resource-policy": "cross-origin"
           },
           "body": "{\"error\":\"Unauthorized\"}"
@@ -934,16 +854,12 @@
           "method": "GET",
           "path": "/v1/identity",
           "requestHeaders": {
-            "host": "relay.test:8174"
+            "host": "relay.local:8174"
           },
           "requestBody": null,
           "status": 401,
           "headers": {
             "content-type": "application/json",
-            "access-control-allow-origin": "*",
-            "access-control-allow-methods": "GET, HEAD, POST, PUT, DELETE, OPTIONS",
-            "access-control-allow-headers": "content-type, authorization, range",
-            "access-control-expose-headers": "content-length, content-range, accept-ranges, content-disposition",
             "cross-origin-resource-policy": "cross-origin"
           },
           "body": "{\"error\":\"Unauthorized\"}"
@@ -952,14 +868,14 @@
           "method": "GET",
           "path": "/v1/search?id=x",
           "requestHeaders": {
-            "host": "relay.test:8174"
+            "host": "relay.local:8174"
           },
           "requestBody": null,
           "status": 200,
           "headers": {
             "content-type": "application/json",
             "access-control-allow-origin": "*",
-            "access-control-allow-methods": "GET, HEAD, POST, PUT, DELETE, OPTIONS",
+            "access-control-allow-methods": "GET, HEAD, OPTIONS",
             "access-control-allow-headers": "content-type, authorization, range",
             "access-control-expose-headers": "content-length, content-range, accept-ranges, content-disposition",
             "cross-origin-resource-policy": "cross-origin"
@@ -970,13 +886,13 @@
           "method": "OPTIONS",
           "path": "/v1/status",
           "requestHeaders": {
-            "host": "relay.test:8174"
+            "host": "relay.local:8174"
           },
           "requestBody": null,
           "status": 204,
           "headers": {
             "access-control-allow-origin": "*",
-            "access-control-allow-methods": "GET, HEAD, POST, PUT, DELETE, OPTIONS",
+            "access-control-allow-methods": "GET, HEAD, OPTIONS",
             "access-control-allow-headers": "content-type, authorization, range",
             "access-control-expose-headers": "content-length, content-range, accept-ranges, content-disposition",
             "cross-origin-resource-policy": "cross-origin"
@@ -992,14 +908,14 @@
           "method": "GET",
           "path": "/v1/status",
           "requestHeaders": {
-            "host": "relay.test:8174"
+            "host": "relay.local:8174"
           },
           "requestBody": null,
           "status": 200,
           "headers": {
             "content-type": "application/json",
             "access-control-allow-origin": "*",
-            "access-control-allow-methods": "GET, HEAD, POST, PUT, DELETE, OPTIONS",
+            "access-control-allow-methods": "GET, HEAD, OPTIONS",
             "access-control-allow-headers": "content-type, authorization, range",
             "access-control-expose-headers": "content-length, content-range, accept-ranges, content-disposition",
             "cross-origin-resource-policy": "cross-origin"
@@ -1010,14 +926,14 @@
           "method": "GET",
           "path": "/v1/search?id=x",
           "requestHeaders": {
-            "host": "relay.test:8174"
+            "host": "relay.local:8174"
           },
           "requestBody": null,
           "status": 200,
           "headers": {
             "content-type": "application/json",
             "access-control-allow-origin": "*",
-            "access-control-allow-methods": "GET, HEAD, POST, PUT, DELETE, OPTIONS",
+            "access-control-allow-methods": "GET, HEAD, OPTIONS",
             "access-control-allow-headers": "content-type, authorization, range",
             "access-control-expose-headers": "content-length, content-range, accept-ranges, content-disposition",
             "cross-origin-resource-policy": "cross-origin"
@@ -1028,14 +944,14 @@
           "method": "GET",
           "path": "/v1/entries",
           "requestHeaders": {
-            "host": "relay.test:8174"
+            "host": "relay.local:8174"
           },
           "requestBody": null,
           "status": 200,
           "headers": {
             "content-type": "application/json",
             "access-control-allow-origin": "*",
-            "access-control-allow-methods": "GET, HEAD, POST, PUT, DELETE, OPTIONS",
+            "access-control-allow-methods": "GET, HEAD, OPTIONS",
             "access-control-allow-headers": "content-type, authorization, range",
             "access-control-expose-headers": "content-length, content-range, accept-ranges, content-disposition",
             "cross-origin-resource-policy": "cross-origin"
@@ -1046,14 +962,14 @@
           "method": "GET",
           "path": "/v1/sources",
           "requestHeaders": {
-            "host": "relay.test:8174"
+            "host": "relay.local:8174"
           },
           "requestBody": null,
           "status": 200,
           "headers": {
             "content-type": "application/json",
             "access-control-allow-origin": "*",
-            "access-control-allow-methods": "GET, HEAD, POST, PUT, DELETE, OPTIONS",
+            "access-control-allow-methods": "GET, HEAD, OPTIONS",
             "access-control-allow-headers": "content-type, authorization, range",
             "access-control-expose-headers": "content-length, content-range, accept-ranges, content-disposition",
             "cross-origin-resource-policy": "cross-origin"
@@ -1064,14 +980,14 @@
           "method": "GET",
           "path": "/v1/jobs",
           "requestHeaders": {
-            "host": "relay.test:8174"
+            "host": "relay.local:8174"
           },
           "requestBody": null,
           "status": 200,
           "headers": {
             "content-type": "application/json",
             "access-control-allow-origin": "*",
-            "access-control-allow-methods": "GET, HEAD, POST, PUT, DELETE, OPTIONS",
+            "access-control-allow-methods": "GET, HEAD, OPTIONS",
             "access-control-allow-headers": "content-type, authorization, range",
             "access-control-expose-headers": "content-length, content-range, accept-ranges, content-disposition",
             "cross-origin-resource-policy": "cross-origin"
@@ -1082,16 +998,12 @@
           "method": "POST",
           "path": "/v1/entries/remove",
           "requestHeaders": {
-            "host": "relay.test:8174"
+            "host": "relay.local:8174"
           },
           "requestBody": "{\"key\":\"abc\"}",
           "status": 503,
           "headers": {
             "content-type": "application/json",
-            "access-control-allow-origin": "*",
-            "access-control-allow-methods": "GET, HEAD, POST, PUT, DELETE, OPTIONS",
-            "access-control-allow-headers": "content-type, authorization, range",
-            "access-control-expose-headers": "content-length, content-range, accept-ranges, content-disposition",
             "cross-origin-resource-policy": "cross-origin"
           },
           "body": "{\"error\":\"Node still starting\"}"
@@ -1100,16 +1012,12 @@
           "method": "POST",
           "path": "/v1/acquire",
           "requestHeaders": {
-            "host": "relay.test:8174"
+            "host": "relay.local:8174"
           },
           "requestBody": "{\"id\":\"i\"}",
           "status": 404,
           "headers": {
             "content-type": "application/json",
-            "access-control-allow-origin": "*",
-            "access-control-allow-methods": "GET, HEAD, POST, PUT, DELETE, OPTIONS",
-            "access-control-allow-headers": "content-type, authorization, range",
-            "access-control-expose-headers": "content-length, content-range, accept-ranges, content-disposition",
             "cross-origin-resource-policy": "cross-origin"
           },
           "body": "{\"error\":\"Acquire unavailable on read-only peer\"}"
@@ -1118,14 +1026,14 @@
           "method": "GET",
           "path": "/v1/plugins",
           "requestHeaders": {
-            "host": "relay.test:8174"
+            "host": "relay.local:8174"
           },
           "requestBody": null,
           "status": 200,
           "headers": {
             "content-type": "application/json",
             "access-control-allow-origin": "*",
-            "access-control-allow-methods": "GET, HEAD, POST, PUT, DELETE, OPTIONS",
+            "access-control-allow-methods": "GET, HEAD, OPTIONS",
             "access-control-allow-headers": "content-type, authorization, range",
             "access-control-expose-headers": "content-length, content-range, accept-ranges, content-disposition",
             "cross-origin-resource-policy": "cross-origin"
@@ -1136,16 +1044,12 @@
           "method": "POST",
           "path": "/v1/mirror",
           "requestHeaders": {
-            "host": "relay.test:8174"
+            "host": "relay.local:8174"
           },
           "requestBody": "{}",
           "status": 404,
           "headers": {
             "content-type": "application/json",
-            "access-control-allow-origin": "*",
-            "access-control-allow-methods": "GET, HEAD, POST, PUT, DELETE, OPTIONS",
-            "access-control-allow-headers": "content-type, authorization, range",
-            "access-control-expose-headers": "content-length, content-range, accept-ranges, content-disposition",
             "cross-origin-resource-policy": "cross-origin"
           },
           "body": "{\"error\":\"Mirror host unavailable on read-only peer\"}"
@@ -1154,14 +1058,14 @@
           "method": "GET",
           "path": "/v1/playlist.m3u",
           "requestHeaders": {
-            "host": "relay.test:8174"
+            "host": "relay.local:8174"
           },
           "requestBody": null,
           "status": 200,
           "headers": {
             "content-type": "audio/x-mpegurl; charset=utf-8",
             "access-control-allow-origin": "*",
-            "access-control-allow-methods": "GET, HEAD, POST, PUT, DELETE, OPTIONS",
+            "access-control-allow-methods": "GET, HEAD, OPTIONS",
             "access-control-allow-headers": "content-type, authorization, range",
             "access-control-expose-headers": "content-length, content-range, accept-ranges, content-disposition",
             "cross-origin-resource-policy": "cross-origin"
@@ -1172,16 +1076,12 @@
           "method": "GET",
           "path": "/v1/identity",
           "requestHeaders": {
-            "host": "relay.test:8174"
+            "host": "relay.local:8174"
           },
           "requestBody": null,
           "status": 503,
           "headers": {
             "content-type": "application/json",
-            "access-control-allow-origin": "*",
-            "access-control-allow-methods": "GET, HEAD, POST, PUT, DELETE, OPTIONS",
-            "access-control-allow-headers": "content-type, authorization, range",
-            "access-control-expose-headers": "content-length, content-range, accept-ranges, content-disposition",
             "cross-origin-resource-policy": "cross-origin"
           },
           "body": "{\"error\":\"Node still starting\"}"
@@ -1195,14 +1095,14 @@
           "method": "GET",
           "path": "/v1/cast/status",
           "requestHeaders": {
-            "host": "relay.test:8174"
+            "host": "relay.local:8174"
           },
           "requestBody": null,
           "status": 200,
           "headers": {
             "content-type": "application/json",
             "access-control-allow-origin": "*",
-            "access-control-allow-methods": "GET, HEAD, POST, PUT, DELETE, OPTIONS",
+            "access-control-allow-methods": "GET, HEAD, OPTIONS",
             "access-control-allow-headers": "content-type, authorization, range",
             "access-control-expose-headers": "content-length, content-range, accept-ranges, content-disposition",
             "cross-origin-resource-policy": "cross-origin"
@@ -1213,16 +1113,12 @@
           "method": "POST",
           "path": "/v1/cast/pair",
           "requestHeaders": {
-            "host": "relay.test:8174"
+            "host": "relay.local:8174"
           },
           "requestBody": "{}",
           "status": 200,
           "headers": {
             "content-type": "application/json",
-            "access-control-allow-origin": "*",
-            "access-control-allow-methods": "GET, HEAD, POST, PUT, DELETE, OPTIONS",
-            "access-control-allow-headers": "content-type, authorization, range",
-            "access-control-expose-headers": "content-length, content-range, accept-ranges, content-disposition",
             "cross-origin-resource-policy": "cross-origin"
           },
           "body": "{\"deviceId\":\"d1\",\"name\":\"TV\"}"
@@ -1231,16 +1127,12 @@
           "method": "DELETE",
           "path": "/v1/cast/receivers/abc",
           "requestHeaders": {
-            "host": "relay.test:8174"
+            "host": "relay.local:8174"
           },
           "requestBody": null,
           "status": 200,
           "headers": {
             "content-type": "application/json",
-            "access-control-allow-origin": "*",
-            "access-control-allow-methods": "GET, HEAD, POST, PUT, DELETE, OPTIONS",
-            "access-control-allow-headers": "content-type, authorization, range",
-            "access-control-expose-headers": "content-length, content-range, accept-ranges, content-disposition",
             "cross-origin-resource-policy": "cross-origin"
           },
           "body": "{\"removed\":true,\"id\":\"abc\"}"
@@ -1249,16 +1141,12 @@
           "method": "POST",
           "path": "/v1/cast/play",
           "requestHeaders": {
-            "host": "relay.test:8174"
+            "host": "relay.local:8174"
           },
           "requestBody": "{}",
           "status": 200,
           "headers": {
             "content-type": "application/json",
-            "access-control-allow-origin": "*",
-            "access-control-allow-methods": "GET, HEAD, POST, PUT, DELETE, OPTIONS",
-            "access-control-allow-headers": "content-type, authorization, range",
-            "access-control-expose-headers": "content-length, content-range, accept-ranges, content-disposition",
             "cross-origin-resource-policy": "cross-origin"
           },
           "body": "{\"ok\":true,\"action\":\"play\"}"
@@ -1267,16 +1155,12 @@
           "method": "POST",
           "path": "/v1/cast/control",
           "requestHeaders": {
-            "host": "relay.test:8174"
+            "host": "relay.local:8174"
           },
           "requestBody": "{}",
           "status": 200,
           "headers": {
             "content-type": "application/json",
-            "access-control-allow-origin": "*",
-            "access-control-allow-methods": "GET, HEAD, POST, PUT, DELETE, OPTIONS",
-            "access-control-allow-headers": "content-type, authorization, range",
-            "access-control-expose-headers": "content-length, content-range, accept-ranges, content-disposition",
             "cross-origin-resource-policy": "cross-origin"
           },
           "body": "{\"ok\":true,\"action\":\"control\"}"
@@ -1285,16 +1169,12 @@
           "method": "POST",
           "path": "/v1/cast/stop",
           "requestHeaders": {
-            "host": "relay.test:8174"
+            "host": "relay.local:8174"
           },
           "requestBody": "{}",
           "status": 200,
           "headers": {
             "content-type": "application/json",
-            "access-control-allow-origin": "*",
-            "access-control-allow-methods": "GET, HEAD, POST, PUT, DELETE, OPTIONS",
-            "access-control-allow-headers": "content-type, authorization, range",
-            "access-control-expose-headers": "content-length, content-range, accept-ranges, content-disposition",
             "cross-origin-resource-policy": "cross-origin"
           },
           "body": "{\"ok\":true,\"action\":\"stop\"}"

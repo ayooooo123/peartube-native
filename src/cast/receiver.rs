@@ -492,7 +492,13 @@ impl Inner {
         let token = message.get("token").and_then(Value::as_str).unwrap_or("");
         let trusted = self.open_auth && on_lan;
         if kind == "pair" {
-            self.check_pair_limit(on_lan)?;
+            let peer_key = control
+                .mux()
+                .stream_info()
+                .remote_public_key
+                .map(|pk| crate::protocol::hex_encode(&pk))
+                .unwrap_or_else(|| if on_lan { "lan".into() } else { "far".into() });
+            self.check_pair_limit(on_lan, &peer_key)?;
             let code = message.get("code").and_then(Value::as_str);
             if !trusted
                 && !safe_equal(
@@ -500,7 +506,7 @@ impl Inner {
                     Some(&self.identity.pair_code),
                 )
             {
-                self.record_pair_failure(on_lan);
+                self.record_pair_failure(on_lan, &peer_key);
                 return Err("Invalid TV pairing code".to_owned());
             }
             // An open receiver on this LAN needs no token: it answers with an empty one, never the
@@ -539,7 +545,7 @@ impl Inner {
         Err(format!("Unknown cast message: {kind}"))
     }
 
-    fn check_pair_limit(&self, on_lan: bool) -> Result<(), String> {
+    fn check_pair_limit(&self, on_lan: bool, peer_key: &str) -> Result<(), String> {
         let limiter = if on_lan {
             &self.limiter_lan
         } else {
@@ -548,18 +554,18 @@ impl Inner {
         limiter
             .lock()
             .map_err(|_| "Too many pairing attempts; wait 15 seconds".to_owned())?
-            .check(now_ms())
+            .check_peer(peer_key, now_ms())
             .map_err(|error| error.message)
     }
 
-    fn record_pair_failure(&self, on_lan: bool) {
+    fn record_pair_failure(&self, on_lan: bool, peer_key: &str) {
         let limiter = if on_lan {
             &self.limiter_lan
         } else {
             &self.limiter_far
         };
         if let Ok(mut limiter) = limiter.lock() {
-            limiter.record_failure(now_ms());
+            limiter.record_peer_failure(peer_key, now_ms());
         }
     }
 

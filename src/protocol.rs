@@ -1043,6 +1043,105 @@ pub(crate) fn js_number(s: &str) -> f64 {
     t.parse::<f64>().unwrap_or(f64::NAN)
 }
 
+/// Constant-time comparison of two secrets (tokens, pairing codes): the time taken does not
+/// depend on where they differ.
+pub fn safe_equal(a: Option<&str>, b: Option<&str>) -> bool {
+    let (a, b) = (
+        a.unwrap_or_default().as_bytes(),
+        b.unwrap_or_default().as_bytes(),
+    );
+    if a.is_empty() || a.len() != b.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (x, y) in a.iter().zip(b) {
+        diff |= x ^ y;
+    }
+    diff == 0
+}
+
+/// An IPv6 address as eight numbers: `::` expanded, brackets and zone dropped, a trailing dotted
+/// IPv4 folded into the last two. `None` if it is not an IPv6 address. Every spelling of one
+/// address gives the same groups.
+pub fn ipv6_groups(ip: &str) -> Option<[u16; 8]> {
+    let mut s = ip.to_lowercase();
+    if let Some(stripped) = s.strip_prefix('[') {
+        s = stripped.to_owned();
+    }
+    if let Some(stripped) = s.strip_suffix(']') {
+        s = stripped.to_owned();
+    }
+    if let Some((before_zone, _)) = s.split_once('%') {
+        s = before_zone.to_owned();
+    }
+    if !s.contains(':') {
+        return None;
+    }
+    if let Some(colon) = s.rfind(':') {
+        let tail = &s[colon + 1..];
+        if tail.contains('.') {
+            let parts: Vec<&str> = tail.split('.').collect();
+            if parts.len() != 4 {
+                return None;
+            }
+            let mut octets = [0u16; 4];
+            for (idx, part) in parts.iter().enumerate() {
+                if part.is_empty() || part.len() > 3 || !part.bytes().all(|b| b.is_ascii_digit()) {
+                    return None;
+                }
+                let n: u16 = part.parse().ok()?;
+                if n > 255 {
+                    return None;
+                }
+                octets[idx] = n;
+            }
+            let hi = (octets[0] << 8) | octets[1];
+            let lo = (octets[2] << 8) | octets[3];
+            s = format!("{}{hi:x}:{lo:x}", &s[..=colon]);
+        }
+    }
+    let halves: Vec<&str> = s.split("::").collect();
+    if halves.len() > 2 {
+        return None;
+    }
+    let head: Vec<&str> = if halves[0].is_empty() {
+        Vec::new()
+    } else {
+        halves[0].split(':').collect()
+    };
+    let rest: Vec<&str> = if halves.len() == 2 && !halves[1].is_empty() {
+        halves[1].split(':').collect()
+    } else {
+        Vec::new()
+    };
+    let total = head.len() + rest.len();
+    if halves.len() == 2 {
+        if total > 7 {
+            return None;
+        }
+    } else if total != 8 {
+        return None;
+    }
+    let missing = if halves.len() == 2 { 8 - total } else { 0 };
+    let mut out = [0u16; 8];
+    let mut pos = 0;
+    for group in head {
+        if group.is_empty() || group.len() > 4 || !group.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return None;
+        }
+        out[pos] = u16::from_str_radix(group, 16).ok()?;
+        pos += 1;
+    }
+    pos += missing;
+    for group in rest {
+        if group.is_empty() || group.len() > 4 || !group.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return None;
+        }
+        out[pos] = u16::from_str_radix(group, 16).ok()?;
+        pos += 1;
+    }
+    Some(out)
+}
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -342,6 +342,11 @@ fileCase('pre-channel file keeps a saved channel', {
   steps: [{ op: 'get', key: 'channel' }]
 })
 
+fileCase('legacy watchDir migrates out of saved file', {
+  initial: JSON.stringify({ watchDir: '/imports/watched', lan: true }),
+  steps: [{ op: 'view' }]
+})
+
 fileCase('snapshot and mark applied', {
   steps: [
     { op: 'update', patch: { streamPort: 9000 } },
@@ -396,7 +401,6 @@ fileCase('every field', {
         publishChannel: false,
         directory: true,
         acquireConcurrency: 16,
-        watchDir: '/imports/watched',
         feeds: ['https://feed.example/api?x=1'],
         replicate: true,
         replicateSources: [K],

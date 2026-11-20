@@ -336,7 +336,24 @@ impl Control {
         let Some(message) = decode_frame(&data) else {
             return;
         };
-        if let Some(id) = message.get("id").and_then(Value::as_u64) {
+        if self.inner.handlers.on_request.is_some()
+            && message.get("type").is_some_and(Value::is_string)
+        {
+            let Some(handler) = self.inner.handlers.on_request.clone() else {
+                return;
+            };
+            let control = self.clone();
+            let control_for_answer = control.clone();
+            let id = message.get("id").cloned().unwrap_or(Value::Null);
+            tokio::spawn(async move {
+                let result = handler(message, control).await;
+                control_for_answer.answer(id, result);
+            });
+            return;
+        }
+        if message.get("ok").is_some()
+            && let Some(id) = message.get("id").and_then(Value::as_u64)
+        {
             let waiter = lock(&self.inner.pending).remove(&id);
             if let Some(waiter) = waiter {
                 let result = if message.get("ok").is_some_and(js_truthy) {
@@ -351,25 +368,10 @@ impl Control {
                 return;
             }
         }
-        if message.get("event").is_some() {
-            if let Some(handler) = self.inner.handlers.on_event.clone() {
-                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| handler(message)));
-            }
-            return;
-        }
-        if self.inner.handlers.on_request.is_some()
-            && message.get("type").is_some_and(Value::is_string)
+        if message.get("event").is_some()
+            && let Some(handler) = self.inner.handlers.on_event.clone()
         {
-            let Some(handler) = self.inner.handlers.on_request.clone() else {
-                return;
-            };
-            let control = self.clone();
-            let control_for_answer = control.clone();
-            let id = message.get("id").cloned().unwrap_or(Value::Null);
-            tokio::spawn(async move {
-                let result = handler(message, control).await;
-                control_for_answer.answer(id, result);
-            });
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| handler(message)));
         }
     }
 }

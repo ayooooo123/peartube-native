@@ -17,12 +17,10 @@ use std::sync::{Arc, Mutex, Weak};
 use std::task::{Context, Poll};
 use std::time::Duration;
 
+use crate::ssrf::{GuardedRequestError, private_urls_allowed, send_guarded_request};
 use bytes::Bytes;
 use http_body_util::Full;
 use hyper::body::{Body, Incoming};
-use hyper_util::client::legacy::Client;
-use hyper_util::client::legacy::connect::HttpConnector;
-use hyper_util::rt::TokioExecutor;
 use rand::RngCore;
 use serde_json::{Map, Value, json};
 use tokio::io::{AsyncRead, ReadBuf};
@@ -263,6 +261,7 @@ pub struct SourceSpec {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum JobStatus {
     Queued,
+    Copying,
     Running,
     Announcing,
     Done,
@@ -275,6 +274,7 @@ impl JobStatus {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Queued => "queued",
+            Self::Copying => "copying",
             Self::Running => "running",
             Self::Announcing => "announcing",
             Self::Done => "done",
@@ -287,6 +287,7 @@ impl JobStatus {
     fn parse(text: &str) -> Option<Self> {
         Some(match text {
             "queued" => Self::Queued,
+            "copying" => Self::Copying,
             "running" => Self::Running,
             "announcing" => Self::Announcing,
             "done" => Self::Done,
@@ -311,6 +312,7 @@ pub struct Job {
     pub created: u64,
     pub store: Option<String>,
     pub source: Option<SourceSpec>,
+    pub existing: Option<Value>,
     pub total: Option<Option<u64>>,
     pub bytes: Option<u64>,
     pub etag: Option<Value>,
@@ -339,6 +341,7 @@ impl Job {
             created: spec.created,
             store: Some(spec.store),
             source: Some(spec.source),
+            existing: spec.existing,
             total: None,
             bytes: None,
             etag: None,
@@ -374,6 +377,9 @@ impl Job {
             "source".into(),
             self.source.as_ref().map_or(Value::Null, source_json),
         );
+        if let Some(existing) = &self.existing {
+            out.insert("existing".into(), existing.clone());
+        }
         if let Some(total) = self.total {
             out.insert("total".into(), total.map_or(Value::Null, |n| json!(n)));
         }
@@ -423,6 +429,7 @@ impl Job {
             for key in [
                 "source",
                 "announce",
+                "existing",
                 "storeKey",
                 "etag",
                 "lastModified",
@@ -481,6 +488,7 @@ impl Job {
             "created",
             "store",
             "source",
+            "existing",
             "total",
             "bytes",
             "etag",
@@ -505,6 +513,7 @@ impl Job {
             created: map.get("created").and_then(Value::as_u64).unwrap_or(0),
             store: text("store"),
             source,
+            existing: map.get("existing").cloned(),
             total,
             bytes: map.get("bytes").and_then(Value::as_u64),
             etag: map.get("etag").cloned(),
@@ -557,11 +566,12 @@ struct NewJob {
     created: u64,
     store: String,
     source: SourceSpec,
+    existing: Option<Value>,
     store_key: Option<String>,
 }
 
 /// What `add` is asked for: `{ id, title, source, channel?, private?, plugin? }`.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct AddJob {
     pub id: String,
     pub title: String,
@@ -569,6 +579,7 @@ pub struct AddJob {
     pub channel: Option<bool>,
     pub private: bool,
     pub plugin: Option<String>,
+    pub existing: Option<Value>,
 }
 
 /// The files a job needs. `jobs.json` is always written through a 0600 temp file and renamed.
@@ -690,14 +701,26 @@ pub trait HttpOpen: Send + Sync {
     ) -> Pin<Box<dyn Future<Output = Result<SourceResponse, SourceError>> + Send>>;
 }
 
-/// The real client: GET, the given headers, a TLS root store.
-pub struct HyperHttp;
+/// The real client: GET, the given headers, a TLS root store, and the SSRF guard (`src/ssrf.js`).
+#[derive(Clone, Copy)]
+pub struct HyperHttp {
+    pub allow_private_urls: bool,
+}
+
+impl Default for HyperHttp {
+    fn default() -> Self {
+        Self {
+            allow_private_urls: private_urls_allowed(),
+        }
+    }
+}
 
 impl HttpOpen for HyperHttp {
     fn open(
         &self,
         request: SourceRequest,
     ) -> Pin<Box<dyn Future<Output = Result<SourceResponse, SourceError>> + Send>> {
+        let allow_private = self.allow_private_urls;
         Box::pin(async move {
             let Ok(uri) = url::Url::parse(&request.url) else {
                 return Err(SourceError::new(format!("Invalid URL: {}", request.url)));
@@ -723,10 +746,20 @@ impl HttpOpen for HyperHttp {
             let hyper_request = builder
                 .body(Full::new(Bytes::new()))
                 .map_err(|error| SourceError::new(error.to_string()))?;
-            let response = tokio::time::timeout(timeout, HOP_CLIENT.request(hyper_request))
-                .await
-                .map_err(|_| SourceError::new("Source timed out"))?
-                .map_err(|error| SourceError::new(error.to_string()))?;
+            let response = tokio::time::timeout(
+                timeout,
+                send_guarded_request(&uri, hyper_request, allow_private),
+            )
+            .await
+            .map_err(|_| SourceError::new("Source timed out"))?
+            .map_err(|error| match error {
+                GuardedRequestError::Ssrf(ssrf) => SourceError {
+                    message: ssrf.message,
+                    status: Some(ssrf.status),
+                    retry_after: None,
+                },
+                GuardedRequestError::Transport(msg) => SourceError::new(msg),
+            })?;
             let status = response.status().as_u16();
             let headers = response
                 .headers()
@@ -750,19 +783,6 @@ impl HttpOpen for HyperHttp {
         })
     }
 }
-
-type Hops = hyper_rustls::HttpsConnector<HttpConnector>;
-
-static HOP_CLIENT: std::sync::LazyLock<Client<Hops, Full<Bytes>>> =
-    std::sync::LazyLock::new(|| {
-        let https = hyper_rustls::HttpsConnectorBuilder::new()
-            .with_webpki_roots()
-            .https_or_http()
-            .enable_http1()
-            .build();
-        Client::builder(TokioExecutor::new()).build(https)
-    });
-
 /// A hyper body as `AsyncRead`, copying each frame straight into the caller's buffer.
 struct BodyReader<B = Incoming> {
     body: B,
@@ -1000,7 +1020,7 @@ async fn open_source(
             let retry_after = header(&response.headers, "retry-after")
                 .map(|value| js_number(value) * 1000.0)
                 .filter(|ms| ms.is_finite() && *ms > 0.0)
-                .map(|ms| Duration::from_millis(ms as u64));
+                .map(|ms| Duration::from_millis((ms as u64).min(300_000)));
             return Err(AcquireError::Source(SourceError {
                 message: format!("Source answered {}", response.status),
                 status: Some(response.status),
@@ -1630,6 +1650,7 @@ pub struct AcquireOptions {
     pub default_channel: bool,
     pub ubit_config_dir: Option<String>,
     pub on_done: Option<Arc<dyn Fn(Value, Value) + Send + Sync>>,
+    pub copy_stall: Duration,
     pub now_ms: Arc<dyn Fn() -> u64 + Send + Sync>,
 }
 
@@ -1644,6 +1665,7 @@ impl Default for AcquireOptions {
             default_channel: false,
             ubit_config_dir: None,
             on_done: None,
+            copy_stall: Duration::from_millis(120_000),
             now_ms: Arc::new(|| {
                 std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
@@ -1818,7 +1840,33 @@ where
         loaded: &Job,
         cancel: &Arc<Cancel>,
     ) -> Result<(), AcquireError> {
-        if loaded.announce.is_none() {
+        if loaded.announce.is_none()
+            && let Some(existing) = loaded.existing.clone().filter(|v| !v.is_null())
+        {
+            let copied = self.copy_existing(id, loaded, &existing, cancel).await?;
+            if self.closed.load(Ordering::SeqCst) {
+                return Err(AcquireError::Message("Closed".into()));
+            }
+            if let Some(op) = copied {
+                self.with_job(id, |job| {
+                    job.status = JobStatus::Announcing;
+                    job.announce = Some(op);
+                    job.source = None;
+                });
+                self.save();
+            } else {
+                if let Some(blobs) = existing.get("blobs").and_then(Value::as_str) {
+                    self.node.keep_copy(blobs, false);
+                }
+                self.with_job(id, |job| {
+                    job.status = JobStatus::Running;
+                    job.existing = Some(Value::Null);
+                    job.bytes = Some(0);
+                });
+                self.save();
+            }
+        }
+        if self.snapshot(id).and_then(|job| job.announce).is_none() {
             match &loaded.source {
                 Some(source) if source.page => {
                     self.transfer_page(id, loaded, cancel).await?;
@@ -1876,6 +1924,75 @@ where
             on_done(job.public_json(), announce);
         }
         Ok(())
+    }
+
+    async fn copy_existing(
+        self: &Arc<Self>,
+        id: &str,
+        loaded: &Job,
+        src: &Value,
+        cancel: &Arc<Cancel>,
+    ) -> Result<Option<Value>, AcquireError> {
+        let size = src.get("size").and_then(Value::as_u64).unwrap_or(0);
+        let sha256 = src
+            .get("sha256")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned();
+        let blobs = src
+            .get("blobs")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned();
+        let blob_val = src.get("blob").cloned().unwrap_or(Value::Null);
+        let Ok(blob) = serde_json::from_value::<crate::node::api::Blob>(blob_val.clone()) else {
+            return Ok(None);
+        };
+        let op = json!({
+            "type": "announce",
+            "id": loaded.id,
+            "title": loaded.title,
+            "size": size,
+            "sha256": sha256,
+            "blobs": blobs,
+            "blob": blob_val,
+        });
+        self.with_job(id, |job| {
+            job.status = JobStatus::Copying;
+            job.total = Some(Some(size));
+            job.bytes = Some(0);
+        });
+        self.save();
+        self.node.keep_copy(&blobs, true);
+        let _ = self.node.warm(&op).await;
+        let inner_weak = Arc::downgrade(self);
+        let job_id = id.to_owned();
+        let on_bytes = Arc::new(move |bytes: u64| {
+            if let Some(inner) = inner_weak.upgrade() {
+                inner.with_job(&job_id, |job| job.bytes = Some(bytes));
+            }
+        });
+        let matched = self
+            .node
+            .copy_existing(
+                &blobs,
+                blob,
+                size,
+                &sha256,
+                self.opts.copy_stall,
+                cancel.clone(),
+                on_bytes,
+            )
+            .await
+            .map_err(AcquireError::Message)?;
+        if matched {
+            return Ok(Some(op));
+        }
+        self.node.keep_copy(&blobs, false);
+        if let Some(key) = src.get("key").and_then(Value::as_str) {
+            let _ = self.node.clear_cache(Some(key), None).await;
+        }
+        Ok(None)
     }
 
     /// The direct-source path: `node.put` with a resumable factory.
@@ -2081,12 +2198,21 @@ where
             .unwrap_or_else(|| loaded.clone());
         // A job that will never run again must not leave a half-written core on the array, and a source that
         // changed under a resumed core leaves bytes of another encode that the next attempt must not stitch onto.
-        if (job.status == JobStatus::Cancelled
+        if job.status == JobStatus::Cancelled
             || (job.status == JobStatus::Failed && job.source.is_none())
-            || error.restart())
-            && let Some(store) = &job.store
+            || error.restart()
         {
-            let _ = self.node.drop_store(store).await;
+            if let Some(store) = &job.store {
+                let _ = self.node.drop_store(store).await;
+            }
+            if (job.status == JobStatus::Cancelled
+                || (job.status == JobStatus::Failed && job.source.is_none()))
+                && job.announce.is_none()
+                && let Some(existing) = &job.existing
+                && let Some(blobs) = existing.get("blobs").and_then(Value::as_str)
+            {
+                self.node.keep_copy(blobs, false);
+            }
         }
         if closed
             || job.status != JobStatus::Failed
@@ -2096,10 +2222,11 @@ where
             return;
         }
         let attempts = job.attempts.unwrap_or(1).max(1);
-        let delay = error.retry_after().unwrap_or_else(|| {
-            let factor = 2u32.saturating_pow((attempts - 1) as u32);
-            (self.opts.retry_delay * factor).min(Duration::from_millis(300_000))
-        });
+        let factor = 2u32.saturating_pow((attempts - 1) as u32);
+        let delay = error
+            .retry_after()
+            .unwrap_or(self.opts.retry_delay * factor)
+            .min(Duration::from_millis(300_000));
         let inner = self.clone();
         let id = id.to_owned();
         tokio::spawn(async move {
@@ -2221,6 +2348,7 @@ where
             .unwrap_or_default();
         for job in &mut jobs {
             if job.status == JobStatus::Running
+                || job.status == JobStatus::Copying
                 || (job.status == JobStatus::Failed && job.source.is_some())
             {
                 job.status = if job.announce.is_some() {
@@ -2261,6 +2389,18 @@ where
         let inner = &self.inner;
         let private = spec.private || spec.source.private;
         let job_id = inner.random.uuid_v4();
+        let existing = spec
+            .existing
+            .filter(|v| !private && v.is_object())
+            .map(|ex| {
+                json!({
+                    "key": ex.get("key").filter(|v| !v.is_null()).cloned().unwrap_or(Value::Null),
+                    "size": ex.get("size").cloned().unwrap_or(Value::Null),
+                    "sha256": ex.get("sha256").cloned().unwrap_or(Value::Null),
+                    "blobs": ex.get("blobs").cloned().unwrap_or(Value::Null),
+                    "blob": ex.get("blob").cloned().unwrap_or(Value::Null),
+                })
+            });
         let job = Job::new(NewJob {
             job_id: job_id.clone(),
             id: spec.id,
@@ -2271,6 +2411,7 @@ where
             created: inner.now(),
             store: inner.new_store(),
             source: spec.source,
+            existing,
             store_key: private.then(|| hex(&inner.random.bytes(32))),
         });
         inner.jobs.lock().expect("acquirer jobs").push(job);
@@ -2285,11 +2426,14 @@ where
         let inner = &self.inner;
         // The status is read and acted on under one lock: a run finishing in between must not be clobbered
         // with `cancelled`, and a job that is no longer running has nobody else to drop its core.
-        let (status, running_cancel, drop_store) = {
+        let (status, running_cancel, drop_store, drop_existing) = {
             let mut jobs = inner.jobs.lock().expect("acquirer jobs");
             let index = jobs.iter().position(|job| job.job_id == job_id)?;
             let status = jobs[index].status;
-            if status == JobStatus::Queued || status == JobStatus::Running {
+            if matches!(
+                status,
+                JobStatus::Queued | JobStatus::Running | JobStatus::Copying
+            ) {
                 jobs[index].status = JobStatus::Cancelled;
                 jobs[index].source = None;
                 let running = inner
@@ -2299,23 +2443,36 @@ where
                     .get(job_id)
                     .cloned();
                 let job = &jobs[index];
-                // A running job drops its half-written core in `run`'s failure path; a queued one has nobody
-                // else to do it.
                 let drop_store = (running.is_none() && job.announce.is_none())
                     .then(|| job.store.clone())
                     .flatten();
-                (status, running, drop_store)
+                let drop_existing = (running.is_none() && job.announce.is_none())
+                    .then(|| {
+                        job.existing
+                            .as_ref()
+                            .and_then(|e| e.get("blobs"))
+                            .and_then(Value::as_str)
+                            .map(str::to_owned)
+                    })
+                    .flatten();
+                (status, running, drop_store, drop_existing)
             } else {
-                (status, None, None)
+                (status, None, None, None)
             }
         };
-        if status == JobStatus::Queued || status == JobStatus::Running {
+        if matches!(
+            status,
+            JobStatus::Queued | JobStatus::Running | JobStatus::Copying
+        ) {
             if let Some(cancel) = running_cancel {
                 cancel.abort();
             }
             inner.save();
             if let Some(store) = drop_store {
                 inner.drop_core(store);
+            }
+            if let Some(blobs) = drop_existing {
+                inner.node.keep_copy(&blobs, false);
             }
         } else if status != JobStatus::Announcing {
             let removed = {
@@ -2327,10 +2484,18 @@ where
             };
             inner.save();
             // A dismissed job that never announced leaves no core behind.
-            if removed.announce.is_none()
-                && let Some(store) = removed.store.clone()
-            {
-                inner.drop_core(store);
+            if removed.announce.is_none() {
+                if let Some(store) = removed.store.clone() {
+                    inner.drop_core(store);
+                }
+                if let Some(blobs) = removed
+                    .existing
+                    .as_ref()
+                    .and_then(|e| e.get("blobs"))
+                    .and_then(Value::as_str)
+                {
+                    inner.node.keep_copy(blobs, false);
+                }
             }
             return Some(removed.public_json());
         }

@@ -191,21 +191,37 @@ pub fn safe_equal(a: Option<&str>, b: Option<&str>) -> bool {
     diff == 0
 }
 
-/// `checkPairRateLimit`: six failures inside 15 s lock pairing out.
+/// `failedPairings`: six failures per peer inside 15 s, or 24 across LAN / far peers.
 #[derive(Debug, Default)]
 pub struct PairLimiter {
     failures: Vec<u64>,
+    peers: Vec<(String, Vec<u64>)>,
 }
 
 impl PairLimiter {
     const WINDOW_MS: u64 = 15_000;
-    const MAX_FAILURES: usize = 6;
+    const MAX_PEER_FAILURES: usize = 6;
+    const MAX_GLOBAL_FAILURES: usize = 24;
 
-    /// `checkPairRateLimit()`, answering the app's 429.
     pub fn check(&mut self, now_ms: u64) -> Result<(), CastError> {
+        self.check_peer("", now_ms)
+    }
+
+    pub fn check_peer(&mut self, peer: &str, now_ms: u64) -> Result<(), CastError> {
         self.failures
             .retain(|at| now_ms.saturating_sub(*at) < Self::WINDOW_MS);
-        if self.failures.len() >= Self::MAX_FAILURES {
+        let mut peer_count = 0usize;
+        if let Some(pos) = self.peers.iter().position(|(k, _)| k == peer) {
+            self.peers[pos]
+                .1
+                .retain(|at| now_ms.saturating_sub(*at) < Self::WINDOW_MS);
+            peer_count = self.peers[pos].1.len();
+            if peer_count == 0 {
+                self.peers.remove(pos);
+            }
+        }
+        if peer_count >= Self::MAX_PEER_FAILURES || self.failures.len() >= Self::MAX_GLOBAL_FAILURES
+        {
             return Err(CastError::too_many(
                 "Too many pairing attempts; wait 15 seconds",
             ));
@@ -213,9 +229,20 @@ impl PairLimiter {
         Ok(())
     }
 
-    /// Records a failed attempt (callers push after a rejected code).
     pub fn record_failure(&mut self, now_ms: u64) {
+        self.record_peer_failure("", now_ms);
+    }
+
+    pub fn record_peer_failure(&mut self, peer: &str, now_ms: u64) {
         self.failures.push(now_ms);
+        if let Some((_, list)) = self.peers.iter_mut().find(|(k, _)| k == peer) {
+            list.push(now_ms);
+        } else {
+            if self.peers.len() >= 256 {
+                self.peers.remove(0);
+            }
+            self.peers.push((peer.to_owned(), vec![now_ms]));
+        }
     }
 }
 

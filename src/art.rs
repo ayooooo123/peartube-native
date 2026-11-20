@@ -10,14 +10,11 @@ use std::collections::HashMap;
 use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
+use crate::ssrf::{GuardedRequestError, private_urls_allowed, send_guarded_request};
 use http_body_util::{BodyExt, Full};
 use hyper::body::Bytes;
 use hyper::header::{HeaderMap, HeaderName, HeaderValue, USER_AGENT};
 use hyper::{Method, Request};
-use hyper_rustls::HttpsConnectorBuilder;
-use hyper_util::client::legacy::Client;
-use hyper_util::client::legacy::connect::HttpConnector;
-use hyper_util::rt::TokioExecutor;
 use serde_json::Value;
 use url::Url;
 
@@ -33,17 +30,37 @@ const MAX_CACHE_ENTRIES: usize = 2000;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HttpError {
     message: String,
+    status: Option<u16>,
+    code: Option<&'static str>,
 }
 
 impl HttpError {
     fn new(message: impl Into<String>) -> Self {
         Self {
             message: message.into(),
+            status: None,
+            code: None,
+        }
+    }
+
+    fn ssrf(error: crate::ssrf::SsrfError) -> Self {
+        Self {
+            message: error.message,
+            status: Some(error.status),
+            code: Some(error.code),
         }
     }
 
     pub fn message(&self) -> &str {
         &self.message
+    }
+
+    pub fn status(&self) -> Option<u16> {
+        self.status
+    }
+
+    pub fn code(&self) -> Option<&'static str> {
+        self.code
     }
 }
 
@@ -64,6 +81,7 @@ pub struct SendOptions {
     pub timeout: Duration,
     pub max_bytes: Option<u64>,
     pub redirects: u8,
+    pub allow_private: bool,
 }
 
 impl Default for SendOptions {
@@ -74,6 +92,7 @@ impl Default for SendOptions {
             timeout: Duration::from_millis(10_000),
             max_bytes: None,
             redirects: 0,
+            allow_private: private_urls_allowed(),
         }
     }
 }
@@ -129,18 +148,6 @@ pub async fn send(url: &str, opts: SendOptions) -> Result<HttpResponse, HttpErro
     }
 }
 
-type Https = hyper_rustls::HttpsConnector<HttpConnector>;
-type HttpClient = Client<Https, Full<Bytes>>;
-
-static CLIENT: LazyLock<HttpClient> = LazyLock::new(|| {
-    let https = HttpsConnectorBuilder::new()
-        .with_webpki_roots()
-        .https_or_http()
-        .enable_http1()
-        .build();
-    Client::builder(TokioExecutor::new()).build(https)
-});
-
 async fn hop(url: &Url, opts: &SendOptions) -> Result<HttpResponse, HttpError> {
     let mut headers = HeaderMap::new();
     headers.insert(USER_AGENT, HeaderValue::from_static("PearTube"));
@@ -160,10 +167,12 @@ async fn hop(url: &Url, opts: &SendOptions) -> Result<HttpResponse, HttpError> {
         .map_err(|error| HttpError::new(error.to_string()))?;
     *request.headers_mut() = headers;
 
-    let response = CLIENT
-        .request(request)
+    let response = send_guarded_request(url, request, opts.allow_private)
         .await
-        .map_err(|error| HttpError::new(error.to_string()))?;
+        .map_err(|error| match error {
+            GuardedRequestError::Ssrf(ssrf) => HttpError::ssrf(ssrf),
+            GuardedRequestError::Transport(msg) => HttpError::new(msg),
+        })?;
     let status = response.status().as_u16();
     let mut collected: Vec<(String, String)> = Vec::new();
     for (name, value) in response.headers() {
@@ -236,6 +245,10 @@ pub fn clear_meta_cache() {
 /// Cinemeta answers the wrong `type` with a redirect and an empty meta sometimes, so this takes the first answer
 /// that carries a poster rather than the first answer at all.
 pub async fn meta_for(base: &str, imdb: &str) -> Option<Value> {
+    meta_for_with(base, imdb, crate::ssrf::private_urls_allowed()).await
+}
+
+pub async fn meta_for_with(base: &str, imdb: &str, allow_private: bool) -> Option<Value> {
     if base.is_empty() || !is_imdb_id(imdb) {
         return None;
     }
@@ -254,6 +267,7 @@ pub async fn meta_for(base: &str, imdb: &str) -> Option<Value> {
             &url,
             SendOptions {
                 timeout: Duration::from_millis(8000),
+                allow_private,
                 ..Default::default()
             },
         )
@@ -303,11 +317,22 @@ pub fn art_of(meta: Option<&Value>, field: &str) -> Option<String> {
 
 /// The poster Cinemeta has for an imdb id.
 pub async fn poster_url(base: &str, imdb: &str) -> Option<String> {
-    art_of(meta_for(base, imdb).await.as_ref(), "poster")
+    poster_url_with(base, imdb, crate::ssrf::private_urls_allowed()).await
+}
+
+pub async fn poster_url_with(base: &str, imdb: &str, allow_private: bool) -> Option<String> {
+    art_of(
+        meta_for_with(base, imdb, allow_private).await.as_ref(),
+        "poster",
+    )
 }
 
 /// A wide still for heroes and rails; the poster is the honest fallback when Cinemeta has none.
 pub async fn backdrop_url(base: &str, imdb: &str) -> Option<String> {
-    let meta = meta_for(base, imdb).await;
+    backdrop_url_with(base, imdb, crate::ssrf::private_urls_allowed()).await
+}
+
+pub async fn backdrop_url_with(base: &str, imdb: &str, allow_private: bool) -> Option<String> {
+    let meta = meta_for_with(base, imdb, allow_private).await;
     art_of(meta.as_ref(), "background").or_else(|| art_of(meta.as_ref(), "poster"))
 }

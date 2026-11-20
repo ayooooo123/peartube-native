@@ -177,7 +177,9 @@ struct State {
     current: Option<Arc<Mutex<Run>>>,
     runs: Vec<(String, Arc<Mutex<Run>>)>,
     controls: HashMap<u64, Arc<OnceCell<Option<Control>>>>,
-    served: Vec<(u64, Control, VecDeque<Instant>)>,
+    served: Vec<(u64, Control)>,
+    peer_hits: Vec<([u8; 32], VecDeque<Instant>)>,
+    anon_hits: VecDeque<Instant>,
     unpairs: HashMap<u64, ServeHandle>,
     node_hits: VecDeque<Instant>,
     list: Option<(Instant, Arc<Vec<Offer>>)>,
@@ -271,11 +273,13 @@ impl GlobalSearch {
         state.list = None;
         let unpairs = std::mem::take(&mut state.unpairs);
         let served = std::mem::take(&mut state.served);
+        state.peer_hits.clear();
+        state.anon_hits.clear();
         let was = std::mem::replace(&mut state.announcing, false);
         let session = state.session;
         drop(state);
         drop(unpairs);
-        for (_, control, _) in served {
+        for (_, control) in served {
             control.close();
         }
         if was {
@@ -484,13 +488,27 @@ impl Inner {
             }
             let now = Instant::now();
             let id = control.id();
-            let index = state.served.iter().position(|(held, _, _)| *held == id);
-            let mut rec = match index {
-                Some(index) => state.served.remove(index),
-                None => (id, control.clone(), VecDeque::new()),
+            if let Some(pos) = state.served.iter().position(|(held, _)| *held == id) {
+                let rec = state.served.remove(pos);
+                state.served.push(rec);
+            }
+            let busy = match control.mux().stream_info().remote_public_key {
+                Some(peer) => {
+                    if let Some((_, stamps)) = state.peer_hits.iter_mut().find(|(k, _)| *k == peer)
+                    {
+                        over_limit(stamps, PER_CHANNEL, now)
+                    } else {
+                        if state.peer_hits.len() >= 256 {
+                            state.peer_hits.remove(0);
+                        }
+                        let mut stamps = VecDeque::new();
+                        let over = over_limit(&mut stamps, PER_CHANNEL, now);
+                        state.peer_hits.push((peer, stamps));
+                        over
+                    }
+                }
+                None => over_limit(&mut state.anon_hits, PER_CHANNEL, now),
             };
-            let busy = over_limit(&mut rec.2, PER_CHANNEL, now);
-            state.served.push(rec);
             if busy || over_limit(&mut state.node_hits, PER_NODE, now) {
                 return Err("busy".to_owned());
             }
@@ -531,11 +549,11 @@ impl Inner {
     fn track(&self, control: Control) {
         let mut state = lock(&self.state);
         let id = control.id();
-        state.served.retain(|(held, _, _)| *held != id);
-        state.served.push((id, control, VecDeque::new()));
+        state.served.retain(|(held, _)| *held != id);
+        state.served.push((id, control));
         // The least recently used channel goes, never the connection under it.
         while state.served.len() > SERVE_CHANNELS {
-            let (_, old, _) = state.served.remove(0);
+            let (_, old) = state.served.remove(0);
             old.close();
         }
     }
@@ -566,7 +584,7 @@ impl Inner {
                 if let Some(inner) = weak.upgrade() {
                     let mut state = lock(&inner.state);
                     let id = control.id();
-                    state.served.retain(|(held, _, _)| *held != id);
+                    state.served.retain(|(held, _)| *held != id);
                     state.controls.remove(&conn_id);
                 }
             })
@@ -608,9 +626,12 @@ impl Inner {
             on_open: None,
             on_close: {
                 let weak = self.weak.clone();
-                Some(Arc::new(move |_control: Control| {
+                Some(Arc::new(move |control: Control| {
                     if let Some(inner) = weak.upgrade() {
-                        lock(&inner.state).controls.remove(&id);
+                        let mut state = lock(&inner.state);
+                        let cid = control.id();
+                        state.served.retain(|(held, _)| *held != cid);
+                        state.controls.remove(&id);
                     }
                 }))
             },

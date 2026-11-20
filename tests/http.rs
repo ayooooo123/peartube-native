@@ -26,7 +26,7 @@ use serde::Deserialize;
 use serde_json::{Map, Number, Value, json};
 use tokio::sync::watch;
 
-const HOST: &str = "relay.test:8174";
+const HOST: &str = "relay.local:8174";
 const STREAM: &str = "http://127.0.0.1:9/?key=aaa&blob=bbb&type=video%2Fmp4";
 const KEY: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const PUBLIC: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
@@ -692,7 +692,7 @@ fn full_options(token: Option<&str>) -> Options {
     options.poster = Some(poster());
     options.backdrop = Some(backdrop());
     options.extra_status = Some(Arc::new(
-        || json!({ "lan": null, "apiUrl": "http://relay.test:8174" }),
+        || json!({ "lan": null, "apiUrl": "http://relay.local:8174" }),
     ));
     options.acquirer = Some(Arc::new(FakeAcquirer));
     options.mirror = Some(Arc::new(FakeMirror));
@@ -900,7 +900,7 @@ async fn settings_are_private_and_gated_by_token() {
         (status, body.as_str()),
         (
             403,
-            "{\"error\":\"Settings can only be changed from the relay’s own page\"}"
+            "{\"error\":\"This relay can only be changed from its own page\"}"
         )
     );
     let (status, _, _) = get(

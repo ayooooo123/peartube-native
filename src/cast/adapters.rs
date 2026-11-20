@@ -189,6 +189,7 @@ impl CastPeer for NodePeer {
                     let _ = tx.send(handle);
                 }
             }));
+            let had_lan = lan.is_some();
             if let Some(lan) = lan.clone() {
                 net.dial_lan_peer(&api::LanEndpoint {
                     host: lan.host,
@@ -196,14 +197,23 @@ impl CastPeer for NodePeer {
                     public_key: key.clone(),
                 });
             }
-            net.join_peer(&key, lan.is_some());
+            let cancel_lan_first = net.join_peer_with_handle(&key, had_lan);
             let result = tokio::time::timeout(timeout, rx).await;
+            if let Some(handle) = cancel_lan_first {
+                handle.abort();
+            }
             unlisten();
             match result {
                 Ok(Ok(handle)) => Ok(Arc::new(Conn::new(handle)) as PeerConn),
-                _ => Err(CastError::new("The peer did not connect", 0)),
+                _ => {
+                    net.leave_peer(&key);
+                    Err(CastError::new("The peer did not connect", 0))
+                }
             }
         })
+    }
+    fn leave_peer(&self, key: &str) {
+        self.node.net().leave_peer(key);
     }
     fn open_uri(
         &self,

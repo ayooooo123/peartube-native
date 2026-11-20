@@ -128,6 +128,7 @@ pub trait CastPeer: Send + Sync {
         lan: Option<LanAddress>,
         timeout: Duration,
     ) -> BoxFuture<'_, Result<PeerConn, CastError>>;
+    fn leave_peer(&self, _key: &str) {}
     fn open_uri(
         &self,
         uri: &str,

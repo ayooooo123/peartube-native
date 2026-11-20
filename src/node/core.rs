@@ -1189,7 +1189,9 @@ pub async fn create_node(options: Value) -> Result<Arc<CoreNode>, NodeError> {
         if channel.writable() && identity.founded_key().is_empty() {
             identity.mark_founded(&primary_hex);
         }
-        identity.save_identity();
+        if identity.is_dirty() {
+            let _ = identity.save_identity();
+        }
         shared.refresh_from(identity);
     }
     handle.set(channel.clone());
@@ -1659,6 +1661,15 @@ impl CatalogBlobs for BlobOps {
         self.blobs()
             .is_some_and(|blobs| blobs.slot_keys().contains(blob))
     }
+    fn is_kept(&self, blob: &[u8; 32]) -> bool {
+        self.blobs().is_some_and(|blobs| blobs.is_kept(blob))
+    }
+
+    fn set_alternates(&self, group: Vec<super::blobs::CopyMember>) {
+        if let Some(blobs) = self.blobs() {
+            blobs.set_alternates(group);
+        }
+    }
 
     fn slot_keys(&self) -> Vec<[u8; 32]> {
         self.blobs()
@@ -1939,6 +1950,10 @@ impl Node for CoreNode {
         self.net().join_peer(key, lan_first);
     }
 
+    async fn leave_peer(&self, key: &str) {
+        self.net().leave_peer(key);
+    }
+
     async fn evict_behind(
         &self,
         blobs: &str,
@@ -2048,6 +2063,7 @@ impl Node for CoreNode {
             .await?;
         if let Some(previous) = previous {
             let _ = self.blobs().gc_unreferenced_slot_blob(&previous).await;
+            self.blobs().keep_copy(&previous.blobs, false);
         }
         channel.changed();
         Ok(())
@@ -2129,6 +2145,147 @@ impl Node for CoreNode {
             .map_err(|error| NodeError(error.to_string()))?;
         self.blobs().warm(&announce).await?;
         Ok(())
+    }
+
+    fn entry_health(&self, entry: &Announce) -> EntryHealth {
+        let net = self.net();
+        self.blobs().entry_health(entry, |_core_key| {
+            net.connections().iter().filter(|c| c.is_lan()).count() as u64
+        })
+    }
+
+    async fn held_bytes(&self, entry: &Announce) -> u64 {
+        let Some(key) = parse_hex32(&entry.blobs) else {
+            return 0;
+        };
+        let blobs = self.blobs();
+        if blobs.is_owned_blob(&key) {
+            return entry.size;
+        }
+        let open = blobs.open_core(&key);
+        blobs.entry_cached_bytes(open.as_ref(), entry).await
+    }
+
+    fn keep_copy(&self, blobs_hex: &str, on: bool) {
+        self.blobs().keep_copy(blobs_hex, on);
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn copy_existing(
+        &self,
+        blobs_hex: &str,
+        blob: Blob,
+        size: u64,
+        sha256_expected: &str,
+        stall: Duration,
+        cancel: Arc<crate::acquire::Cancel>,
+        on_bytes: Arc<dyn Fn(u64) + Send + Sync>,
+    ) -> Result<bool, String> {
+        let Some(key) = parse_hex32(blobs_hex) else {
+            return Ok(false);
+        };
+        let start = blob.block_offset;
+        let block_length = blob.block_length;
+        if block_length == 0 {
+            return Ok(false);
+        }
+        let mut core: Option<Arc<Session>> = None;
+        let mut bag: Option<hypercore::RequestBag> = None;
+        let mut have: Option<u64> = None;
+        let mut progress_at = tokio::time::Instant::now();
+        let result = loop {
+            if cancel.is_aborted() {
+                if let Some(b) = bag.take() {
+                    b.destroy("copy cancelled");
+                }
+                return Err("Cancelled".into());
+            }
+            if core.as_ref().is_none_or(|c| c.is_closed()) {
+                if let Some(b) = bag.take() {
+                    b.destroy("core reopened");
+                }
+                let opened = self
+                    .blobs()
+                    .blob_core(&key)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                let next_bag = hypercore::RequestBag::new();
+                let dl = opened.download_with_bag(
+                    start,
+                    Some(start + block_length),
+                    false,
+                    next_bag.clone(),
+                );
+                tokio::spawn(async move {
+                    let _ = dl.await;
+                });
+                bag = Some(next_bag);
+                core = Some(opened);
+            }
+            let session = core.as_ref().expect("opened above");
+            let now = session.count_local(start, start + block_length);
+            if have.is_none_or(|prev| now > prev) {
+                have = Some(now);
+                progress_at = tokio::time::Instant::now();
+            }
+            let bytes = size.min(
+                ((size as f64) * (now as f64) / (block_length as f64))
+                    .round()
+                    .max(0.0) as u64,
+            );
+            on_bytes(bytes);
+            if now >= block_length {
+                break Some(session.clone());
+            }
+            if progress_at.elapsed() > stall {
+                break None;
+            }
+            tokio::select! {
+                _ = tokio::time::sleep(Duration::from_secs(1)) => {}
+                _ = cancel.aborted() => {
+                    if let Some(b) = bag.take() {
+                        b.destroy("copy cancelled");
+                    }
+                    return Err("Cancelled".into());
+                }
+            }
+        };
+        if let Some(b) = bag.take() {
+            b.destroy("copy finished");
+        }
+        let Some(session) = result else {
+            return Ok(false);
+        };
+        if blob.byte_length != size {
+            return Ok(false);
+        }
+        let id = BlobId {
+            block_offset: blob.block_offset,
+            block_length: blob.block_length,
+            byte_offset: blob.byte_offset,
+            byte_length: blob.byte_length,
+        };
+        let read_bag = hypercore::RequestBag::new();
+        let mut stream = byte_stream::ByteStream::open(
+            session.core(),
+            id,
+            byte_stream::StreamOptions {
+                start: 0,
+                length: None,
+                window_bytes: 0,
+                active: true,
+            },
+            read_bag,
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+        use sha2::Digest;
+        let mut hasher = sha2::Sha256::new();
+        while let Some(chunk) = stream.next().await.map_err(|e| e.to_string())? {
+            hasher.update(&chunk);
+        }
+        let actual = hex(&hasher.finalize());
+        Ok(actual == sha256_expected)
     }
 
     async fn identity(&self, reveal_mnemonic: bool) -> Result<ApiIdentity, Self::Error> {

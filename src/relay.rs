@@ -116,6 +116,10 @@ impl Relay {
         let guard: Arc<Mutex<Option<(String, PrivateGuard)>>> = Arc::new(Mutex::new(None));
         let cast_host: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
 
+        let allow_private_urls = matches!(
+            env.get("PEARTUBE_ALLOW_PRIVATE_URLS").map(String::as_str),
+            Some("1" | "true")
+        );
         let relay = Arc::new_cyclic(|weak: &std::sync::Weak<Inner>| {
             let weak = weak.clone();
             let jobs_file = storage.join("jobs.json");
@@ -188,6 +192,7 @@ impl Relay {
                         cinemeta_url: cinemeta.clone(),
                         config_dir: ubit_config.clone(),
                         ubit: ubit_bin(&env),
+                        allow_private: allow_private_urls,
                     };
                     Arc::new(move |link: String| {
                         let options = options.clone();
@@ -209,8 +214,16 @@ impl Relay {
                         }
                     })
                 }),
-                poster: Some(http::cinemeta_lookup(&cinemeta, http::Art::Poster)),
-                backdrop: Some(http::cinemeta_lookup(&cinemeta, http::Art::Backdrop)),
+                poster: Some(http::cinemeta_lookup_with(
+                    &cinemeta,
+                    http::Art::Poster,
+                    allow_private_urls,
+                )),
+                backdrop: Some(http::cinemeta_lookup_with(
+                    &cinemeta,
+                    http::Art::Backdrop,
+                    allow_private_urls,
+                )),
                 // Set when the node opens: its blob server binds loopback on a fresh port.
                 blob: None,
                 tls_ca: tls_ca.map(Into::into),
@@ -494,7 +507,15 @@ impl Relay {
             Arc::new(UbitPages {
                 ubit: ubit_bin(&self.0.env),
             }),
-            Arc::new(HyperHttp),
+            Arc::new(HyperHttp {
+                allow_private_urls: matches!(
+                    self.0
+                        .env
+                        .get("PEARTUBE_ALLOW_PRIVATE_URLS")
+                        .map(String::as_str),
+                    Some("1" | "true")
+                ),
+            }),
             Arc::new(NodeStreams),
             Arc::new(OsRandom),
             AcquireOptions {
@@ -549,13 +570,26 @@ impl Relay {
                 Arc::new(LocalMirrorFiles),
                 Arc::new(NodeStreams),
                 Arc::new(NodeStreams),
-                Arc::new(ArtFeed),
+                Arc::new(ArtFeed {
+                    allow_private_urls: matches!(
+                        self.0
+                            .env
+                            .get("PEARTUBE_ALLOW_PRIVATE_URLS")
+                            .map(String::as_str),
+                        Some("1" | "true")
+                    ),
+                }),
                 vec![seeder, media_check.clone()],
                 MirrorOptions {
                     storage: self.0.storage.display().to_string(),
                     mirror_channel: js_truthy(&cfg("publishChannel")),
                     rechunk: js_truthy(&cfg("rechunk")),
-                    watch_dir: non_empty(text(&cfg("watchDir"))),
+                    watch_dir: self
+                        .0
+                        .env
+                        .get("PEARTUBE_WATCH_DIR")
+                        .cloned()
+                        .and_then(non_empty),
                     feeds: strings(&cfg("feeds")),
                     plugins_dir: None,
                     start_runs: if hiverelay_enabled {
@@ -768,11 +802,8 @@ impl Relay {
             }
             node.serve_search(search_serve(&media_check, on));
         }
-        if has(&["watchDir", "feeds"]) {
-            mirror.configure(
-                Some(non_empty(text(&self.cfg("watchDir").await))),
-                Some(strings(&self.cfg("feeds").await)),
-            );
+        if has(&["feeds"]) {
+            mirror.configure(Some(strings(&self.cfg("feeds").await)));
         }
         if has(&[
             "replicate",
@@ -1107,6 +1138,7 @@ fn add_job(request: &Value) -> AddJob {
         channel: (!request["channel"].is_null()).then(|| js_truthy(&request["channel"])),
         private: js_truthy(&request["private"]),
         plugin: None,
+        existing: None,
     }
 }
 
@@ -1144,22 +1176,27 @@ impl http::Mirror for MirrorBridge {
 /// `bin/private-relay.js`'s mode: the process is a Corestore-free 2-hop guard forwarder, never a
 /// content relay. An empty variable is unset, as JS truthiness has it.
 pub fn guard_mode(env: &HashMap<String, String>) -> bool {
-    present(env, "PEARTUBE_PRIVATE_RELAY") || present(env, "PEARTUBE_PRIVATE_RELAY_PORT")
+    flag_on(env, "PEARTUBE_PRIVATE_RELAY") || present(env, "PEARTUBE_PRIVATE_RELAY_PORT")
 }
 
 fn present(env: &HashMap<String, String>, key: &str) -> bool {
     env.get(key).is_some_and(|value| !value.is_empty())
 }
 
+fn flag_on(env: &HashMap<String, String>, key: &str) -> bool {
+    env.get(key)
+        .is_some_and(|value| !value.is_empty() && value != "0" && value != "false")
+}
+
 /// The flags `bin/relay.js` refuses beside guard mode: a guard serves no channel and no content.
-const CONTENT_FLAGS: [&str; 6] = [
-    "PEARTUBE_CHANNEL",
-    "PEARTUBE_SOURCES",
-    "PEARTUBE_PRIVATE_ROUTING",
-    "PEARTUBE_REPLICATE",
-    "PEARTUBE_WATCH_DIR",
-    "PEARTUBE_MIRROR_FEEDS",
-];
+fn has_content_flags(env: &HashMap<String, String>) -> bool {
+    present(env, "PEARTUBE_CHANNEL")
+        || present(env, "PEARTUBE_SOURCES")
+        || flag_on(env, "PEARTUBE_PRIVATE_ROUTING")
+        || flag_on(env, "PEARTUBE_REPLICATE")
+        || present(env, "PEARTUBE_WATCH_DIR")
+        || present(env, "PEARTUBE_MIRROR_FEEDS")
+}
 
 /// A standalone guard, listening and announcing. No Corestore, no storage folder, no files.
 pub struct StandaloneGuard {
@@ -1206,7 +1243,7 @@ impl StandaloneGuard {
 pub async fn start_standalone_guard(
     env: &HashMap<String, String>,
 ) -> Result<StandaloneGuard, String> {
-    if CONTENT_FLAGS.iter().any(|flag| present(env, flag)) {
+    if has_content_flags(env) {
         return Err(
             "PEARTUBE_PRIVATE_RELAY runs a standalone Corestore-free guard forwarder and cannot be combined with channel or content flags; run peartube-private-relay separately"
                 .to_owned(),

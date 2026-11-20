@@ -6,7 +6,7 @@ import { load, outFile } from './app.mjs'
 
 const { createApi } = await load('src/http.js')
 
-const HOST = 'relay.test:8174'
+const HOST = 'relay.local:8174'
 const STREAM = 'http://127.0.0.1:9/?key=aaa&blob=bbb&type=video%2Fmp4'
 const KEY = 'a'.repeat(64)
 
@@ -101,7 +101,7 @@ const full = {
   posterUrl: artPoster,
   backdropUrl: artBackdrop,
   identify: async url => ({ title: 'Identified', url }),
-  extraStatus: () => ({ lan: null, apiUrl: 'http://relay.test:8174' }),
+  extraStatus: () => ({ lan: null, apiUrl: 'http://relay.local:8174' }),
   get settings () { return null },
   onSourcesChanged: () => {}
 }
@@ -143,8 +143,8 @@ const scenarios = {
     json('POST', '/v1/channel/publish', { type: 'source', sourceKey: 'ABCDEF', title: 'T' }),
     json('POST', '/v1/channel/publish', { id: 'imdb:tt1234567' }),
     json('DELETE', '/v1/channel/sources/' + publicKey),
-    json('POST', '/v1/open', { uri: 'pear://watch/film' }),
-    json('GET', '/v1/resolve?uri=pear://watch/film'),
+    json('POST', '/v1/open', { uri: 'peartube://watch/' + KEY + ':0:1:0:3?id=imdb%3Att1234567&title=Film' }),
+    json('GET', '/v1/resolve?uri=' + encodeURIComponent('peartube://watch/' + KEY + ':0:1:0:3?id=imdb%3Att1234567&title=Film')),
     json('POST', '/v1/cache/clear', {}),
     json('POST', '/v1/acquire', { id: 'i', title: 't', source: 's', channel: 'c' }),
     json('GET', '/v1/jobs'),
@@ -173,6 +173,8 @@ const scenarios = {
     json('POST', '/v1/identity/recover', { mnemonic: 'a b c' }),
     json('GET', '/v1/identity', undefined, { origin: 'http://evil.test' }),
     json('GET', '/v1/settings'),
+    json('GET', '/v1/status', undefined, { host: 'relay.test:8174' }),
+    json('POST', '/v1/entries/remove', { key: 'abc' }, { host: 'relay.test:8174' }),
     json('POST', '/v1/cast/pair', {}),
     json('GET', '/v1/blob?key=a&blob=b')
   ],

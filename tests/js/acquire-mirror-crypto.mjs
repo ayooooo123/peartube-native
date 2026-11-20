@@ -1,5 +1,7 @@
 // Deterministic `node:crypto` ids for the acquire scenario harness: UUID call N and random-bytes call N are
 // fixed sequences so the Rust fake RNG can produce the same job ids and store keys.
+export { createHash } from 'node:crypto'
+
 let uuids = 0
 let blocks = 0
 

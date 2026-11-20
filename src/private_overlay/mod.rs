@@ -46,6 +46,8 @@ pub const MAX_RV_SLOTS_PER_TOPIC: usize = 64;
 pub const MAX_CIRCUITS_TOTAL: usize = 1024;
 pub const MAX_CIRCUITS_PER_CONN: usize = 32;
 pub const MAX_CARD_BYTES: usize = 512;
+pub const MAX_RPC_FRAME: usize = 64 * 1024;
+pub const MAX_DHT_OPS_PER_10S: usize = 256;
 /// `crypto_secretbox` nonce plus MAC.
 const BOX_OVERHEAD: usize = 24 + 16;
 /// A route card is 112 body bytes plus a 64-byte signature.
@@ -202,7 +204,26 @@ pub fn diversity_bucket_for_address(
     if host.is_empty() {
         return None;
     }
-    let clean = host.strip_prefix("::ffff:").unwrap_or(host);
+    let loopback = |label: &str| {
+        let p = port.filter(|&p| allow_loopback && p > 0)?;
+        Some(format!("loopback:{label}:{p}"))
+    };
+    let groups = host
+        .contains(':')
+        .then(|| crate::protocol::ipv6_groups(host))
+        .flatten();
+    let mapped = groups
+        .filter(|g| g[..5].iter().all(|&x| x == 0) && g[5] == 0xffff)
+        .map(|g| {
+            format!(
+                "{}.{}.{}.{}",
+                g[6] >> 8,
+                g[6] & 0xff,
+                g[7] >> 8,
+                g[7] & 0xff
+            )
+        });
+    let clean = mapped.as_deref().unwrap_or(host);
     let parts: Vec<&str> = clean.split('.').collect();
     let is_v4 = parts.len() == 4
         && parts.iter().all(|p| {
@@ -215,28 +236,18 @@ pub fn diversity_bucket_for_address(
         let b = parts[1].parse::<u32>().ok()?;
         let d = parts[2].parse::<u32>().ok()?;
         if a == 127 {
-            let ok = allow_loopback && port.is_some_and(|p| p > 0);
-            return ok.then(|| format!("loopback:{clean}:{}", port.unwrap_or(0)));
+            return loopback(clean);
         }
         if a == 0 {
             return None;
         }
         return Some(format!("ipv4:{a}.{b}.{d}.0/24"));
     }
-    if clean == "::1" {
-        let ok = allow_loopback && port.is_some_and(|p| p > 0);
-        return ok.then(|| format!("loopback:::1:{}", port.unwrap_or(0)));
+    let g = groups?;
+    if g[..7].iter().all(|&x| x == 0) {
+        return if g[7] == 1 { loopback("::1") } else { None };
     }
-    if clean.contains(':') {
-        let groups: Vec<String> = clean
-            .to_lowercase()
-            .split(':')
-            .take(3)
-            .map(|s| format!("{s:0>4}"))
-            .collect();
-        return Some(format!("ipv6:{}/48", groups.join(":")));
-    }
-    None
+    Some(format!("ipv6:{:04x}:{:04x}:{:04x}/48", g[0], g[1], g[2]))
 }
 
 /// Bucket of a socket address, using its `IpAddr` text form.
@@ -400,6 +411,9 @@ impl Frame {
     }
 
     pub fn decode(buf: &[u8]) -> Option<Self> {
+        if buf.len() > MAX_RPC_FRAME {
+            return None;
+        }
         let mut r = Reader::new(buf.to_vec().into());
         let op = r.uint().ok()?;
         let id = r.uint().ok()?;

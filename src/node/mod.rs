@@ -68,6 +68,9 @@ pub trait Node: Send + Sync + 'static {
     fn lan_endpoint(&self) -> impl Future<Output = Option<LanEndpoint>> + Send;
     fn dial_lan_peer(&self, endpoint: LanEndpoint) -> impl Future<Output = ()> + Send;
     fn join_peer(&self, key: &str, lan_first: bool) -> impl Future<Output = ()> + Send;
+    fn leave_peer(&self, _key: &str) -> impl Future<Output = ()> + Send {
+        async {}
+    }
     fn evict_behind(
         &self,
         blobs: &str,
@@ -151,6 +154,26 @@ pub trait Node: Send + Sync + 'static {
         join_source: bool,
     ) -> impl Future<Output = Result<OpenUri, Self::Error>> + Send;
     fn warm(&self, entry: &Value) -> impl Future<Output = Result<(), Self::Error>> + Send;
+    fn entry_health(&self, _entry: &Announce) -> EntryHealth {
+        EntryHealth::default()
+    }
+    fn held_bytes(&self, _entry: &Announce) -> impl Future<Output = u64> + Send {
+        async { 0 }
+    }
+    fn keep_copy(&self, _blobs: &str, _on: bool) {}
+    #[allow(clippy::too_many_arguments)]
+    fn copy_existing(
+        &self,
+        _blobs: &str,
+        _blob: Blob,
+        _size: u64,
+        _sha256: &str,
+        _stall: std::time::Duration,
+        _cancel: std::sync::Arc<crate::acquire::Cancel>,
+        _on_bytes: std::sync::Arc<dyn Fn(u64) + Send + Sync>,
+    ) -> impl Future<Output = Result<bool, String>> + Send {
+        async { Ok(false) }
+    }
     fn identity(
         &self,
         reveal_mnemonic: bool,

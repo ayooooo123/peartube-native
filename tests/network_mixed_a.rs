@@ -69,6 +69,7 @@ impl Js {
             .arg(size.to_string())
             .current_dir(env!("CARGO_MANIFEST_DIR"))
             .env("PEARTUBE_APP", app_dir())
+            .env("PEARTUBE_ALLOW_PRIVATE_URLS", "1")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())
@@ -274,7 +275,9 @@ fn build_acquirer(
         Arc::new(UbitPages {
             ubit: String::new(),
         }),
-        Arc::new(HyperHttp),
+        Arc::new(HyperHttp {
+            allow_private_urls: true,
+        }),
         Arc::new(NodeStreams),
         Arc::new(OsRandom),
         opts,
@@ -297,6 +300,7 @@ fn http_job(id: &str, title: &str, url: &str, headers: &[(&str, &str)]) -> AddJo
         channel: Some(true),
         private: false,
         plugin: None,
+        existing: None,
     }
 }
 

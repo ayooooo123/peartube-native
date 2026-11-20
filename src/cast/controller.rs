@@ -84,6 +84,7 @@ struct Active {
     serial: u64,
     receiver_id: String,
     receiver_name: String,
+    public_key: String,
     transport: &'static str,
     pair_token: String,
     state: CastState,
@@ -255,6 +256,11 @@ impl Inner {
         let session = lock(&self.active).take();
         if let Some(session) = session {
             session.control.close();
+            if !session.public_key.is_empty()
+                && let Some(node) = self.node()
+            {
+                node.leave_peer(&session.public_key);
+            }
         }
     }
 
@@ -347,6 +353,7 @@ impl Inner {
                     serial,
                     receiver_id: receiver_id.to_owned(),
                     receiver_name,
+                    public_key: target.public_key.clone(),
                     transport,
                     pair_token: target.token.clone(),
                     state,
@@ -660,10 +667,16 @@ impl Inner {
                 Ok(reply) => reply,
                 Err(error) => {
                     control.close();
+                    if let Some(node) = self.node() {
+                        node.leave_peer(&key);
+                    }
                     return Err(error.into());
                 }
             };
             control.close();
+            if let Some(node) = self.node() {
+                node.leave_peer(&key);
+            }
             record = SavedReceiver {
                 id: reply
                     .get("deviceId")

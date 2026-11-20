@@ -5,3 +5,7 @@ export const Readable = {
     return iterable
   }
 }
+
+export default class ByteStream {
+  async * [Symbol.asyncIterator] () {}
+}

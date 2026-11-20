@@ -8,6 +8,9 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { load, outFile } from './app.mjs'
 
+// Local fixture servers listen on 127.0.0.1; SSRF guards themselves are tested separately.
+process.env.PEARTUBE_ALLOW_PRIVATE_URLS = '1'
+
 const { send, metaFor, posterUrl, backdropUrl } = await load('src/art.js')
 const {
   parseName, fileName, cinemetaSearch, candidateEntry, identify, probe, ubitInfo, downloadPage, norm, strong

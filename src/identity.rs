@@ -95,6 +95,7 @@ pub struct Identity<C: Channel> {
     current_mnemonic: String,
     vault: Option<Vault>,
     founded_key: String,
+    dirty: bool,
 }
 
 impl<C: Channel> Identity<C> {
@@ -123,7 +124,7 @@ impl<C: Channel> Identity<C> {
             .unwrap_or_default();
         let mut current_mnemonic = match &option_phrase {
             Some(phrase) => normalize_mnemonic(phrase),
-            None => saved_phrase,
+            None => saved_phrase.clone(),
         };
         if !current_mnemonic.is_empty() && !validate_mnemonic(&current_mnemonic) {
             if option_phrase.is_some() {
@@ -140,6 +141,9 @@ impl<C: Channel> Identity<C> {
             Some(Value::String(hex)) if is_hex64(hex) => hex.clone(),
             _ => String::new(),
         };
+        let dirty = option_phrase.is_some()
+            && !current_mnemonic.is_empty()
+            && current_mnemonic != saved_phrase;
         Ok(Self {
             channel: ctx.channel,
             file,
@@ -147,6 +151,7 @@ impl<C: Channel> Identity<C> {
             current_mnemonic,
             vault,
             founded_key,
+            dirty,
         })
     }
 
@@ -160,6 +165,7 @@ impl<C: Channel> Identity<C> {
         if self.vault.is_none() {
             self.current_mnemonic = generate_mnemonic(12);
             self.vault = derive_identity(&self.current_mnemonic).ok();
+            self.dirty = true;
         }
         self.vault.as_ref().expect("freshly generated phrase")
     }
@@ -171,7 +177,14 @@ impl<C: Channel> Identity<C> {
 
     /// `markFounded`.
     pub fn mark_founded(&mut self, key: &str) {
-        self.founded_key = key.to_owned();
+        if self.founded_key != key {
+            self.founded_key = key.to_owned();
+            self.dirty = true;
+        }
+    }
+
+    pub fn is_dirty(&self) -> bool {
+        self.dirty
     }
 
     /// The saved subscriber epoch keys, keyed `channel:epoch` in insertion order.
@@ -179,8 +192,9 @@ impl<C: Channel> Identity<C> {
         &self.access_keys
     }
 
-    /// `saveIdentity`: tmp then rename with mode `0600`, errors ignored like the JS.
-    pub fn save_identity(&self) {
+    /// `saveIdentity`: tmp then rename with mode `0600`; throws when `identity.json` cannot be
+    /// written.
+    pub fn save_identity(&mut self) -> Result<(), IdentityError> {
         let mut payload = Map::new();
         payload.insert(
             "mnemonic".to_owned(),
@@ -194,9 +208,8 @@ impl<C: Channel> Identity<C> {
             "accessKeys".to_owned(),
             Value::Object(self.access_keys.clone()),
         );
-        let Ok(text) = serde_json::to_string_pretty(&Value::Object(payload)) else {
-            return;
-        };
+        let text = serde_json::to_string_pretty(&Value::Object(payload))
+            .map_err(|e| IdentityError::new(e.to_string()))?;
         let mut tmp = self.file.clone().into_os_string();
         tmp.push(".tmp");
         let tmp = PathBuf::from(tmp);
@@ -214,7 +227,9 @@ impl<C: Channel> Identity<C> {
             drop(handle);
             fs::rename(&tmp, &self.file)
         };
-        let _ = write();
+        write().map_err(|e| IdentityError::new(e.to_string()))?;
+        self.dirty = false;
+        Ok(())
     }
 
     /// `claimWithMnemonic`: adopt a phrase, then claim the open channel for it when it matches.
@@ -224,12 +239,17 @@ impl<C: Channel> Identity<C> {
         alias: &str,
     ) -> Result<Value, IdentityError> {
         let next = derive_identity(phrase)?;
+        let prev_mnemonic = self.current_mnemonic.clone();
+        let prev_vault = self.vault.clone();
         self.current_mnemonic = next.mnemonic.clone();
         let channel_key = next.channel_key.clone();
         let primary = self.channel.primary_key();
-        // Save the phrase before deciding: a phrase for another channel still replaces the saved one.
         self.vault = Some(next);
-        self.save_identity();
+        if let Err(err) = self.save_identity() {
+            self.current_mnemonic = prev_mnemonic;
+            self.vault = prev_vault;
+            return Err(err);
+        }
         let mut out = Map::new();
         if channel_key != primary {
             out.insert("claimed".to_owned(), Value::Bool(false));
@@ -300,9 +320,19 @@ impl<C: Channel> Identity<C> {
             return Err(IdentityError::new("Invalid subscriber access key"));
         }
         let epoch = epoch as i64;
-        self.access_keys
-            .insert(format!("{channel}:{epoch}"), Value::String(key));
-        self.save_identity();
+        let key_id = format!("{channel}:{epoch}");
+        let prev = self.access_keys.insert(key_id.clone(), Value::String(key));
+        if let Err(err) = self.save_identity() {
+            match prev {
+                Some(old) => {
+                    self.access_keys.insert(key_id, old);
+                }
+                None => {
+                    self.access_keys.shift_remove(&key_id);
+                }
+            }
+            return Err(err);
+        }
         self.channel.update();
         let mut out = Map::new();
         out.insert("channel".to_owned(), Value::String(channel));
