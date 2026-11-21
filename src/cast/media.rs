@@ -55,7 +55,7 @@ struct DownloadWindow {
     /// polled, so holding it keeps the range open.
     #[allow(dead_code)]
     range: Pin<Box<dyn Future<Output = ()> + Send>>,
-    #[allow(dead_code)]
+    /// The window's share of the memory budget; `steer_window` counts it as free when it re-plans.
     permit: Option<tokio::sync::OwnedSemaphorePermit>,
 }
 
@@ -310,13 +310,28 @@ impl Media {
             .as_ref()
             .and_then(|peer| peer.memory_cache_bytes())
             .map_or(u64::MAX, |limit| limit * 3 / 4);
-        let (bytes, permit) = reserve_window(
-            self.peer
-                .as_ref()
-                .and_then(|peer| peer.memory_window_budget()),
-            wanted.min(cache_cap),
-        );
-        let end = (first + bytes.div_ceil(bs).max(1)).min(last);
+        let budget = self
+            .peer
+            .as_ref()
+            .and_then(|peer| peer.memory_window_budget());
+        let target = wanted.min(cache_cap);
+        // The window's own permits are free for its next plan: it hands them back when it moves.
+        // Counting them as taken made a window that held the whole pool see it empty on the next
+        // tick, shrink to one block, then grow back on the tick after.
+        let planned = match &budget {
+            Some(budget) => {
+                let held = self
+                    .window
+                    .lock()
+                    .expect("cast window")
+                    .as_ref()
+                    .and_then(|window| window.permit.as_ref())
+                    .map_or(0, |permit| permit.num_permits() as u64);
+                target.min(budget.available_permits() as u64 + held)
+            }
+            None => target,
+        };
+        let end = (first + planned.div_ceil(bs).max(1)).min(last);
         let step = ((end - first) / 8).max(4);
         {
             let window = self.window.lock().expect("cast window");
@@ -327,7 +342,17 @@ impl Media {
                 return false;
             }
         }
-        // Register the new range before the old one is dropped, so no block request falls between.
+        // Moving: give the old window's permits back, then take the new ones. Its range stays
+        // registered until the new one is, so no block request falls between.
+        let old_permit = self
+            .window
+            .lock()
+            .expect("cast window")
+            .as_mut()
+            .and_then(|window| window.permit.take());
+        drop(old_permit);
+        let (bytes, permit) = reserve_window(budget, planned);
+        let end = (first + bytes.div_ceil(bs).max(1)).min(last);
         let registered = core.download(first, Some(end), true);
         let range: Pin<Box<dyn Future<Output = ()> + Send>> = Box::pin(async move {
             let _ = registered.await;
@@ -881,6 +906,140 @@ mod tests {
         // Nothing is playing on the stream: the range is cancelled.
         media.clear_window();
         assert_eq!(media.window_range(), None);
+    }
+
+    /// A peer whose only behaviour is the TV build's memory budget, as `NodePeer` passes it on.
+    struct BudgetPeer {
+        cache_bytes: u64,
+        budget: Arc<tokio::sync::Semaphore>,
+    }
+
+    impl CastPeer for BudgetPeer {
+        fn memory_cache_bytes(&self) -> Option<u64> {
+            Some(self.cache_bytes)
+        }
+        fn memory_window_budget(&self) -> Option<Arc<tokio::sync::Semaphore>> {
+            Some(self.budget.clone())
+        }
+        fn peer_key(&self) -> String {
+            String::new()
+        }
+        fn private_routing(&self) -> bool {
+            false
+        }
+        fn has_lan(&self) -> bool {
+            false
+        }
+        fn lan_endpoint(&self) -> Option<super::super::traits::LanEndpoint> {
+            None
+        }
+        fn status(&self) -> super::super::traits::PeerStatus {
+            unimplemented!("not used by the window")
+        }
+        fn join_lan_topic(&self, _id: &str, _topic: [u8; 32]) {}
+        fn peer_connections(&self) -> Vec<super::super::traits::PeerConn> {
+            Vec::new()
+        }
+        fn on_connection(
+            &self,
+            _callback: Arc<dyn Fn(super::super::traits::PeerConn) + Send + Sync>,
+        ) -> Box<dyn Fn() + Send + Sync> {
+            Box::new(|| {})
+        }
+        fn connect_peer(
+            &self,
+            _key: &str,
+            _lan: Option<super::super::traits::LanAddress>,
+            _timeout: Duration,
+        ) -> futures_util::future::BoxFuture<'_, Result<super::super::traits::PeerConn, CastError>>
+        {
+            unimplemented!("not used by the window")
+        }
+        fn open_uri(
+            &self,
+            _uri: &str,
+            _join_source: bool,
+        ) -> futures_util::future::BoxFuture<
+            '_,
+            Result<Option<super::super::traits::OpenedMedia>, CastError>,
+        > {
+            unimplemented!("not used by the window")
+        }
+        fn blob_core(
+            &self,
+            _blobs_hex: &str,
+        ) -> futures_util::future::BoxFuture<'_, Result<Option<Core>, CastError>> {
+            unimplemented!("not used by the window")
+        }
+        fn clear_cache(
+            &self,
+            _opts: super::super::traits::ClearCacheOptions,
+        ) -> futures_util::future::BoxFuture<'_, ()> {
+            Box::pin(async {})
+        }
+        fn evict_behind(
+            &self,
+            _core_key_hex: &str,
+            _blob: BlobId,
+            _opts: EvictOptions,
+        ) -> futures_util::future::BoxFuture<'_, ()> {
+            Box::pin(async {})
+        }
+        fn find_entry(&self, _key: &str) -> futures_util::future::BoxFuture<'_, Option<Value>> {
+            Box::pin(async { None })
+        }
+        fn search(&self, _id: &str) -> futures_util::future::BoxFuture<'_, Vec<Value>> {
+            Box::pin(async { Vec::new() })
+        }
+        fn warm(&self, _raw: &Value) -> futures_util::future::BoxFuture<'_, ()> {
+            Box::pin(async {})
+        }
+        fn close(&self) -> futures_util::future::BoxFuture<'_, ()> {
+            Box::pin(async {})
+        }
+    }
+
+    /// The receiver steers every second. With the memory budget on (the TV build), a window that
+    /// holds every permit must not see the pool as empty on the next tick and collapse to one
+    /// block, then grow back on the one after: each swap re-registers the download range.
+    #[tokio::test]
+    async fn a_capped_window_holds_while_the_playhead_holds() {
+        let stream = peers(0).await;
+        // 100 blocks of memory cache: windows may take 3/4 of it, the semaphore holds that many.
+        let cache_bytes = 100 * BS as u64;
+        let peer = Arc::new(BudgetPeer {
+            cache_bytes,
+            budget: Arc::new(tokio::sync::Semaphore::new((cache_bytes * 3 / 4) as usize)),
+        });
+        let media = Media::new(
+            "stream".into(),
+            json!({ "size": 400 * BS as u64 }),
+            "video/mp4".into(),
+            Some(stream.reader.clone()),
+            String::new(),
+            Some(BlobId {
+                block_offset: 0,
+                block_length: 400,
+                byte_offset: 0,
+                byte_length: 400 * BS as u64,
+            }),
+            Some(peer.clone()),
+        );
+        // 120 s at 8 MB/s is far past the cap: the window is the whole permit pool, 75 blocks.
+        assert!(media.steer_window(64 << 30, 8.0e6, 0));
+        assert_eq!(media.window_range(), Some((0, 75)));
+        for tick in 1..=4 {
+            media.steer_window(64 << 30, 8.0e6, 0);
+            assert_eq!(media.window_range(), Some((0, 75)), "tick {tick}");
+        }
+        // Moving on still slides the whole window, and no permits leak across the swaps.
+        assert!(media.steer_window(64 << 30, 8.0e6, 50 * BS as u64));
+        assert_eq!(media.window_range(), Some((50, 125)));
+        media.clear_window();
+        assert_eq!(
+            peer.budget.available_permits(),
+            (cache_bytes * 3 / 4) as usize
+        );
     }
 
     #[tokio::test]
