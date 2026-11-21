@@ -103,16 +103,20 @@ const seed = n => b4a.alloc(32, n)
 try {
   if (mode === 'endpoint') {
     const { guards, swarm } = await start(host, testnet.bootstrap, seed, [1])
-    let done = null
+    // The swarm emits every stream it admits, also one its duplicate rule replaces a moment later
+    // when both ends dialled at once. The exchange runs on each; the first to complete is the result.
+    let done = false
     swarm.on('connection', enc => {
       process.stderr.write('js endpoint: connection from ' + b4a.toString(enc.remotePublicKey, 'hex').slice(0, 12) + '\n')
-      if (done) return
-      done = runExchange(enc, 'js')
-      done.then(state => {
+      runExchange(enc, 'js').then(state => {
+        if (done) return
+        done = true
         emit('RESULT', state)
         // Stay up long enough for the peer to read the ack we just wrote.
         setTimeout(() => finish(0), 2000)
-      }).catch(error => {
+      }, error => {
+        if (done) return
+        done = true
         emit('RESULT', { error: error.message })
         finish(1)
       })

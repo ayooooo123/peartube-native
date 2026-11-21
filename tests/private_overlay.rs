@@ -3388,6 +3388,37 @@ mod interop {
         }
     }
 
+    /// Answers the JS peer's request on `connection` and asks one back: the JS answer, or `None`
+    /// when the stream ended first, as one the duplicate-connection rule replaced does.
+    async fn exchange_with_js(
+        connection: NoiseConnection,
+        deadline: tokio::time::Instant,
+    ) -> Option<String> {
+        let (mut read, mut write) = connection.stream.split();
+        let request = tokio::time::timeout_at(deadline, read_line(&mut read))
+            .await
+            .expect("js request");
+        if request.is_empty() {
+            return None;
+        }
+        assert_eq!(
+            parsed(&request),
+            json!({ "type": "source-request", "from": "js" })
+        );
+        write
+            .write_message(b"{\"type\":\"source-request-ack\",\"from\":\"rust\",\"echo\":\"js\"}\n")
+            .await
+            .ok()?;
+        write
+            .write_message(b"{\"type\":\"source-request\",\"from\":\"rust\"}\n")
+            .await
+            .ok()?;
+        let ack = tokio::time::timeout_at(deadline, read_line(&mut read))
+            .await
+            .expect("js ack");
+        (!ack.is_empty()).then_some(ack)
+    }
+
     /// Real `src/private-overlay.js` on one side (node + `hyperdht/testnet`), this port over the
     /// peeroxide implementation on the other. Each endpoint needs two guards and each side brings
     /// one, so the JS endpoint goes through the Rust guard and the Rust endpoint through the JS
@@ -3491,31 +3522,22 @@ mod interop {
             },
         );
         swarm.join_source("interop", &source_key);
-        let connection = tokio::time::timeout(Duration::from_secs(90), rx.recv())
-            .await
-            .expect("overlay connection")
-            .expect("connection channel");
-        let (mut read, mut write) = connection.stream.split();
-
-        let js_request = tokio::time::timeout(Duration::from_secs(30), read_line(&mut read))
-            .await
-            .expect("js request");
-        assert_eq!(
-            parsed(&js_request),
-            json!({ "type": "source-request", "from": "js" })
-        );
-        write
-            .write_message(b"{\"type\":\"source-request-ack\",\"from\":\"rust\",\"echo\":\"js\"}\n")
-            .await
-            .expect("ack");
-        write
-            .write_message(b"{\"type\":\"source-request\",\"from\":\"rust\"}\n")
-            .await
-            .expect("ask");
-        let js_ack = tokio::time::timeout(Duration::from_secs(30), read_line(&mut read)).await;
+        // The swarm emits every stream it admits, also one the duplicate rule replaces a moment
+        // later when both ends dialled at once. The JS peer asks on each, and a stream nobody
+        // writes on ends after its 8 s inactivity limit, so the exchange must run on the one
+        // that stays: the first that carries it.
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(90);
+        let js_ack = loop {
+            let connection = tokio::time::timeout_at(deadline, rx.recv())
+                .await
+                .expect("an overlay connection that carries the exchange")
+                .expect("connection channel");
+            if let Some(ack) = exchange_with_js(connection, deadline).await {
+                break ack;
+            }
+        };
         let result = parsed(&process.line_after("RESULT ", Duration::from_secs(30)).await);
         eprintln!("js: {result}");
-        let js_ack = js_ack.expect("js ack");
         assert_eq!(
             parsed(&js_ack),
             json!({ "type": "source-request-ack", "from": "js", "echo": "rust" })
