@@ -27,7 +27,8 @@ use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::rt::{TokioExecutor, TokioIo};
 use serde_json::{Map, Number, Value, json};
 use sha2::{Digest, Sha256};
-use tokio::net::TcpListener;
+use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinSet;
 use url::Url;
@@ -372,20 +373,33 @@ impl<N: Node> Api<N> {
 
     /// Binds `addr` and serves until [`ApiServer::close`].
     pub async fn bind(self, addr: SocketAddr) -> io::Result<ApiServer> {
-        Arc::new(self).serve(addr, None).await
+        Arc::new(self).serve(addr).await
     }
 
-    /// Binds `addr` and serves this shared API until [`ApiServer::close`]; with `tls`, over HTTPS
-    /// (the relay's second listener, `PEARTUBE_HTTPS_PORT`). The caller keeps the `Arc` to
-    /// change the node.
-    pub async fn serve(
+    /// Binds `addr` and serves this shared API until [`ApiServer::close`]. The caller keeps the
+    /// `Arc` to change the node.
+    pub async fn serve(self: Arc<Self>, addr: SocketAddr) -> io::Result<ApiServer> {
+        self.serve_with(addr, |stream| std::future::ready(Some(stream)))
+            .await
+    }
+
+    /// [`Api::serve`] with a `handshake` that turns each accepted connection into the stream HTTP
+    /// runs on, or `None` to drop it. The relay passes TLS for its second listener
+    /// (`PEARTUBE_HTTPS_PORT`); this module names none, so the apps' engine links none.
+    pub async fn serve_with<S, H, F>(
         self: Arc<Self>,
         addr: SocketAddr,
-        tls: Option<tokio_rustls::TlsAcceptor>,
-    ) -> io::Result<ApiServer> {
+        handshake: H,
+    ) -> io::Result<ApiServer>
+    where
+        S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+        H: Fn(TcpStream) -> F + Send + Sync + 'static,
+        F: Future<Output = Option<S>> + Send + 'static,
+    {
         let listener = TcpListener::bind(addr).await?;
         let addr = listener.local_addr()?;
         let api = self;
+        let handshake = Arc::new(handshake);
         let sse = Arc::clone(&api.sse);
         let (shutdown, mut stop) = oneshot::channel::<()>();
         let accept = tokio::spawn(async move {
@@ -396,8 +410,9 @@ impl<N: Node> Api<N> {
                     accepted = listener.accept() => {
                         let Ok((stream, remote)) = accepted else { continue };
                         let api = Arc::clone(&api);
-                        let tls = tls.clone();
+                        let handshake = Arc::clone(&handshake);
                         connections.spawn(async move {
+                            let Some(stream) = handshake(stream).await else { return };
                             let service = service_fn(move |req| {
                                 let api = Arc::clone(&api);
                                 async move {
@@ -405,15 +420,7 @@ impl<N: Node> Api<N> {
                                 }
                             });
                             let http = hyper::server::conn::http1::Builder::new();
-                            match tls {
-                                Some(tls) => {
-                                    let Ok(stream) = tls.accept(stream).await else { return };
-                                    let _ = http.serve_connection(TokioIo::new(stream), service).await;
-                                }
-                                None => {
-                                    let _ = http.serve_connection(TokioIo::new(stream), service).await;
-                                }
-                            }
+                            let _ = http.serve_connection(TokioIo::new(stream), service).await;
                         });
                     }
                     Some(_) = connections.join_next(), if !connections.is_empty() => {}

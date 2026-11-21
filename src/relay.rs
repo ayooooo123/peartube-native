@@ -260,7 +260,7 @@ impl Relay {
             .0
             .api
             .clone()
-            .serve(SocketAddr::from((host, api_port)), None)
+            .serve(SocketAddr::from((host, api_port)))
             .await
             .map_err(|e| format!("API port {api_port}: {e}"))?;
         relay.0.servers.lock().unwrap().push(server);
@@ -270,7 +270,10 @@ impl Relay {
                 .0
                 .api
                 .clone()
-                .serve(SocketAddr::from((host, https_port)), Some(acceptor))
+                .serve_with(SocketAddr::from((host, https_port)), move |stream| {
+                    let acceptor = acceptor.clone();
+                    async move { acceptor.accept(stream).await.ok() }
+                })
                 .await
                 .map_err(|e| format!("HTTPS port {https_port}: {e}"))?;
             relay.0.servers.lock().unwrap().push(server);
