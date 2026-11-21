@@ -770,9 +770,13 @@ where
         // Under the receiver's saved key, so the senders that paired with this TV find it again
         // after a restart.
         let key_pair = factory.receiver_key_pair(&storage);
+        // The store is on disk (`peer_dir/corestore`), as the app's receiver keeps it. The RAM store
+        // (`storageMemory`) kept everything it received on the Pi 4: 4.1–4.5 GB on a 4K film against
+        // a 1.5 GB budget, while the disk store held 323–325 MB and played the same (2026-11-21).
+        // `memoryCacheBytes` still caps each cast's read-ahead window from the memory budget.
         let mut options = json!({
             "storage": peer_dir, "worklet": true, "storageWal": false,
-            "storageMemory": true, "memoryCacheBytes": live_bytes
+            "storageMemory": false, "memoryCacheBytes": live_bytes
         });
         if let (Some(key_pair), Some(options)) = (key_pair, options.as_object_mut()) {
             options.insert("keyPair".to_owned(), key_pair);

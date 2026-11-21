@@ -375,7 +375,7 @@ async fn receiver_on(bootstrap: &Value, dir: &std::path::Path) -> Arc<CoreNode> 
         "bootstrap": bootstrap,
         "keyPair": key_pair,
         "storageWal": false,
-        "storageMemory": true
+        "storageMemory": false
     }))
     .await
     .expect("receiver node")

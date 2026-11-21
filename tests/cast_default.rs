@@ -361,6 +361,14 @@ fn default_backends_cast_over_the_lan() {
     assert_eq!(info["authRequired"], json!(true));
     let public_key = info["publicKey"].as_str().expect("receiver key").to_owned();
     assert_eq!(public_key.len(), 64);
+    // The TV's store is a RocksDB on disk in its peer storage (the cast storage here), not RocksDB's
+    // in-memory env: the RAM store kept every byte a cast received and outgrew its budget.
+    let store = root.join("receiver-cast").join("corestore").join("db");
+    assert!(
+        store.join("CURRENT").is_file(),
+        "the receiver's store is not on disk at {}",
+        store.display()
+    );
 
     // mDNS finds the TV; the pair happens on the LAN link to it.
     let discovered = wait_for("the TV on the LAN", Duration::from_secs(60), || {
