@@ -80,9 +80,11 @@ lto = "fat"
 codegen-units = 1
 opt-level = "s"
 
-# What runs once per byte keeps full speed: the hashes, the MAC, signatures, and hypercore-rs,
-# whose block cipher is generic and so takes the level of the crate that uses it (XSalsa20:
-# 618 MB/s at 3, 456 MB/s at "s"). In a profile of a 1 GiB transfer no other crate reached 2 %.
+# The crates that run once per byte stay at 3. The hashes and the MAC then cost the same as in
+# an all-3 build (profile of a 1 GiB transfer, where no other crate reached 2 %); signatures
+# were not measured. hypercore-rs is here for its block cipher, which is generic and compiled
+# where it is used: XSalsa20 runs at 516 MB/s with this line and 459 MB/s without. The link
+# itself runs at "s", so it does not reach the 622 MB/s of an all-3 build.
 [profile.engine.package]
 sha2.opt-level = 3
 blake2b_simd.opt-level = 3

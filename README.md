@@ -238,6 +238,9 @@ PEARTUBE_APP=/tmp/peartube-reference nice -n 10 node tests/js/download-ab.mjs \
 nice -n 10 target/ThroughputAB/release/examples/download_ab /tmp/download-ab.json
 ```
 
+`--release` is the relay's build. The apps ship the `engine` profile (`Cargo.toml`): to
+time that build, pass `--profile engine` and run `target/ThroughputAB/engine/examples/download_ab`.
+
 For a real relay, provide its LAN `{host,port,publicKey}` in `peers`, the consumer's
 interface address in `host`, an announce in `entry`, and byte `start`/`bytes`.
 Confirm that the seeder actually holds that range before timing: an HTTP proxy
