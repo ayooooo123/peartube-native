@@ -564,6 +564,23 @@ async fn a_busy_claim_counts_only_from_a_source_peer() {
             "a busy claim counts only from a source peer"
         );
         assert_eq!(gate.info().peers_busy, expected);
+        if source {
+            let sender = channel.sender();
+            sender.send(1, &0u64); // unknown Protomux message slot
+            sender.send(0, &(1u64 << 53)); // decodable by Rust, unsafe in JS
+            sender.send_raw(0, &[0; 10]); // above the flags' 9-byte limit
+            tokio::time::sleep(Duration::from_millis(30)).await;
+            assert!(gate.peers_busy(), "invalid input changed the last claim");
+            sender.send(0, &0u64);
+            tokio::time::timeout(Duration::from_secs(1), async {
+                while gate.peers_busy() {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .expect("valid claim still arrives");
+            assert!(!peer.is_destroyed());
+        }
         gate.stop();
     }
 }

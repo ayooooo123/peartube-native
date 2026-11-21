@@ -175,10 +175,19 @@ pub fn receiver_target(
     discovered: &[DiscoveredReceiver],
     saved: &SavedReceivers,
 ) -> ReceiverTarget {
-    let disc = discovered.iter().find(|item| item.id == receiver_id);
-    let pair = saved
-        .get(receiver_id)
-        .or_else(|| disc.and_then(|disc| paired_with(saved, disc)));
+    // The same rule as the list: a discovered record belongs to a saved one by id or by key, so
+    // a TV listed as not current is not dialed under a saved id that differs from its own.
+    let by_id = saved.get(receiver_id);
+    let disc = discovered
+        .iter()
+        .find(|item| item.id == receiver_id)
+        .or_else(|| {
+            let key = by_id.map(|pair| pair.public_key.as_str())?;
+            discovered
+                .iter()
+                .find(|item| !key.is_empty() && item.public_key.eq_ignore_ascii_case(key))
+        });
+    let pair = by_id.or_else(|| disc.and_then(|disc| paired_with(saved, disc)));
     let public_key = pair
         .map(|pair| pair.public_key.clone())
         .filter(|key| !key.is_empty())
@@ -323,6 +332,21 @@ mod tests {
         assert!(rows[0].paired);
         assert_eq!(rows[0].transport, "lan+p2p");
         assert!(rows[0].current);
+    }
+
+    #[test]
+    fn a_not_current_receiver_under_another_saved_id_is_not_current_at_dial() {
+        let key = "bb".repeat(32);
+        let mut saved = SavedReceivers::default();
+        saved.set(record("saved-id", &key, "tok"));
+        let found = [disc("advertised-id", &key, "code", false)];
+        let rows = list_receivers(&found, &saved);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].id, "saved-id");
+        assert!(!rows[0].current);
+        let target = receiver_target("saved-id", &found, &saved);
+        assert!(!target.current, "the dial must see the not-current TV");
+        assert_eq!(target.public_key, key);
     }
 
     #[test]

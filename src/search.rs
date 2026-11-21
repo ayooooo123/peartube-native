@@ -1,13 +1,8 @@
-//! `src/search.js`: global search (`peartube/search/v1`). Ask relays this node does not follow
+//! `src/search.js`: global search (`peartube/search/v2`). Ask relays this node does not follow
 //! for media they hold, on the connections the swarm already makes (`control_channel`), and
 //! answer such asks when this node is a relay that opted in (the `globalSearch` setting). A hit
 //! is a watch link without `source=`, for a file the answering relay holds whole and has checked
 //! is media, so the searcher reads it from that relay on the same connection.
-//!
-//! ```text
-//! searcher -> relay   {id, type: 'search', q, mid, limit}
-//! relay -> searcher   {id, ok: true, result: {hits: [{uri}]}} or {id, ok: false, error: 'busy'}
-//! ```
 //!
 //! Relays announce one topic; a searcher looks it up only while it searches, and closes what it
 //! dialed for search a minute after its last search.
@@ -17,12 +12,13 @@ use std::sync::{Arc, LazyLock, Mutex, MutexGuard, Weak};
 use std::time::{Duration, Instant};
 
 use futures_util::future::BoxFuture;
-use serde_json::{Map, Value, json};
+use serde_json::{Value, json};
 use tokio::sync::OnceCell;
 
 use crate::control_channel::{
     Control, ControlHandlers, RequestHandler, ServeHandle, Spec, open_channel, serve_channel,
 };
+use crate::control_protocol::Body;
 use crate::node::api::Announce;
 use crate::node::network::ConnectionHandle;
 use crate::private_overlay::diversity_bucket_for_address;
@@ -30,13 +26,14 @@ use crate::protocol::{
     BlobPointer, ParsedUri, WatchEntry, describe_entry, format_watch_uri, is_id, parse_uri,
 };
 use crate::traffic::Connection as _;
+use crate::wire::peartube::{SearchHit, SearchHits, SearchQuery};
 
-/// `SEARCH_TOPIC`: `hash('peartube/search/v1/0')`.
+/// `SEARCH_TOPIC`: `hash('peartube/search/v2/0')`.
 pub static SEARCH_TOPIC: LazyLock<[u8; 32]> =
-    LazyLock::new(|| hypercore::crypto::hash(&[b"peartube/search/v1/0"]));
+    LazyLock::new(|| hypercore::crypto::hash(&[b"peartube/search/v2/0"]));
 
 static SEARCH: Spec = Spec {
-    protocol: "peartube/search/v1",
+    protocol: &crate::control_protocol::SEARCH,
     label: "Relay",
     refused: "This peer does not answer searches",
     duplicate: "A search channel is already open with this peer",
@@ -97,8 +94,8 @@ pub fn words(q: &str) -> Vec<String> {
         .collect()
 }
 
-fn valid_id(mid: Option<&Value>) -> Option<String> {
-    let mid = mid?.as_str()?;
+fn valid_id(mid: Option<&str>) -> Option<String> {
+    let mid = mid?;
     let lower = mid.to_lowercase();
     (mid.chars().count() <= 80 && is_id(&lower)).then_some(lower)
 }
@@ -120,8 +117,7 @@ fn watch_entry(entry: &Announce) -> WatchEntry {
 
 /// A hit as the watch entry it names, or `None` (`checkHit`). Hits are a stranger's claims: only
 /// the shape is checked here, and Hypercore checks every byte the link later reads.
-fn check_hit(hit: &Value) -> Option<WatchEntry> {
-    let uri = hit.get("uri")?.as_str()?;
+fn check_hit(uri: &str) -> Option<WatchEntry> {
     if uri.len() > MAX_URI {
         return None;
     }
@@ -312,7 +308,7 @@ impl GlobalSearch {
             return Err("Global search is off while traffic is routed privately".to_owned());
         }
         let ws = words(query);
-        let mid = valid_id(id);
+        let mid = valid_id(id.and_then(Value::as_str));
         if ws.is_empty() && mid.is_none() {
             return Err("Type at least 2 letters".to_owned());
         }
@@ -434,13 +430,16 @@ fn rows(run: &Run, limit: usize) -> Vec<Value> {
 impl Inner {
     fn answer_handler(&self) -> RequestHandler {
         let weak = self.weak.clone();
-        Arc::new(move |message, control| {
+        Arc::new(move |_, message, control| {
             let weak = weak.clone();
             Box::pin(async move {
                 let Some(inner) = weak.upgrade() else {
                     return Err("off".to_owned());
                 };
-                inner.answer(message, control).await
+                let Body::SearchQuery(query) = message else {
+                    return Err("unknown request".into());
+                };
+                inner.answer(query, control).await.map(Into::into)
             })
         })
     }
@@ -477,14 +476,11 @@ impl Inner {
         list
     }
 
-    async fn answer(&self, message: Value, control: Control) -> Result<Value, String> {
+    async fn answer(&self, query: SearchQuery, control: Control) -> Result<SearchHits, String> {
         {
             let mut state = lock(&self.state);
             if state.serving.is_none() || state.closed || self.host.private_routing() {
                 return Err("off".to_owned());
-            }
-            if message.get("type").and_then(Value::as_str) != Some("search") {
-                return Err("unknown request".to_owned());
             }
             let now = Instant::now();
             let id = control.id();
@@ -513,16 +509,16 @@ impl Inner {
                 return Err("busy".to_owned());
             }
         }
-        let ws = words(message.get("q").and_then(Value::as_str).unwrap_or(""));
-        let mid = valid_id(message.get("mid"));
+        let ws = words(&query.q);
+        let mid = valid_id(Some(&query.mid));
         if ws.is_empty() && mid.is_none() {
             return Err("bad query".to_owned());
         }
-        let limit = message
-            .get("limit")
-            .and_then(Value::as_f64)
-            .filter(|n| *n >= 1.0)
-            .map_or(MAX_HITS, |n| (n as usize).min(MAX_HITS));
+        let limit = if query.limit == 0 {
+            MAX_HITS
+        } else {
+            (query.limit as usize).min(MAX_HITS)
+        };
         let mut hits = Vec::new();
         for offer in self.offered().await.iter() {
             let id = &offer.entry.id;
@@ -537,13 +533,13 @@ impl Inner {
             }
             let uri = format_watch_uri(&watch_entry(&offer.entry), "", "");
             if uri.len() <= MAX_URI {
-                hits.push(json!({ "uri": uri }));
+                hits.push(SearchHit { uri });
             }
             if hits.len() >= limit {
                 break;
             }
         }
-        Ok(json!({ "hits": hits }))
+        Ok(SearchHits { hits })
     }
 
     fn track(&self, control: Control) {
@@ -593,6 +589,7 @@ impl Inner {
             conn.mux(),
             &SEARCH,
             ControlHandlers {
+                handled: 1,
                 on_request: Some(self.answer_handler()),
                 on_event: None,
                 on_open: Some(on_open),
@@ -621,6 +618,7 @@ impl Inner {
             .or_insert_with(|| Arc::new(OnceCell::new()))
             .clone();
         let handlers = ControlHandlers {
+            handled: 1,
             on_request: Some(self.answer_handler()),
             on_event: None,
             on_open: None,
@@ -701,23 +699,19 @@ impl Inner {
         let Some(control) = self.control(&conn).await else {
             return;
         };
-        let mut payload = Map::new();
-        payload.insert("q".to_owned(), json!(q));
-        payload.insert("mid".to_owned(), mid.map_or(Value::Null, Value::String));
-        payload.insert("limit".to_owned(), json!(MAX_HITS));
-        let Ok(result) = control.call("search", payload, ASK_TIMEOUT).await else {
+        let query = SearchQuery {
+            q,
+            mid: mid.unwrap_or_default(),
+            limit: MAX_HITS as u64,
+        };
+        let Ok(Body::SearchHits(result)) = control.call(0, query.into(), ASK_TIMEOUT).await else {
             return;
         };
-        let hits = result
-            .get("hits")
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default();
         let mut added = false;
         let returned = {
             let mut r = lock(&run);
-            for hit in hits.iter().take(MAX_HITS) {
-                let Some(entry) = check_hit(hit) else {
+            for hit in &result.hits {
+                let Some(entry) = check_hit(&hit.uri) else {
                     continue;
                 };
                 let b = entry.blob.unwrap_or_default();

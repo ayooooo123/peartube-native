@@ -16,6 +16,7 @@ const CAST_SRC = readFileSync(join(APP, 'src/cast.js'), 'utf8')
 
 const cast = await import(join(APP, 'src/cast.js'))
 const { qrSvg } = await import(join(APP, 'src/qr.js'))
+const { commandToWire, commandFromWire, stateToWire, stateFromWire } = await import(join(APP, 'src/cast-control.js'))
 
 const PAIR_TOKEN = 'cd'.repeat(16)
 
@@ -86,5 +87,21 @@ const qrTexts = [
 ]
 const qr = qrTexts.map(text => ({ text, svg: qrSvg(text) }))
 
-const reference = { pairCodes, idle: idleFixture, ranges, mime, qr }
+const entry = { key: 'video', id: 'clip', title: 'Film', size: 42, sha256: 'digest' }
+const args = { entry, magnetUrl: 'magnet:?xt=x', startPositionMs: 0.5, positionMs: 1234.5, deltaMs: -10000, stream: -1, volume: 0.5, muted: false }
+const commands = [
+  ...['load', 'stop', 'status', 'play', 'pause', 'togglePlay', 'seek', 'skip', 'selectAudio', 'selectSubtitle', 'volume'].map(action => ({ action, ...args })),
+  { action: 'skip', deltaMs: -1.5 }, { action: 'skip', deltaMs: -1e30 },
+  { action: 'seek', positionMs: -4 }, { action: 'load', entry },
+  { action: 'volume', muted: true }
+].map(input => ({ input, host: commandFromWire(commandToWire(input, '')) }))
+const states = [
+  { ...idle, updatedAt: 0 },
+  { status: 'playing', mode: 'p2p', entry, positionMs: 42.5, durationMs: 1000.25, updatedAt: 21.5,
+    tracks: [{ stream: 1, kind: 'audio', codec: 'opus', language: 'en', title: 'English' },
+      { stream: 2, kind: 'subtitle', codec: 'srt', language: '', title: '' }],
+    playing: true, buffering: true, ended: true, p2pPeers: 9, cachedBytes: 100000, seeding: true,
+    volume: 0.5, muted: true, audio: 1, subtitle: -1, error: 'error', videoDecoder: 'h264', droppedFrames: 2 }
+].map(input => ({ input, host: stateFromWire(stateToWire(input)) }))
+const reference = { pairCodes, idle: idleFixture, ranges, mime, qr, commands, states }
 process.stdout.write(JSON.stringify(reference, null, 2) + '\n')

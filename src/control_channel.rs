@@ -1,25 +1,17 @@
-//! `src/control-channel.js`: a request/reply channel between two peers, one Protomux channel on
-//! the connection the two nodes already share, beside Hypercore replication. Cast control
-//! (`cast::control`, `peartube-cast/v1`) and global search (`search`, `peartube/search/v1`) each
-//! run one under their own [`Spec`].
-//!
-//! ```text
-//! asking side    -> answering side   {id, type, ...}
-//! answering side -> asking side      {id, ok, result | error}, and {event, ...} pushed at any time
-//! ```
-//!
-//! Any peer on the connection can open the channel, so the answering side decides per request
-//! what it allows.
+//! Symmetric request/reply and events on one Protomux message slot. Only this channel is
+//! closed on a decode-budget violation; other protocols on the same mux remain usable.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
+use crate::control_protocol::{Body, MAX_UINT, Protocol};
+use crate::wire::peartube::{Frame, RemoteError};
 use bytes::Bytes;
-use futures_util::future::BoxFuture;
+use compact_encoding::Codec;
+use futures_util::{FutureExt, future::BoxFuture};
 use protomux::{ChannelOptions, ChannelSender, Event, Mux};
-use serde_json::{Map, Value, json};
 use tokio::sync::{Notify, oneshot};
 
 /// Largest frame the channel accepts; anything longer is dropped.
@@ -28,12 +20,19 @@ pub const MAX_FRAME: usize = 64 * 1024;
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
 /// The channel's only message type (the app's single `addMessage`).
 const MESSAGE_KIND: u64 = 0;
+/// The envelope's error codes; any other received code is delivered as `HANDLER_ERROR`.
+const REMOTE_CODES: [&str; 4] = [
+    "UNKNOWN_OP",
+    "DECODE_ERROR",
+    "ENCODE_ERROR",
+    "HANDLER_ERROR",
+];
 
 /// One protocol on the shared channel code: its Protomux name, the word that names the other
 /// side in errors ("Receiver connection closed"), and the asking side's open errors.
 #[derive(Debug)]
 pub struct Spec {
-    pub protocol: &'static str,
+    pub protocol: &'static Protocol,
     pub label: &'static str,
     pub refused: &'static str,
     pub duplicate: &'static str,
@@ -43,12 +42,23 @@ pub struct Spec {
 /// A failed request or open, with the app's message.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ControlError {
+    pub code: Option<String>,
     pub message: String,
 }
 
 impl ControlError {
     fn new(message: impl Into<String>) -> Self {
         Self {
+            code: None,
+            message: message.into(),
+        }
+    }
+
+    /// A failure raised on this side with the app's code: `ENCODE_ERROR`, `DECODE_ERROR`,
+    /// `ETIMEDOUT`.
+    fn coded(code: &str, message: impl Into<String>) -> Self {
+        Self {
+            code: Some(code.into()),
             message: message.into(),
         }
     }
@@ -66,57 +76,61 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(|error| error.into_inner())
 }
 
-/// One JSON object per message, in the app's frame codec: `c.json` is `utf8`, so the payload is
-/// `[compact uint length][UTF-8 JSON]`. Anything else a peer sends (too long, broken JSON,
-/// `null`, a number) decodes to `None` and is dropped: Protomux closes the whole connection on a
-/// decoder that throws.
-pub fn decode_frame(data: &[u8]) -> Option<Value> {
+pub fn decode_frame(data: Bytes) -> Option<Frame> {
     if data.len() > MAX_FRAME {
         return None;
     }
-    let mut reader = compact_encoding::Reader::new(Bytes::copy_from_slice(data));
-    let text = reader.buffer().ok()?;
-    let value: Value = serde_json::from_slice(&text).ok()?;
-    match value {
-        Value::Object(_) => Some(value),
-        _ => None,
-    }
+    let f: Frame = compact_encoding::decode(data).ok()?;
+    (f.kind <= MAX_UINT && f.op <= MAX_UINT && f.id <= MAX_UINT).then_some(f)
 }
 
-/// The same codec on the way out.
-pub fn encode_frame(message: &Value) -> Option<Bytes> {
-    let json = serde_json::to_vec(message).ok()?;
-    let mut writer =
-        compact_encoding::Writer::with_capacity(compact_encoding::buffer_len(json.len()));
-    writer.buffer(&json);
-    Some(writer.finish())
+fn encode_frame(kind: u64, op: u64, id: u64, value: Bytes) -> Option<Frame> {
+    let frame = Frame {
+        kind,
+        op,
+        id,
+        value,
+    };
+    (frame.encoded_len() <= MAX_FRAME).then_some(frame)
 }
 
 /// The answer a request handler gives, or the error text it refuses with.
-pub type RequestFuture = BoxFuture<'static, Result<Value, String>>;
-pub type RequestHandler = Arc<dyn Fn(Value, Control) -> RequestFuture + Send + Sync>;
-pub type EventHandler = Arc<dyn Fn(Value) + Send + Sync>;
+pub type RequestFuture = BoxFuture<'static, Result<Body, String>>;
+pub type RequestHandler = Arc<dyn Fn(u64, Body, Control) -> RequestFuture + Send + Sync>;
+pub type EventHandler = Arc<dyn Fn(u64, Body, Control) + Send + Sync>;
 pub type OpenHandler = Arc<dyn Fn(Control) + Send + Sync>;
 
 /// What a channel does with what it receives (`onRequest`, `onEvent`, `onOpen`, `onClose`).
 #[derive(Clone, Default)]
 pub struct ControlHandlers {
+    /// Subset of the protocol's ops actually implemented on this half. Check before decoding.
+    pub handled: u64,
     pub on_request: Option<RequestHandler>,
     pub on_event: Option<EventHandler>,
     pub on_open: Option<OpenHandler>,
     pub on_close: Option<OpenHandler>,
 }
 
+type PendingCalls = HashMap<(u64, u64), oneshot::Sender<Result<Body, ControlError>>>;
+
 struct Inner {
     spec: &'static Spec,
     mux: Mux,
-    sender: Mutex<Option<ChannelSender>>,
-    pending: Mutex<HashMap<u64, oneshot::Sender<Result<Value, ControlError>>>>,
+    sender: ChannelSender,
+    pending: Mutex<PendingCalls>,
+    bad: Mutex<VecDeque<Instant>>,
     seq: AtomicU64,
     opened: AtomicBool,
     closed: AtomicBool,
     changed: Notify,
     handlers: ControlHandlers,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PushResult {
+    NotSent,
+    Sent,
+    WaitForDrain,
 }
 
 /// One half of the channel on a connection, as `createChannel` returns it.
@@ -147,7 +161,8 @@ impl Control {
             inner: Arc::new(Inner {
                 spec,
                 mux,
-                sender: Mutex::new(Some(sender)),
+                sender,
+                bad: Mutex::new(VecDeque::new()),
                 pending: Mutex::new(HashMap::new()),
                 seq: AtomicU64::new(1),
                 opened: AtomicBool::new(false),
@@ -181,98 +196,127 @@ impl Control {
         self.inner.opened.load(Ordering::Acquire)
     }
 
-    /// Sends an event or a reply; `false` when the connection wants the sender to wait for
-    /// `drained()` (or the channel is gone).
-    pub fn push(&self, message: Value) -> bool {
-        let Some(bytes) = encode_frame(&message) else {
-            return false;
+    /// A queued frame must never be retried. Only `WaitForDrain` needs a drain. "Not sent" is
+    /// decided before the send; a frame the mux took stays sent whatever happens next.
+    pub fn push(&self, op: u64, value: Body) -> PushResult {
+        let Some(desc) = self.inner.spec.protocol.ops.get(op as usize) else {
+            return PushResult::NotSent;
         };
-        self.raw_push(bytes)
-    }
-
-    fn raw_push(&self, bytes: Bytes) -> bool {
-        let sender = lock(&self.inner.sender).clone();
-        match sender {
-            Some(sender) => sender.send_raw(MESSAGE_KIND, &bytes),
-            None => false,
+        if desc.response.is_some() || value.schema() != desc.value {
+            return PushResult::NotSent;
+        }
+        let Some(frame) = value.encode().and_then(|v| encode_frame(3, op, 0, v)) else {
+            return PushResult::NotSent;
+        };
+        if self.is_closed() || self.inner.sender.is_closed() {
+            PushResult::NotSent
+        } else if self.inner.sender.send(MESSAGE_KIND, &frame) {
+            PushResult::Sent
+        } else {
+            PushResult::WaitForDrain
         }
     }
 
-    /// Sends a message, waiting for the connection to drain while it is backpressured. `false`
-    /// once the channel is closed.
-    async fn write(&self, bytes: Bytes, timeout: Duration) -> bool {
-        let deadline = tokio::time::Instant::now() + timeout;
-        loop {
-            if self.is_closed() {
-                return false;
-            }
-            if self.raw_push(bytes.clone()) {
-                return true;
-            }
-            if self.is_closed() {
-                return false;
-            }
-            let left = deadline.saturating_duration_since(tokio::time::Instant::now());
-            if left.is_zero() {
-                return false;
-            }
-            let _ = tokio::time::timeout(left, self.inner.mux.drained()).await;
+    /// One send per frame, as it comes: a full queue only delays the frame (it is queued, never
+    /// resent). Large or repeated producers wait for drain themselves (see [`Control::push`]).
+    fn write(&self, frame: &Frame) -> bool {
+        if self.is_closed() || self.inner.sender.is_closed() {
+            return false;
         }
+        self.inner.sender.send(MESSAGE_KIND, frame);
+        true
     }
 
-    /// `control.call(type, payload, timeoutMs)`: a request answered by the peer.
     pub async fn call(
         &self,
-        kind: &str,
-        mut payload: Map<String, Value>,
+        op: u64,
+        value: Body,
         timeout: Duration,
-    ) -> Result<Value, ControlError> {
+    ) -> Result<Body, ControlError> {
+        // As in the app: the close first, then the value, and only then an id, so a request
+        // that fails here uses none.
         if self.is_closed() {
             return Err(self.closed_error());
         }
-        let id = self.inner.seq.fetch_add(1, Ordering::AcqRel);
-        let (tx, rx) = oneshot::channel();
-        lock(&self.inner.pending).insert(id, tx);
-        payload.insert("id".to_owned(), json!(id));
-        payload.insert("type".to_owned(), json!(kind));
-        let bytes = match encode_frame(&Value::Object(payload)) {
-            Some(bytes) => bytes,
-            None => {
-                lock(&self.inner.pending).remove(&id);
-                return Err(ControlError::new("The request is not JSON"));
+        let label = self.inner.spec.label;
+        let desc = self.inner.spec.protocol.ops.get(op as usize);
+        let name = desc.map_or("request", |d| d.name);
+        let value = desc
+            .filter(|d| d.response.is_some() && d.value == value.schema())
+            .and_then(|_| value.encode())
+            .ok_or_else(|| {
+                ControlError::coded(
+                    "ENCODE_ERROR",
+                    format!("{label} {name} could not be encoded"),
+                )
+            })?;
+        let mut frame = None;
+        let taken = self
+            .inner
+            .seq
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |n| {
+                frame = (n <= MAX_UINT)
+                    .then(|| encode_frame(0, op, n, value.clone()))
+                    .flatten();
+                frame.as_ref().map(|_| n + 1)
+            });
+        let (id, frame) = match (taken, frame) {
+            (Ok(id), Some(frame)) => (id, frame),
+            (Err(next), _) if next > MAX_UINT => {
+                return Err(ControlError::coded(
+                    "ENCODE_ERROR",
+                    format!("{label} channel ran out of request ids"),
+                ));
+            }
+            _ => {
+                return Err(ControlError::coded(
+                    "ENCODE_ERROR",
+                    format!("{label} {name} is too large"),
+                ));
             }
         };
-        if !self.write(bytes, timeout).await {
-            lock(&self.inner.pending).remove(&id);
-            return Err(self.closed_error());
+        let (tx, rx) = oneshot::channel();
+        {
+            let mut pending = lock(&self.inner.pending);
+            if self.is_closed() {
+                return Err(self.closed_error());
+            }
+            pending.insert((op, id), tx);
         }
-        match tokio::time::timeout(timeout, rx).await {
-            Ok(Ok(result)) => result,
-            Ok(Err(_)) => Err(self.closed_error()),
-            Err(_) => {
-                lock(&self.inner.pending).remove(&id);
-                Err(ControlError::new(format!(
-                    "{} {kind} timed out",
-                    self.inner.spec.label
-                )))
+        // Removing on Drop also covers callers cancelling the future.
+        struct Waiting<'a>(&'a Inner, (u64, u64));
+        impl Drop for Waiting<'_> {
+            fn drop(&mut self) {
+                lock(&self.0.pending).remove(&self.1);
             }
         }
+        let _wait = Waiting(&self.inner, (op, id));
+        tokio::time::timeout(timeout, async {
+            if !self.write(&frame) {
+                return Err(self.closed_error());
+            }
+            rx.await.unwrap_or_else(|_| Err(self.closed_error()))
+        })
+        .await
+        .unwrap_or_else(|_| {
+            Err(ControlError::coded(
+                "ETIMEDOUT",
+                format!("{label} {name} timed out"),
+            ))
+        })
     }
 
-    /// Waits until the connection is drained (`conn.once('drain')`). Returns at once when it
-    /// already is, or when the channel closed.
+    /// Waits until the connection is drained (`conn.once('drain')`), or the channel closed;
+    /// returns at once when either already happened. Elapsed time is not a drain.
     pub async fn drained(&self) {
-        if self.is_closed() || self.inner.mux.is_drained() {
-            return;
+        tokio::select! {
+            _ = self.inner.mux.drained() => {}
+            _ = self.closed() => {}
         }
-        let _ = tokio::time::timeout(Duration::from_secs(30), self.inner.mux.drained()).await;
     }
 
     pub fn close(&self) {
-        let sender = lock(&self.inner.sender).take();
-        if let Some(sender) = sender {
-            sender.close();
-        }
+        self.inner.sender.close();
         self.finish();
     }
 
@@ -317,84 +361,164 @@ impl Control {
         }
     }
 
-    fn answer(&self, id: Value, result: Result<Value, String>) {
-        let message = match result {
-            Ok(result) => json!({ "id": id, "ok": true, "result": result }),
-            Err(error) => json!({ "id": id, "ok": false, "error": error }),
-        };
-        let Some(bytes) = encode_frame(&message) else {
-            return;
-        };
-        let control = self.clone();
-        tokio::spawn(async move {
-            control.write(bytes, DEFAULT_TIMEOUT).await;
-        });
+    fn error(&self, frame: &Frame, code: &str, message: &str) -> Frame {
+        Frame {
+            kind: 2,
+            op: frame.op,
+            id: frame.id,
+            value: compact_encoding::encode(&RemoteError {
+                code: code.into(),
+                message: message.chars().take(256).collect(),
+            }),
+        }
     }
 
-    /// Handles one message the reader task received.
-    fn dispatch(&self, data: Bytes) {
-        let Some(message) = decode_frame(&data) else {
+    fn bad_value(&self) {
+        let now = Instant::now();
+        let close = {
+            let mut bad = lock(&self.inner.bad);
+            while bad
+                .front()
+                .is_some_and(|t| strike_expired(now.duration_since(*t)))
+            {
+                bad.pop_front();
+            }
+            bad.push_back(now);
+            bad.len() >= 8
+        };
+        if close {
+            self.close();
+        }
+    }
+
+    async fn dispatch(&self, data: Bytes) {
+        let Some(frame) = decode_frame(data) else {
+            self.bad_value();
             return;
         };
-        if self.inner.handlers.on_request.is_some()
-            && message.get("type").is_some_and(Value::is_string)
-        {
-            let Some(handler) = self.inner.handlers.on_request.clone() else {
-                return;
-            };
-            let control = self.clone();
-            let control_for_answer = control.clone();
-            let id = message.get("id").cloned().unwrap_or(Value::Null);
-            tokio::spawn(async move {
-                let result = handler(message, control).await;
-                control_for_answer.answer(id, result);
-            });
-            return;
-        }
-        if message.get("ok").is_some()
-            && let Some(id) = message.get("id").and_then(Value::as_u64)
-        {
-            let waiter = lock(&self.inner.pending).remove(&id);
-            if let Some(waiter) = waiter {
-                let result = if message.get("ok").is_some_and(js_truthy) {
-                    Ok(message.get("result").cloned().unwrap_or(Value::Null))
-                } else {
-                    Err(match message.get("error").and_then(Value::as_str) {
-                        Some(error) if !error.is_empty() => error.to_owned(),
-                        _ => format!("{} error", self.inner.spec.label),
-                    })
+        let desc = usize::try_from(frame.op)
+            .ok()
+            .and_then(|i| self.inner.spec.protocol.ops.get(i));
+        let handled = frame.op < 64 && self.inner.handlers.handled & (1 << frame.op) != 0;
+        match frame.kind {
+            0 => {
+                if frame.id == 0 {
+                    self.bad_value();
+                    return;
+                }
+                let handler = self.inner.handlers.on_request.as_ref().filter(|_| handled);
+                let Some((schema, handler)) = desc.filter(|d| d.response.is_some()).zip(handler)
+                else {
+                    // The envelope's own errors carry the app's empty message.
+                    self.write(&self.error(&frame, "UNKNOWN_OP", ""));
+                    return;
                 };
-                let _ = waiter.send(result.map_err(ControlError::new));
-                return;
+                let Some(value) = schema.value.decode(frame.value.clone()) else {
+                    // The reply goes out before the strike, so the eighth is answered too.
+                    self.write(&self.error(&frame, "DECODE_ERROR", ""));
+                    self.bad_value();
+                    return;
+                };
+                let handler = handler.clone();
+                let control = self.clone();
+                // Frames are handled in wire order: the handler starts here and runs to its
+                // first suspension before the next frame is read; only the rest is a task.
+                let mut answer = Box::pin(async move {
+                    let run = async { handler(frame.op, value, control.clone()).await };
+                    let answer = match std::panic::AssertUnwindSafe(run).catch_unwind().await {
+                        Ok(Ok(body)) => (Some(body.schema()) == schema.response)
+                            .then(|| body.encode())
+                            .flatten()
+                            .and_then(|v| encode_frame(1, frame.op, frame.id, v))
+                            .unwrap_or_else(|| control.error(&frame, "ENCODE_ERROR", "")),
+                        Ok(Err(msg)) => control.error(&frame, "HANDLER_ERROR", &msg),
+                        Err(panic) => {
+                            let msg = panic
+                                .downcast_ref::<String>()
+                                .map(String::as_str)
+                                .or_else(|| panic.downcast_ref::<&str>().copied())
+                                .unwrap_or("Handler panicked");
+                            control.error(&frame, "HANDLER_ERROR", msg)
+                        }
+                    };
+                    control.write(&answer);
+                });
+                if futures_util::poll!(answer.as_mut()).is_pending() {
+                    tokio::spawn(answer);
+                }
             }
-        }
-        if message.get("event").is_some()
-            && let Some(handler) = self.inner.handlers.on_event.clone()
-        {
-            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| handler(message)));
+            1 | 2 => {
+                let waiter = lock(&self.inner.pending).remove(&(frame.op, frame.id));
+                let Some(waiter) = waiter else { return };
+                let answer = if frame.kind == 1 {
+                    desc.and_then(|d| d.response)
+                        .and_then(|s| s.decode(frame.value))
+                        .map(Ok)
+                } else {
+                    compact_encoding::decode::<RemoteError>(frame.value)
+                        .ok()
+                        .map(|err| {
+                            // A peer cannot make a call fail with a local-looking code.
+                            let code = if REMOTE_CODES.contains(&err.code.as_str()) {
+                                err.code
+                            } else {
+                                "HANDLER_ERROR".into()
+                            };
+                            Err(ControlError {
+                                code: Some(code),
+                                message: err.message,
+                            })
+                        })
+                };
+                if let Some(answer) = answer {
+                    let _ = waiter.send(answer);
+                } else {
+                    let _ = waiter.send(Err(ControlError::coded(
+                        "DECODE_ERROR",
+                        format!(
+                            "{} sent an answer that does not decode",
+                            self.inner.spec.label
+                        ),
+                    )));
+                    self.bad_value();
+                }
+            }
+            3 => {
+                if frame.id != 0 || !handled {
+                    return;
+                }
+                let Some((desc, handler)) = desc
+                    .filter(|d| d.response.is_none())
+                    .zip(self.inner.handlers.on_event.as_ref())
+                else {
+                    return;
+                };
+                let Some(body) = desc.value.decode(frame.value) else {
+                    self.bad_value();
+                    return;
+                };
+                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    handler(frame.op, body, self.clone())
+                }));
+            }
+            _ => self.bad_value(),
         }
     }
 }
 
-fn js_truthy(value: &Value) -> bool {
-    match value {
-        Value::Null => false,
-        Value::Bool(flag) => *flag,
-        Value::Number(number) => number
-            .as_f64()
-            .is_some_and(|value| value != 0.0 && !value.is_nan()),
-        Value::String(text) => !text.is_empty(),
-        Value::Array(_) | Value::Object(_) => true,
-    }
+/// A bad frame stops counting once it is older than 10,000 ms, in whole milliseconds as the
+/// app's `now - t > 10_000` on `Date.now()`.
+fn strike_expired(age: Duration) -> bool {
+    age.as_millis() > 10_000
 }
 
 /// Builds one half of the channel on `mux`, not yet opened; `None` when this connection already
 /// has one, or the mux is gone.
 fn create_channel(mux: &Mux, spec: &'static Spec, handlers: ControlHandlers) -> Option<Control> {
-    if mux.is_opened(spec.protocol, None) {
+    if mux.is_opened(spec.protocol.name, None) {
         return None;
     }
-    let channel = mux.open_channel(ChannelOptions::new(spec.protocol))?;
+    let channel = mux.open_channel(ChannelOptions::new(spec.protocol.name))?;
     let sender = channel.sender();
     let control = Control::new(spec, mux.clone(), sender, handlers);
     let reading = control.clone();
@@ -409,7 +533,10 @@ fn create_channel(mux: &Mux, spec: &'static Spec, handlers: ControlHandlers) -> 
                         handler(reading.clone());
                     }
                 }
-                Event::Message(message) => reading.dispatch(message.data),
+                Event::Message(message) if message.kind == MESSAGE_KIND && !reading.is_closed() => {
+                    reading.dispatch(message.data).await
+                }
+                Event::Message(_) => (),
                 Event::Closed { .. } => break,
             }
         }
@@ -421,7 +548,7 @@ fn create_channel(mux: &Mux, spec: &'static Spec, handlers: ControlHandlers) -> 
 /// `serveChannel(conn, { protocol, onRequest, onOpen, onClose })`: the answering half, answering
 /// every peer that opens the protocol on this connection. Returns a handle that stops answering.
 pub fn serve_channel(mux: &Mux, spec: &'static Spec, handlers: ControlHandlers) -> ServeHandle {
-    let mut pairs = mux.pair(spec.protocol, None);
+    let mut pairs = mux.pair(spec.protocol.name, None);
     let open_on = mux.clone();
     let task = tokio::spawn(async move {
         while let Some(request) = pairs.recv().await {
@@ -431,7 +558,7 @@ pub fn serve_channel(mux: &Mux, spec: &'static Spec, handlers: ControlHandlers) 
     });
     ServeHandle {
         mux: mux.clone(),
-        protocol: spec.protocol,
+        protocol: spec.protocol.name,
         task: Some(task),
     }
 }
@@ -472,10 +599,27 @@ pub async fn open_channel(
         create_channel(mux, spec, handlers).ok_or_else(|| ControlError::new(spec.duplicate))?;
     match tokio::time::timeout(timeout, control.opened()).await {
         Ok(()) if control.is_opened() => Ok(control),
+        // The channel closed before it opened. On a live connection the other side refused
+        // the protocol (another version); a connection that went is only a closed connection.
+        Ok(()) if mux.is_destroyed() => Err(control.closed_error()),
         Ok(()) => Err(ControlError::new(spec.refused)),
         Err(_) => {
             control.close();
             Err(ControlError::new(spec.timed_out))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // The app's window: `now - t > 10_000` in whole milliseconds. A strike exactly 10,000 ms old
+    // still counts.
+    #[test]
+    fn a_strike_expires_only_when_older_than_ten_seconds() {
+        assert!(!strike_expired(Duration::from_millis(9_999)));
+        assert!(!strike_expired(Duration::from_millis(10_000)));
+        assert!(strike_expired(Duration::from_millis(10_001)));
     }
 }

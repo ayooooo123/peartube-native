@@ -24,6 +24,9 @@ use peartube_native::cast::adapters::NodePeer;
 use peartube_native::cast::control::{
     Control, ControlHandlers, DEFAULT_TIMEOUT, open_control, serve_control,
 };
+use peartube_native::cast::control::{
+    command_from_wire, command_to_wire, state_from_wire, state_to_wire,
+};
 use peartube_native::cast::pairing::ReceiverIdentity;
 use peartube_native::cast::traits::{
     CastPeer, ClearCacheOptions, EvictOptions, LanAddress, LanEndpoint, OpenedMedia, PeerConn,
@@ -33,9 +36,11 @@ use peartube_native::cast::{
     CastController, ControllerOptions, Receiver, ReceiverOptions, SavedReceiver, SavedReceivers,
     cast_lan_topic, list_receivers, qr, receiver_target, state,
 };
+use peartube_native::control_protocol::Body;
 use peartube_native::node::Node;
 use peartube_native::node::api::{PutMeta, SearchOptions};
 use peartube_native::node::core::{CoreNode, NodeSource, create_node};
+use peartube_native::wire::peartube::{CastPair, CastSubscribe};
 
 const FIXTURES: &str = include_str!("../fixtures/cast-reference.json");
 const DEVICE_ID: &str = "0123456789abcdef0123456789abcdef";
@@ -583,21 +588,34 @@ fn a_receiver_target_prefers_the_saved_key() {
 // ---------------------------------------------------------------- the control channel
 
 async fn pair(control: &Control, code: &str) -> Result<Value, String> {
-    let mut payload = Map::new();
-    payload.insert("code".into(), json!(code));
-    control
-        .call("pair", payload, DEFAULT_TIMEOUT)
+    let Body::CastPaired(reply) = control
+        .call(0, CastPair { code: code.into() }.into(), DEFAULT_TIMEOUT)
         .await
-        .map_err(|error| error.message)
+        .map_err(|e| e.message)?
+    else {
+        panic!("expected pair reply")
+    };
+    let key = reply
+        .public_key
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect::<String>();
+    Ok(json!({"name":reply.name,"deviceId":reply.device_id,"token":reply.token,"publicKey":key}))
 }
 
 async fn cmd(control: &Control, token: &str, command: Value) -> Result<Value, String> {
-    let mut payload = command.as_object().cloned().unwrap_or_default();
-    payload.insert("token".into(), json!(token));
-    control
-        .call("cmd", payload, DEFAULT_TIMEOUT)
+    let Body::CastState(state) = control
+        .call(
+            2,
+            command_to_wire(&command, token.into()).into(),
+            DEFAULT_TIMEOUT,
+        )
         .await
-        .map_err(|error| error.message)
+        .map_err(|e| e.message)?
+    else {
+        panic!("expected state")
+    };
+    Ok(state_from_wire(state))
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -650,20 +668,27 @@ async fn pairing_rules_and_who_may_control() {
         "code pairing returns the token"
     );
 
-    let mut subscribe = Map::new();
-    subscribe.insert("token".into(), json!(PAIR_TOKEN));
-    let state = control
-        .call("subscribe", subscribe, DEFAULT_TIMEOUT)
+    let Body::CastState(state) = control
+        .call(
+            1,
+            CastSubscribe {
+                token: PAIR_TOKEN.into(),
+            }
+            .into(),
+            DEFAULT_TIMEOUT,
+        )
         .await
-        .expect("subscribe");
-    assert_eq!(state["state"]["status"], "idle");
+        .expect("subscribe")
+    else {
+        panic!("expected state")
+    };
+    assert_eq!(state.status, "idle");
 
     let reply = cmd(&control, PAIR_TOKEN, json!({ "action": "play" }))
         .await
         .expect("play");
-    assert_eq!(reply["ok"], true);
-    assert_eq!(reply["state"]["playing"], true);
-    assert_eq!(reply["state"]["status"], "playing");
+    assert_eq!(reply["playing"], true);
+    assert_eq!(reply["status"], "playing");
     let error = cmd(&control, PAIR_TOKEN, json!({ "action": "teleport" }))
         .await
         .expect_err("unknown action");
@@ -729,7 +754,7 @@ async fn an_open_receiver_answers_the_room_but_not_a_far_link() {
     let reply = cmd(&control, "", json!({ "action": "play" }))
         .await
         .expect("open LAN control");
-    assert_eq!(reply["state"]["playing"], true);
+    assert_eq!(reply["playing"], true);
 
     let far = open_control(
         &sender_conn(&far_peer).mux(),
@@ -778,8 +803,12 @@ async fn a_load_hands_the_player_a_loopback_url_and_state_pushes_follow() {
     let control = open_control(
         &sender_conn(&sender_peer).mux(),
         ControlHandlers {
-            on_event: Some(Arc::new(move |message| {
-                let _ = push_tx.send(message);
+            on_event: Some(Arc::new(move |op, body, _| {
+                assert_eq!(op, 3);
+                let Body::CastState(state) = body else {
+                    panic!("expected state event")
+                };
+                let _ = push_tx.send(state_from_wire(state));
             })),
             ..ControlHandlers::default()
         },
@@ -799,10 +828,15 @@ async fn a_load_hands_the_player_a_loopback_url_and_state_pushes_follow() {
         "one control channel per connection"
     );
     let _ = pair(&control, PAIR_CODE).await.expect("paired");
-    let mut subscribe = Map::new();
-    subscribe.insert("token".into(), json!(PAIR_TOKEN));
     control
-        .call("subscribe", subscribe, DEFAULT_TIMEOUT)
+        .call(
+            1,
+            CastSubscribe {
+                token: PAIR_TOKEN.into(),
+            }
+            .into(),
+            DEFAULT_TIMEOUT,
+        )
         .await
         .expect("subscribe");
 
@@ -817,7 +851,7 @@ async fn a_load_hands_the_player_a_loopback_url_and_state_pushes_follow() {
     )
     .await
     .expect("load");
-    assert_eq!(reply["state"]["mode"], "p2p");
+    assert_eq!(reply["mode"], "p2p");
     let command = rx.recv().await.expect("load command reaches the player");
     assert_eq!(command["action"], "load");
     assert_eq!(command["startPositionMs"], 5000);
@@ -848,27 +882,27 @@ async fn a_load_hands_the_player_a_loopback_url_and_state_pushes_follow() {
             .await
             .expect("push arrives")
             .expect("channel open");
-        if message["state"]["positionMs"] == 6500 {
+        if message["positionMs"] == 6500 {
             break message;
         }
     };
-    assert_eq!(pushed_state["event"], "state");
+    assert_eq!(pushed_state["status"], "playing");
 
     let reply = cmd(
         &control,
         PAIR_TOKEN,
-        json!({ "action": "seek", "positionMs": 24_000 }),
+        json!({ "action": "seek", "positionMs": 23_999.5 }),
     )
     .await
     .expect("seek");
-    assert_eq!(reply["state"]["positionMs"], 24_000);
+    assert_eq!(reply["positionMs"], 24_000);
     let command = rx.recv().await.expect("seek command");
     assert_eq!(command["action"], "seek");
     assert_eq!(command["positionMs"], 24_000);
     let reply = cmd(&control, PAIR_TOKEN, json!({ "action": "stop" }))
         .await
         .expect("stop");
-    assert_eq!(reply["state"]["status"], "idle");
+    assert_eq!(reply["status"], "idle");
     assert!(rx.recv().await.is_some(), "stop command");
     control.close();
     receiver.close().await;
@@ -968,10 +1002,26 @@ async fn the_controller_pairs_casts_and_controls() {
         .expect("pause");
     assert_eq!(status["session"]["state"]["playing"], false);
     let status = cast
-        .cast_control(&json!({ "action": "seek", "positionMs": 12_000 }))
+        .cast_control(&json!({"action":"volume","volume":0.25}))
+        .await
+        .unwrap();
+    assert_eq!(status["session"]["state"]["volume"], 0.25);
+    let status = cast
+        .cast_control(&json!({"action":"volume","muted":true}))
+        .await
+        .unwrap();
+    assert_eq!(status["session"]["state"]["volume"], 0.25);
+    assert_eq!(status["session"]["state"]["muted"], true);
+    let status = cast
+        .cast_control(&json!({ "action": "seek", "positionMs": 1234.5 }))
         .await
         .expect("seek");
-    assert_eq!(status["session"]["state"]["positionMs"], 12_000);
+    assert_eq!(status["session"]["state"]["positionMs"], 1235);
+    let status = cast
+        .cast_control(&json!({"action":"skip","deltaMs":-10000}))
+        .await
+        .unwrap();
+    assert_eq!(status["session"]["state"]["positionMs"], 0);
 
     // The attach path opens a fresh session for a TV that is already playing.
     cast.cast_stop(false).await.expect("stop without playback");
@@ -1005,8 +1055,13 @@ fn pair_saved(dir: &Path) {
     saved.save(dir).expect("saved receivers");
 }
 
-fn ok_state() -> Value {
-    json!({ "state": { "status": "playing", "playing": true, "entry": { "title": "The Matrix" } } })
+fn ok_state() -> Body {
+    state_to_wire(
+        json!({"status":"playing","playing":true,"entry":{"title":"The Matrix"}})
+            .as_object()
+            .unwrap(),
+    )
+    .into()
 }
 
 /// `startSession`'s one setup retry keeps the attempt it started with: a stop issued while the
@@ -1033,12 +1088,12 @@ async fn a_stop_issued_during_the_setup_retry_wins() {
     let _losing_server = serve_control(
         &losing_mux,
         ControlHandlers {
-            on_request: Some(Arc::new(move |message, control| {
+            on_request: Some(Arc::new(move |op, _, control| {
                 let seen = Arc::clone(&seen);
                 let gate = Arc::clone(&gate);
                 Box::pin(async move {
-                    if message.get("type").and_then(Value::as_str) != Some("cmd") {
-                        return Ok(json!({}));
+                    if op != 2 {
+                        return Ok(ok_state());
                     }
                     seen.notify_one();
                     gate.notified().await;
@@ -1054,9 +1109,7 @@ async fn a_stop_issued_during_the_setup_retry_wins() {
     let _retry_server = serve_control(
         &retry_mux,
         ControlHandlers {
-            on_request: Some(Arc::new(|_message, _control| {
-                Box::pin(async { Ok(ok_state()) })
-            })),
+            on_request: Some(Arc::new(|_, _, _| Box::pin(async { Ok(ok_state()) }))),
             ..Default::default()
         },
     );
@@ -1090,6 +1143,42 @@ async fn a_stop_issued_during_the_setup_retry_wins() {
 
     cast.close().await;
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn old_linked_and_saved_receivers_get_no_pair_code_or_token() {
+    let dir = temp_dir("old-cast");
+    pair_saved(&dir);
+    let sender = FakePeer::new(SENDER_KEY);
+    let receiver = FakePeer::new(RECEIVER_KEY);
+    link(&sender, &receiver, true);
+    let mux = receiver.peer_connections().remove(0).mux();
+    let mut old = mux.pair("peartube-cast/v1", None);
+    mux.ready();
+    let cast = controller(sender.clone(), &dir).await;
+    let refusal = "This device runs a different PearTube version, or takes no casts: update PearTube on both devices";
+    assert_eq!(
+        cast.pair_receiver(&json!({"publicKey":RECEIVER_KEY,"code":PAIR_CODE}))
+            .await
+            .unwrap_err()
+            .message,
+        refusal
+    );
+    sender.publish(entry("k1", "imdb:tt0133093", "The Matrix"));
+    assert_eq!(
+        cast.cast_play(&json!({"receiverId":RECEIVER_KEY,"key":"k1"}))
+            .await
+            .unwrap_err()
+            .message,
+        refusal
+    );
+    assert!(
+        old.try_recv().is_err(),
+        "no legacy channel for either secret"
+    );
+    assert!(!mux.is_destroyed());
+    cast.close().await;
+    let _ = std::fs::remove_dir_all(dir);
 }
 
 /// `connectReceiver` opens one connection and one channel on it. A connection that is already
@@ -1205,10 +1294,61 @@ async fn the_loopback_port_answers_only_its_own_player() {
 }
 
 #[test]
+fn cast_edges_match_app_host_objects() {
+    let reference = fixtures();
+    for case in cases(&reference, "commands") {
+        assert_eq!(
+            command_from_wire(command_to_wire(&case["input"], String::new())),
+            case["host"]
+        );
+    }
+    for case in cases(&reference, "states") {
+        assert_eq!(
+            state_from_wire(state_to_wire(case["input"].as_object().unwrap())),
+            case["host"]
+        );
+    }
+}
+
+#[test]
+fn cast_producer_bounds_before_encoding() {
+    let long = "界".repeat(300);
+    let max = (1u64 << 53) - 1;
+    let track = json!({"stream":max,"kind":long,"codec":long,"language":long,"title":long});
+    let entry = json!({"key":long,"id":long,"title":long,"sha256":long,"size":max});
+    let state = json!({"tracks":vec![track;129],"entry":entry,"status":long,"mode":long,"error":long,"videoDecoder":long,"droppedFrames":1e30,
+        "updatedAt":max,"positionMs":max,"durationMs":max,"p2pPeers":max,"cachedBytes":max,"audio":max,"subtitle":max,
+        "playing":true,"buffering":true,"ended":true,"seeding":true,"muted":true});
+    let wire = state_to_wire(state.as_object().unwrap());
+    assert_eq!(wire.tracks.len(), 128);
+    assert_eq!(wire.error.chars().count(), 256);
+    assert_eq!(wire.dropped_frames, (1 << 52) - 1);
+    let frame = peartube_native::wire::peartube::Frame {
+        kind: 1,
+        op: 2,
+        id: max,
+        value: Body::from(wire.clone()).encode().unwrap(),
+    };
+    let length = compact_encoding::encode(&frame).len();
+    assert!((58_000..=65_536).contains(&length), "{length}");
+    assert_eq!(wire.entry.as_ref().unwrap().key.chars().count(), 256);
+    let mixed = json!({"action":"load","entry":{"title":format!("{}🚀","x".repeat(79))}});
+    assert_eq!(
+        command_to_wire(&mixed, String::new()).entry.unwrap().title,
+        format!("{}\u{fffd}", "x".repeat(79))
+    );
+    for track in wire.tracks {
+        assert_eq!(track.codec.chars().count(), 32);
+        assert_eq!(track.language.chars().count(), 32);
+        assert_eq!(track.title.chars().count(), 64);
+    }
+}
+
+#[test]
 fn the_cast_lan_topic_is_the_apps_hash_of_the_service_name() {
-    // `hypercoreCrypto.hash(b4a.from('peartube-cast/v1'))` in the app's `src/cast.js`: the value
+    // `hypercoreCrypto.hash(b4a.from('peartube-cast/v2'))` in the app's `src/cast.js`: the value
     // itself, not the same derivation this crate calls.
-    let hex = "6b07c8030f3a71a7a492b564d31085649c6c3ffd7e08a4384a004899959204ca";
+    let hex = "632616ec2d74c2a5262c6b2cc87c79b3bbfc7c73e3d53477a2e6b7d0081d9cd5";
     let app: [u8; 32] = (0..32)
         .map(|i| u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16).expect("hex"))
         .collect::<Vec<_>>()
@@ -1264,11 +1404,7 @@ fn the_plan_covers_every_transport_action() {
 fn app_dir() -> PathBuf {
     std::env::var("PEARTUBE_APP")
         .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../peartube"))
-}
-
-fn has_app() -> bool {
-    app_dir().join("src/cast.js").exists()
+        .unwrap_or_else(|_| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../peartube"))
 }
 
 fn js_dir() -> PathBuf {
@@ -1442,10 +1578,6 @@ async fn receiver_on(bootstrap: &Value, dir: &Path) -> Arc<CoreNode> {
 #[test]
 #[ignore = "needs node and the app checkout (PEARTUBE_APP)"]
 fn the_apps_controller_casts_to_this_receiver() {
-    if !has_app() {
-        eprintln!("skipped: set PEARTUBE_APP to the app checkout");
-        return;
-    }
     let mut js = Js::spawn(3);
     let bootstrap = js.bootstrap.clone();
     let rt = runtime();
@@ -1559,10 +1691,6 @@ fn the_apps_controller_casts_to_this_receiver() {
 #[test]
 #[ignore = "needs node and the app checkout (PEARTUBE_APP)"]
 fn this_controller_casts_to_the_apps_receiver_fixture() {
-    if !has_app() {
-        eprintln!("skipped: set PEARTUBE_APP to the app checkout");
-        return;
-    }
     let mut js = Js::spawn(3);
     let bootstrap = js.bootstrap.clone();
     let rt = runtime();

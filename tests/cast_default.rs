@@ -357,7 +357,7 @@ fn default_backends_cast_over_the_lan() {
         .expect("receiver pair code")
         .to_owned();
     assert_eq!(info["name"], json!(tv_name));
-    assert_eq!(info["protocol"], json!("peartube-cast/v1"));
+    assert_eq!(info["protocol"], json!("peartube-cast/v2"));
     assert_eq!(info["authRequired"], json!(true));
     let public_key = info["publicKey"].as_str().expect("receiver key").to_owned();
     assert_eq!(public_key.len(), 64);

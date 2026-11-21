@@ -112,7 +112,7 @@ pub trait CastPeer: Send + Sync {
     fn has_lan(&self) -> bool;
     fn lan_endpoint(&self) -> Option<LanEndpoint>;
     fn status(&self) -> PeerStatus;
-    /// `node.joinLanTopic('cast', hash('peartube-cast/v1'))`: peers on this LAN connect here.
+    /// `node.joinLanTopic('cast', hash('peartube-cast/v2'))`: peers on this LAN connect here.
     fn join_lan_topic(&self, id: &str, topic: [u8; 32]);
     /// Every live connection, now.
     fn peer_connections(&self) -> Vec<PeerConn>;
