@@ -26,7 +26,9 @@ use crate::acquire::AcquireError;
 use crate::app_settings::{js_string, js_truthy};
 use crate::node::Node;
 use crate::protocol::{MAX_TITLE, is_id, is_js_space, is_media_file, truncate_utf16};
-use crate::providers::staging::{ALBUM_PIN, MIRRORED_LIST, is_release_id};
+use crate::providers::staging::{
+    ALBUM_PIN, Cancelled, MIRRORED_LIST, Place, PlaceError, is_release_id,
+};
 use crate::tags::{Tags, album_key, parse_tags};
 
 /// The ledger prefix of a file under `<storage>/staging`.
@@ -138,6 +140,8 @@ pub struct Album {
     /// `mb:<32 hex>`, `discogs:r<n>` or `album:<20 hex>`.
     pub release: String,
     pub title: String,
+    /// The artist a pin names, for files with no tags the importer reads; empty when none does.
+    pub artist: String,
     /// How many of its files say something about it.
     pub tracks: usize,
     /// The folder is pinned to the release.
@@ -264,9 +268,12 @@ fn album_track(
         .unwrap_or_else(|| stem.to_owned());
     let mut music = Map::new();
     music.insert("title".into(), json!(named));
-    // A file with tags says who plays it, or says that nobody is named.
-    if let Some(tags) = tags {
-        let artist = said(tags.artist.as_ref()).or_else(|| said(tags.album_artist.as_ref()));
+    // Who plays it: the file's own tags, else the artist its folder's pin names. With neither the
+    // track names no artist at all.
+    let artist = tags
+        .and_then(|tags| said(tags.artist.as_ref()).or_else(|| said(tags.album_artist.as_ref())))
+        .or_else(|| said(Some(&album.artist)));
+    if let Some(artist) = artist {
         music.insert("artist".into(), json!(artist));
     }
     Some(MediaMeta {
@@ -441,6 +448,7 @@ fn album_identity(files: &[Option<(Tags, &str)>]) -> Option<Album> {
     Some(Album {
         release,
         title,
+        artist: String::new(),
         tracks: files.iter().flatten().count(),
         pinned: false,
     })
@@ -504,12 +512,26 @@ fn resolve(path: &str) -> String {
     out.to_string_lossy().into_owned()
 }
 
+/// The sweep flag while a provider's save holds it: given back when the save has been imported or
+/// has given up, whichever way it leaves.
+struct Holding<'a>(&'a AtomicBool);
+
+impl Drop for Holding<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::SeqCst);
+    }
+}
+
 /// Shared state the `watch-dir` plugin keeps between runs.
 pub struct WatchState {
     pub(super) ledger: Mutex<Map<String, Value>>,
     pub(super) state_file: String,
-    /// One sweep at a time; a delete that follows the owner's removal waits on it too.
+    /// One sweep at a time; a delete that follows the owner's removal waits on it too, and so does
+    /// a provider's finished save.
     pub(super) scanning: AtomicBool,
+    /// How long a provider's finished save waits for another import to finish before it gives up
+    /// with nothing placed (`importWaitMs`).
+    pub(super) import_wait_ms: u64,
     pub(super) watch_dir: Mutex<Option<String>>,
     /// `<storage>/staging`.
     pub(super) staging_dir: String,
@@ -598,16 +620,21 @@ impl WatchState {
         out
     }
 
-    /// The release a folder is pinned to (`<folder>/.peartube-album.json` `{ release, title? }`).
-    fn read_album_pin(&self, folder: &str) -> Option<(String, String)> {
+    /// The release a folder is pinned to (`<folder>/.peartube-album.json`
+    /// `{ release, title?, artist? }`), with the title and the artist the pin names (empty when
+    /// it names none).
+    fn read_album_pin(&self, folder: &str) -> Option<(String, String, String)> {
         let text = self.files.read(&join(folder, ALBUM_PIN))?;
         let pin: Value = serde_json::from_str(&crate::ipc::well_formed(&text)).ok()?;
         let release = pin
             .get("release")?
             .as_str()
             .filter(|id| is_release_id(id))?;
-        let title = pin.get("title").and_then(Value::as_str).unwrap_or_default();
-        Some((release.to_owned(), truncate_utf16(title, MAX_TITLE)))
+        let named = |key: &str| {
+            let text = pin.get(key).and_then(Value::as_str).unwrap_or_default();
+            truncate_utf16(text, MAX_TITLE)
+        };
+        Some((release.to_owned(), named("title"), named("artist")))
     }
 
     /// One album's identity for the files of a folder (`albumFor`). Files already imported
@@ -632,7 +659,7 @@ impl WatchState {
             .collect();
         let identity = album_identity(&said);
         let folder = group[0].dir.as_deref().unwrap_or_default();
-        let Some((release, title)) = self.read_album_pin(&join(root, folder)) else {
+        let Some((release, title, artist)) = self.read_album_pin(&join(root, folder)) else {
             return identity;
         };
         let title = Some(title)
@@ -643,6 +670,7 @@ impl WatchState {
         Some(Album {
             release,
             title,
+            artist,
             tracks: group.len(),
             pinned: true,
         })
@@ -664,6 +692,59 @@ impl WatchState {
         let result = self.scan_inner(dir, ctx, prefix).await;
         self.scanning.store(false, Ordering::SeqCst);
         result
+    }
+
+    /// `placeAndScan`: a provider's finished files and their import as one step. `place` moves the
+    /// files into the import folder only once no other sweep holds it, and this sweep starts in
+    /// the same step, so no other sweep sees a half-placed album. While it waits nothing is
+    /// placed: a save that is cancelled, or that gives up after `import_wait_ms` (a first import
+    /// of a large folder can run for hours), leaves nothing behind.
+    pub(super) async fn place_and_scan<N>(
+        &self,
+        dir: &str,
+        ctx: &Ctx<N>,
+        prefix: &str,
+        place: Place,
+        cancelled: Cancelled,
+    ) -> Result<Value, PlaceError>
+    where
+        N: Node + 'static,
+        N::Error: From<AcquireError>,
+    {
+        let stopped = || self.closed.load(Ordering::SeqCst) || cancelled();
+        let end = (self.now_ms)().saturating_add(self.import_wait_ms);
+        // Taking the flag is what ends the wait, so no other sweep starts between that and `place`.
+        while self.scanning.swap(true, Ordering::SeqCst) {
+            if stopped() {
+                return Err(PlaceError::cancelled());
+            }
+            if (self.now_ms)() >= end {
+                return Err(PlaceError {
+                    message: format!(
+                        "Another import has held the folder for {} s. Nothing was saved; try again when it finishes.",
+                        self.import_wait_ms.div_ceil(1000)
+                    ),
+                    status: Some(503),
+                });
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        let _held = Holding(&self.scanning);
+        // The folder also comes free when the relay closes (the running import stops between
+        // files) or the job was cancelled in the last moment of the wait: neither may place
+        // anything.
+        if stopped() {
+            return Err(PlaceError::cancelled());
+        }
+        place().map_err(|message| PlaceError {
+            message,
+            status: None,
+        })?;
+        Ok(if self.files.exists(dir) {
+            self.scan_inner(dir, ctx, prefix).await
+        } else {
+            empty_scan()
+        })
     }
 
     async fn scan_inner<N>(&self, dir: &str, ctx: &Ctx<N>, prefix: &str) -> Value
@@ -744,7 +825,7 @@ impl WatchState {
             let op = match op {
                 Ok(op) => op,
                 Err(error) => {
-                    failed.push(json!({ "file": name, "error": error.message }));
+                    failed.push(json!({ "file": name, "rel": file.rel, "error": error.message }));
                     continue;
                 }
             };
@@ -763,6 +844,7 @@ impl WatchState {
             self.save();
             ingested.push(json!({
                 "file": name,
+                "rel": file.rel,
                 "id": field("id"),
                 "title": field("title"),
                 "size": field("size"),

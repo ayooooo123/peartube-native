@@ -6,7 +6,10 @@
 //! holds half a pair until the file system call or `toWellFormed` replaces it with the same. Both
 //! count as three bytes toward a name's byte limit.
 
+use std::future::Future;
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
+use std::sync::Arc;
 
 use serde_json::{Value, json};
 
@@ -163,3 +166,37 @@ pub(crate) fn note_mirrored(dir: &Path, names: &[String]) -> std::io::Result<()>
     }
     std::fs::write(file, format!("{}\n", Value::Array(next)))
 }
+
+/// A provider's finished files moving into the import folder (the app's `place`). The host runs
+/// it at most once, and only while no other import holds the folder.
+pub type Place = Box<dyn FnOnce() -> Result<(), String> + Send>;
+
+/// Whether the save the files belong to was cancelled, or its provider stopped.
+pub type Cancelled = Arc<dyn Fn() -> bool + Send + Sync>;
+
+/// Why a host placed or imported nothing: the save was cancelled (`Cancelled`), another import
+/// held the folder past the host's limit (503), or `place` itself failed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlaceError {
+    pub message: String,
+    pub status: Option<u16>,
+}
+
+impl PlaceError {
+    /// The save was cancelled, its provider stopped or the host closed: nothing was placed.
+    pub fn cancelled() -> Self {
+        Self {
+            message: "Cancelled".to_owned(),
+            status: None,
+        }
+    }
+}
+
+/// What one import answers (`scanFolder`'s result), or why nothing was placed.
+pub type PlaceFuture = Pin<Box<dyn Future<Output = Result<Value, PlaceError>> + Send>>;
+
+/// The host's `placeAndScan`, as a provider is given it. `place` runs once no other import holds
+/// the folder, and the import starts in the same step, so no other import sees a half-placed
+/// album. While the host waits nothing is placed: a save that is cancelled, or that the host
+/// gives up on, leaves nothing behind.
+pub type PlaceAndScan = Arc<dyn Fn(Place, Cancelled) -> PlaceFuture + Send + Sync>;

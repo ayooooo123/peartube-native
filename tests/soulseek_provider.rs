@@ -8,6 +8,8 @@
 
 #[path = "support/soulseek_network.rs"]
 mod network;
+#[path = "support/trace.rs"]
+mod trace;
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -17,7 +19,8 @@ use std::time::Duration;
 
 use network::{FakeBackend, Labels, Network, World, sha256_hex, sorted_names, tree};
 use peartube_native::providers::soulseek::client::Backend;
-use peartube_native::providers::soulseek::{Options, Provider, SoulseekError, StagingScan};
+use peartube_native::providers::soulseek::{Options, Provider, SoulseekError};
+use peartube_native::providers::staging::{Cancelled, Place, PlaceAndScan, PlaceError};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -57,16 +60,56 @@ struct SessionOptions {
     no_connect_ms: Option<u64>,
 }
 
-/// What the mirror host's scan answers: one item for each media file it has not reported before.
-struct FakeScan {
+/// What the mirror host does for a provider (`placeAndScan`), with the other import scripted:
+/// `held_until` is when another import lets go of the folder, and `limit` is how long the host
+/// waits before it gives up. Nothing is placed while it waits. Then the provider's `place` runs,
+/// and the scan answers one item for each media file it has not reported before. The host's own
+/// wait is compared in the library oracle; this one only gives the provider every answer a host
+/// can give.
+struct FakeHost {
     world: Arc<World>,
     root: PathBuf,
     seen: Mutex<HashSet<String>>,
-    busy: AtomicU64,
+    now_ms: Arc<dyn Fn() -> u64 + Send + Sync>,
+    held_until: AtomicU64,
+    /// `u64::MAX` when the host never gives up.
+    limit: AtomicU64,
 }
 
-impl FakeScan {
-    async fn run(self: Arc<Self>) -> Result<Value, String> {
+impl FakeHost {
+    async fn place_and_scan(
+        self: Arc<Self>,
+        place: Place,
+        cancelled: Cancelled,
+    ) -> Result<Value, PlaceError> {
+        let limit = self.limit.load(Ordering::SeqCst);
+        let end = (self.now_ms)().saturating_add(limit);
+        while (self.now_ms)() < self.held_until.load(Ordering::SeqCst) {
+            if cancelled() {
+                return Err(PlaceError::cancelled());
+            }
+            if (self.now_ms)() >= end {
+                return Err(PlaceError {
+                    message: format!(
+                        "Another import has held the folder for {} s. Nothing was saved; try again when it finishes.",
+                        limit.div_ceil(1000)
+                    ),
+                    status: Some(503),
+                });
+            }
+            self.world.tick().await;
+        }
+        if cancelled() {
+            return Err(PlaceError::cancelled());
+        }
+        place().map_err(|message| PlaceError {
+            message,
+            status: None,
+        })?;
+        Ok(self.scan().await)
+    }
+
+    async fn scan(&self) -> Value {
         let folder = self
             .root
             .file_name()
@@ -75,10 +118,6 @@ impl FakeScan {
             .into_owned();
         self.world.log(json!({ "scan": folder }));
         self.world.tick().await;
-        if self.busy.load(Ordering::SeqCst) > 0 {
-            self.busy.fetch_sub(1, Ordering::SeqCst);
-            return Ok(json!({ "scanned": 0, "ingested": 0, "busy": true, "items": [] }));
-        }
         let mut items = Vec::new();
         let mut scanned = 0;
         for folder in sorted_names(&self.root) {
@@ -91,16 +130,20 @@ impl FakeScan {
                     continue;
                 }
                 scanned += 1;
-                if !self.seen.lock().unwrap().insert(format!("{folder}/{name}")) {
+                let rel = format!("{folder}/{name}");
+                if !self.seen.lock().unwrap().insert(rel.clone()) {
                     continue;
                 }
                 let bytes = std::fs::read(dir.join(&name)).unwrap();
-                items.push(
-                    json!({ "file": name, "size": bytes.len(), "sha256": sha256_hex(&bytes) }),
-                );
+                items.push(json!({
+                    "file": name,
+                    "rel": rel,
+                    "size": bytes.len(),
+                    "sha256": sha256_hex(&bytes),
+                }));
             }
         }
-        Ok(json!({ "scanned": scanned, "ingested": items.len(), "items": items }))
+        json!({ "scanned": scanned, "ingested": items.len(), "items": items })
     }
 }
 
@@ -135,16 +178,18 @@ async fn run_session(network: &Arc<Network>, session: &Session) -> Value {
         storage.join("staging")
     };
     let world = World::new(network.clone(), session.login.clone(), session.bound_port);
-    let scan = Arc::new(FakeScan {
-        world: world.clone(),
-        root: staging.clone(),
-        seen: Mutex::new(HashSet::new()),
-        busy: AtomicU64::new(0),
-    });
     let changes = Arc::new(AtomicU64::new(0));
     let start = tokio::time::Instant::now();
     let now_ms: Arc<dyn Fn() -> u64 + Send + Sync> =
         Arc::new(move || NOW + start.elapsed().as_millis() as u64);
+    let host = Arc::new(FakeHost {
+        world: world.clone(),
+        root: staging.clone(),
+        seen: Mutex::new(HashSet::new()),
+        now_ms: now_ms.clone(),
+        held_until: AtomicU64::new(0),
+        limit: AtomicU64::new(u64::MAX),
+    });
     let backend: Option<Arc<dyn Backend>> = match session.backend.as_deref() {
         Some("none") => None,
         _ => Some(Arc::new(FakeBackend(world.clone()))),
@@ -181,9 +226,11 @@ async fn run_session(network: &Arc<Network>, session: &Session) -> Value {
         })
     });
     let provider = Provider::new(options);
-    let staging_scan: Option<StagingScan> = (session.scan != Some(false)).then(|| {
-        let scan = scan.clone();
-        let asked: StagingScan = Arc::new(move || Box::pin(scan.clone().run()));
+    let place_and_scan: Option<PlaceAndScan> = (session.scan != Some(false)).then(|| {
+        let host = host.clone();
+        let asked: PlaceAndScan = Arc::new(move |place, cancelled| {
+            Box::pin(host.clone().place_and_scan(place, cancelled))
+        });
         asked
     });
 
@@ -200,7 +247,7 @@ async fn run_session(network: &Arc<Network>, session: &Session) -> Value {
     // A call's outcome, once it has one: the clock moves until then.
     let call = |step: &Value| -> Outcome {
         let slot: Outcome = Arc::new(Mutex::new(None));
-        let (provider, scan) = (provider.clone(), staging_scan.clone());
+        let (provider, host) = (provider.clone(), place_and_scan.clone());
         let (kind, payload) = (
             step["do"].as_str().unwrap().to_owned(),
             step["payload"].clone(),
@@ -210,8 +257,8 @@ async fn run_session(network: &Arc<Network>, session: &Session) -> Value {
             let result = match kind.as_str() {
                 "search" => provider.search(&payload).await,
                 "browse" => provider.browse(&payload).await,
-                "mirror" => provider.mirror(&payload, scan).await,
-                "run" => provider.run(&payload, scan).await,
+                "mirror" => provider.mirror(&payload, host).await,
+                "run" => provider.run(&payload, host).await,
                 other => panic!("unknown call {other}"),
             };
             *done.lock().unwrap() = Some(outcome(result));
@@ -267,8 +314,11 @@ async fn run_session(network: &Arc<Network>, session: &Session) -> Value {
             provider.configure(text("slskUser"), text("slskPass"), text("slskServer"));
             flush().await;
             put(i, Value::Null);
-        } else if let Some(times) = step.get("busy").and_then(Value::as_u64) {
-            scan.busy.store(times, Ordering::SeqCst);
+        } else if let Some(ms) = step.get("hold").and_then(Value::as_u64) {
+            host.held_until.store(now_ms() + ms, Ordering::SeqCst);
+            put(i, Value::Null);
+        } else if let Some(ms) = step.get("limit").and_then(Value::as_u64) {
+            host.limit.store(ms, Ordering::SeqCst);
             put(i, Value::Null);
         } else if step.get("tree").is_some() {
             put(i, tree(&root));
@@ -304,6 +354,7 @@ fn js_trace() -> Value {
     serde_json::from_slice(&output.stdout).expect("the oracle prints JSON")
 }
 
+/// Every session runs to its end before the test fails, so one run names all that differs.
 #[tokio::test(start_paused = true)]
 async fn the_provider_does_what_the_app_does() {
     let oracle = js_trace();
@@ -313,6 +364,7 @@ async fn the_provider_does_what_the_app_does() {
     let expected = oracle["sessions"].as_array().unwrap();
     assert_eq!(expected.len(), scenario.sessions.len());
     let mut records = 0;
+    let mut differs: Vec<String> = Vec::new();
     for (session, expected) in scenario.sessions.iter().zip(expected) {
         let actual = run_session(&network, session).await;
         assert_eq!(actual["name"], expected["name"]);
@@ -321,16 +373,28 @@ async fn the_provider_does_what_the_app_does() {
             expected["trace"].as_array().unwrap(),
         );
         for (index, (actual, expected)) in actual.iter().zip(expected).enumerate() {
-            assert_eq!(
-                actual.to_string(),
-                expected.to_string(),
-                "session “{}”, record {index} (step {})",
-                session.name,
-                expected["step"]
-            );
+            if let Some(difference) = trace::first_difference(actual, expected, "") {
+                differs.push(format!(
+                    "session “{}”, record {index} (step {}): {difference}",
+                    session.name, expected["step"]
+                ));
+            }
             records += 1;
         }
-        assert_eq!(actual.len(), expected.len(), "session “{}”", session.name);
+        if actual.len() != expected.len() {
+            differs.push(format!(
+                "session “{}”: {} records here, {} in the app",
+                session.name,
+                actual.len(),
+                expected.len()
+            ));
+        }
     }
-    assert!(records > 250, "{records} records compared");
+    assert!(
+        differs.is_empty(),
+        "{} records differ from the app:\n  {}",
+        differs.len(),
+        differs.join("\n  ")
+    );
+    assert!(records > 330, "{records} records compared");
 }

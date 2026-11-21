@@ -22,33 +22,46 @@ const flush = async () => { for (let i = 0; i < 40; i++) await new Promise(resol
 const tick = async () => { mock.timers.tick(TICK); await flush() }
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
 
-// What the mirror host's scan answers: one item for each media file it has not reported before.
-function fakeScan (log) {
+// What the mirror host does for a provider (`placeAndScan` in the app's mirror.js), with the other import scripted:
+// `hold(ms)` lets another import hold the folder that long from now, and `limit(ms)` is how long the host waits
+// before it gives up. Nothing is placed while it waits. Then the provider's `place` runs, and the scan answers one
+// item for each media file it has not reported before. The host's own wait is compared in the library oracle;
+// this one only gives the provider every answer a host can give.
+function fakeHost (log, dir) {
   const seen = new Set()
-  let busy = 0
+  let heldUntil = 0
+  let limit = Infinity
+  async function scan () {
+    log.push({ scan: basename(dir) })
+    await sleep(TICK)
+    const items = []
+    let scanned = 0
+    for (const folder of readdirSync(dir).sort()) {
+      if (folder.startsWith('.') || !statSync(join(dir, folder)).isDirectory()) continue
+      for (const name of readdirSync(join(dir, folder)).sort()) {
+        if (name.startsWith('.') || name.endsWith('.json')) continue
+        scanned++
+        if (seen.has(`${folder}/${name}`)) continue
+        seen.add(`${folder}/${name}`)
+        const bytes = readFileSync(join(dir, folder, name))
+        items.push({ file: name, rel: `${folder}/${name}`, size: bytes.length, sha256: sha(bytes) })
+      }
+    }
+    return { scanned, ingested: items.length, items }
+  }
   return {
-    busy (times) { busy = times },
-    async run (dir) {
-      log.push({ scan: basename(dir) })
-      await sleep(TICK)
-      if (busy > 0) {
-        busy--
-        return { scanned: 0, ingested: 0, busy: true, items: [] }
+    hold (ms) { heldUntil = Date.now() + ms },
+    limit (ms) { limit = ms },
+    async placeAndScan (place, _ctx, { cancelled = () => false } = {}) {
+      const end = Date.now() + limit
+      while (Date.now() < heldUntil) {
+        if (cancelled()) throw new Error('Cancelled')
+        if (Date.now() >= end) throw Object.assign(new Error(`Another import has held the folder for ${Math.ceil(limit / 1000)} s. Nothing was saved; try again when it finishes.`), { status: 503 })
+        await sleep(TICK)
       }
-      const items = []
-      let scanned = 0
-      for (const folder of readdirSync(dir).sort()) {
-        if (folder.startsWith('.') || !statSync(join(dir, folder)).isDirectory()) continue
-        for (const name of readdirSync(join(dir, folder)).sort()) {
-          if (name.startsWith('.') || name.endsWith('.json')) continue
-          scanned++
-          if (seen.has(`${folder}/${name}`)) continue
-          seen.add(`${folder}/${name}`)
-          const bytes = readFileSync(join(dir, folder, name))
-          items.push({ file: name, size: bytes.length, sha256: sha(bytes) })
-        }
-      }
-      return { scanned, ingested: items.length, items }
+      if (cancelled()) throw new Error('Cancelled')
+      place()
+      return scan()
     }
   }
 }
@@ -60,7 +73,7 @@ async function runSession (session) {
   const storage = join(root, 'storage')
   mkdirSync(storage)
   const log = []
-  const scan = fakeScan(log)
+  const host = fakeHost(log, session.importFolder ? join(root, 'import') : join(storage, 'staging'))
   let changes = 0
   const start = Date.now()
   const plug = createSoulseekPlugin({
@@ -68,7 +81,7 @@ async function runSession (session) {
     ...(session.importFolder ? { stagingRoot: join(root, 'import'), stagingLabel: 'import folder' } : {}),
     ...session.options,
     onchange: () => { changes++ },
-    ...(session.scan === false ? {} : { scanStaging: dir => scan.run(dir) }),
+    ...(session.scan === false ? {} : { placeAndScan: host.placeAndScan }),
     loadAddon: session.backend === 'none'
       ? async () => { throw new Error('No prebuild found for platform') }
       : async () => fakeAddon(session, log)
@@ -137,8 +150,11 @@ async function runSession (session) {
       plug.configure(step.configure)
       await flush()
       put(i, null)
-    } else if (step.busy !== undefined) {
-      scan.busy(step.busy)
+    } else if (step.hold !== undefined) {
+      host.hold(step.hold)
+      put(i, null)
+    } else if (step.limit !== undefined) {
+      host.limit(step.limit)
       put(i, null)
     } else if (step.tree) {
       put(i, tree(root))

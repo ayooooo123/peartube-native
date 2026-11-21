@@ -32,7 +32,8 @@ use crate::node::Node;
 use crate::node::api::{PutMeta, SearchOptions};
 use crate::protocol::{is_hex64, is_id};
 use crate::providers::soulseek::client::Backend;
-use crate::providers::soulseek::{self, Provider, SoulseekError, StagingScan};
+use crate::providers::soulseek::{self, Provider, SoulseekError};
+use crate::providers::staging::PlaceAndScan;
 
 /// What a mirror plugin run may ask its host for, as `ctxFor(name)` in the app.
 pub struct Ctx<N: Node> {
@@ -559,6 +560,9 @@ pub struct MirrorOptions {
     pub soulseek: SoulseekSettings,
     pub plugins_dir: Option<String>,
     pub poll_interval_ms: u64,
+    /// How long a provider's finished save waits for another import to finish before it gives up
+    /// with nothing placed.
+    pub import_wait_ms: u64,
     /// Plugins to run once the host is up, by name, as `relay.js` runs `hiverelay-seed`.
     pub start_runs: Vec<String>,
     pub onchange: Option<Arc<dyn Fn() + Send + Sync>>,
@@ -577,6 +581,7 @@ impl Default for MirrorOptions {
             soulseek: SoulseekSettings::default(),
             plugins_dir: None,
             poll_interval_ms: 60_000,
+            import_wait_ms: 120_000,
             start_runs: Vec::new(),
             onchange: None,
             onstarting: None,
@@ -1069,7 +1074,7 @@ where
 }
 
 /// The `soulseek` plugin: the provider behind the host's plugin and provider calls. Its mirrors land
-/// in the folder `watch-dir` sweeps, and each asks for that sweep once its files are in place.
+/// in the folder `watch-dir` sweeps, placed and imported in one step once no other import holds it.
 struct SoulseekPlugin {
     provider: Provider,
     watch: Arc<WatchState>,
@@ -1077,21 +1082,22 @@ struct SoulseekPlugin {
     staging_root: String,
 }
 
-impl SoulseekPlugin {
-    fn scan<N>(&self, ctx: &Ctx<N>) -> StagingScan
-    where
-        N: Node + 'static,
-        N::Error: From<AcquireError>,
-    {
-        let (watch, ctx, root) = (self.watch.clone(), ctx.clone(), self.staging_root.clone());
-        Arc::new(move || {
-            let (watch, ctx, root) = (watch.clone(), ctx.clone(), root.clone());
-            Box::pin(async move {
-                let prefix = watch.prefix_of(&root);
-                Ok(watch.scan(Some(&root), &ctx, prefix).await)
-            })
+/// The host's `placeAndScan` as a provider whose saves land in `root` is given it.
+fn place_and_scan<N>(watch: &Arc<WatchState>, ctx: &Ctx<N>, root: &str) -> PlaceAndScan
+where
+    N: Node + 'static,
+    N::Error: From<AcquireError>,
+{
+    let (watch, ctx, root) = (watch.clone(), ctx.clone(), root.to_owned());
+    Arc::new(move |place, cancelled| {
+        let (watch, ctx, root) = (watch.clone(), ctx.clone(), root.clone());
+        Box::pin(async move {
+            let prefix = watch.prefix_of(&root);
+            watch
+                .place_and_scan(&root, &ctx, prefix, place, cancelled)
+                .await
         })
-    }
+    })
 }
 
 fn provider_error(error: SoulseekError) -> MirrorError {
@@ -1123,8 +1129,9 @@ where
         ctx: &'a Ctx<N>,
     ) -> Pin<Box<dyn Future<Output = Result<Value, MirrorError>> + Send + 'a>> {
         Box::pin(async move {
+            let host = place_and_scan(&self.watch, ctx, &self.staging_root);
             self.provider
-                .run(&payload, Some(self.scan(ctx)))
+                .run(&payload, Some(host))
                 .await
                 .map_err(provider_error)
         })
@@ -1157,8 +1164,9 @@ where
 
     fn mirror<'a>(&'a self, payload: Value, ctx: &'a Ctx<N>) -> ProviderFuture<'a> {
         Box::pin(async move {
+            let host = place_and_scan(&self.watch, ctx, &self.staging_root);
             self.provider
-                .mirror(&payload, Some(self.scan(ctx)))
+                .mirror(&payload, Some(host))
                 .await
                 .map_err(provider_error)
         })
@@ -1231,6 +1239,7 @@ where
             ledger: Mutex::new(watch::load_ledger(&*files, &opts.storage)),
             state_file: format!("{}/mirror-watch.json", opts.storage),
             scanning: AtomicBool::new(false),
+            import_wait_ms: opts.import_wait_ms,
             watch_dir: Mutex::new(opts.watch_dir.clone()),
             staging_dir: staging_dir.clone(),
             closed: closed.clone(),
@@ -1550,6 +1559,7 @@ where
                 let mut out = Map::new();
                 out.insert("name".into(), json!(name));
                 out.insert("description".into(), json!(plugin.description()));
+                out.insert("searchable".into(), json!(plugin.provider().is_some()));
                 if let Value::Object(info) = plugin.info() {
                     for (key, value) in info {
                         out.insert(key, value);
@@ -1679,16 +1689,17 @@ where
         }
     }
 
-    /// `close`: stop polling, let every plugin stop, and refuse new work.
+    /// `close`: stop polling, let every plugin stop, and refuse new work. Every stop starts before
+    /// any is awaited: a plugin with work parked on this host (a mirror waiting for an import)
+    /// must mark it stopped now, not after an earlier plugin's stop has finished. Every stop is
+    /// awaited to its end; a stop has no error to give here, so none can cut the others short.
     pub async fn close(&self) {
         self.closed.store(true, Ordering::SeqCst);
         if let Some(handle) = self.poll_task.lock().expect("poll task").take() {
             handle.abort();
         }
         let plugins = self.plugins.lock().expect("mirror plugins").clone();
-        for (_, plugin) in plugins {
-            plugin.stop().await;
-        }
+        futures_util::future::join_all(plugins.iter().map(|(_, plugin)| plugin.stop())).await;
         let handles: Vec<JoinHandle<()>> =
             self.tasks.lock().expect("mirror tasks").drain(..).collect();
         for handle in handles {

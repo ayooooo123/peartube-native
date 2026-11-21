@@ -8,14 +8,15 @@
 //!     inspected before mirroring.
 //!   - Downloads albums one folder deep into `<staging>/<Artist> - <Album> (<Year>)/` (the relay's
 //!     swept import folder), never rewriting peer bytes; a caller-supplied release id pins the
-//!     folder to that album, then a scan is asked for. A single track lands in its album's folder
-//!     as `NN - Title.ext`, or fails when nothing names its album ([`place`]).
+//!     folder to that album. The files stay in a work folder until the host says no other import
+//!     holds the import folder, then are placed and imported in one step. A single track lands in
+//!     its album's folder as `NN - Title.ext`, or fails when nothing names its album ([`place`]).
 //!   - Jobs report `queued` (waiting on the peer), `transferring` or `failed` with a plain reason;
 //!     a peer that never answers or never connects back fails the job instead of leaving it at 0
 //!     bytes.
 //!
 //! The client is the Rust crate the app's addon wraps ([`client`]). [`Provider`] knows nothing of
-//! the node: the mirror host registers it as its `soulseek` plugin and hands it the scan to run.
+//! the node: the mirror host registers it as its `soulseek` plugin and hands it its `placeAndScan`.
 
 pub mod client;
 pub mod place;
@@ -36,7 +37,8 @@ use self::client::{Backend, Client, ClientSetup, Phase, Progress, ProgressFn};
 use self::place::{LoneTrack, peer_folder_hint, place_single_track};
 use self::rank::{Candidate, ShareList, rank, share_list};
 use super::staging::{
-    ALBUM_PIN, format_album_dir, free_path, is_release_id, note_mirrored, safe_segment, split_ext,
+    ALBUM_PIN, Cancelled, Place, PlaceAndScan, format_album_dir, free_path, is_release_id,
+    note_mirrored, safe_segment, split_ext,
 };
 use crate::acquire::RandomSource;
 use crate::app_settings::{js_string_or_empty, js_truthy};
@@ -94,11 +96,6 @@ impl std::fmt::Display for SoulseekError {
 }
 
 impl std::error::Error for SoulseekError {}
-
-/// One sweep of the folder mirrors land in, as the mirror host's scan answers it.
-pub type ScanFuture = Pin<Box<dyn Future<Output = Result<Value, String>> + Send>>;
-/// Asks for that sweep.
-pub type StagingScan = Arc<dyn Fn() -> ScanFuture + Send + Sync>;
 
 /// `createSoulseekPlugin`'s options.
 pub struct Options {
@@ -733,13 +730,14 @@ impl Provider {
         });
     }
 
-    /// `mirror({ username, files, id, releaseId, title, wait })`: downloads the files into one
-    /// album folder of the staging root and asks `scan` to import it. With `wait` the answer is the
-    /// finished mirror; without, `{ queued, job }` at once while the download goes on.
+    /// `mirror({ username, files, id, releaseId, title, wait })`: downloads the files into a work
+    /// folder, then has the host place them in one album folder of the staging root and import it
+    /// (`place_and_scan`; without one, a bare provider only places them). With `wait` the answer is
+    /// the finished mirror; without, `{ queued, job }` at once while the download goes on.
     pub async fn mirror(
         &self,
         payload: &Value,
-        scan: Option<StagingScan>,
+        place_and_scan: Option<PlaceAndScan>,
     ) -> Result<Value, SoulseekError> {
         self.require_configured()?;
         let username = js_string_or_empty(payload.get("username"));
@@ -862,9 +860,14 @@ impl Provider {
         make_private_dir(&work_dir).map_err(|error| SoulseekError::plain(error.to_string()))?;
 
         let wait = payload.get("wait") == Some(&Value::Bool(true));
-        let run = self
-            .clone()
-            .run_download(client, job.clone(), request, items, work_dir, scan);
+        let run = self.clone().run_download(
+            client,
+            job.clone(),
+            request,
+            items,
+            work_dir,
+            place_and_scan,
+        );
         if wait {
             return run.await;
         }
@@ -880,10 +883,10 @@ impl Provider {
         request: Request,
         items: Vec<Item>,
         work_dir: PathBuf,
-        scan: Option<StagingScan>,
+        place_and_scan: Option<PlaceAndScan>,
     ) -> Result<Value, SoulseekError> {
         let outcome = self
-            .download_and_place(&client, &job, &request, items, &work_dir, scan)
+            .download_and_place(&client, &job, &request, items, &work_dir, place_and_scan)
             .await;
         let failure = match outcome {
             Ok(done) => return Ok(done),
@@ -922,7 +925,7 @@ impl Provider {
         request: &Request,
         items: Vec<Item>,
         work_dir: &Path,
-        scan: Option<StagingScan>,
+        place_and_scan: Option<PlaceAndScan>,
     ) -> Result<Value, SoulseekError> {
         let cancelled = || SoulseekError::plain("Cancelled");
         let items = Arc::new(Mutex::new(items));
@@ -1006,7 +1009,13 @@ impl Provider {
         if self.stopped(job) {
             return Err(cancelled());
         }
-        job.record.lock().expect("soulseek job").status = "announcing";
+        // `waiting` until this album's own import starts: nothing is in the import folder yet and
+        // Cancel works.
+        {
+            let mut record = job.record.lock().expect("soulseek job");
+            record.status = "announcing";
+            record.phase = "waiting";
+        }
         self.changed();
         let completed = run.lock().expect("soulseek run").completed;
         let (first_filename, first_base) = {
@@ -1100,80 +1109,101 @@ impl Provider {
             }
         }
 
-        let io = |error: std::io::Error| SoulseekError::plain(error.to_string());
+        if self.stopped(job) {
+            return Err(cancelled());
+        }
         let album_dir = Path::new(&self.0.staging_root).join(&folder_name);
-        std::fs::create_dir_all(&album_dir).map_err(io)?;
-        // The pin goes in before the files, so a scan that runs between the two already sees it. A
-        // lone track pins a new folder to its album; a folder that already has a pin keeps it.
-        let pin_path = album_dir.join(ALBUM_PIN);
-        let pin = match (&request.release, &single) {
-            (Some(release), Some(single)) => {
-                Some(json!({ "release": release, "title": single.album_title }))
+        let placed: Arc<Mutex<Vec<String>>> = Arc::default();
+        // Runs only once no other import holds the folder (`place_and_scan`), in one step with
+        // this album's own import: until then the files stay in the work folder, so a mirror that
+        // is cancelled or gives up while it waits leaves nothing for a later scan to add.
+        let place: Place = Box::new({
+            let (provider, job, placed) = (self.clone(), job.clone(), placed.clone());
+            let (release, single) = (request.release.clone(), single.clone());
+            let (caller_id, downloaded) = (request.caller_id.clone(), downloaded.clone());
+            let work_dir = work_dir.to_owned();
+            move || {
+                let io = |error: std::io::Error| error.to_string();
+                std::fs::create_dir_all(&album_dir).map_err(io)?;
+                // The pin goes in before the files. A lone track pins a new folder to its album; a
+                // folder that already has a pin keeps it.
+                let pin_path = album_dir.join(ALBUM_PIN);
+                let pin = match (&release, &single) {
+                    (Some(release), Some(single)) => {
+                        Some(json!({ "release": release, "title": single.album_title }))
+                    }
+                    (Some(release), None) => Some(json!({ "release": release })),
+                    (None, Some(single)) if !pin_path.exists() => {
+                        Some(json!({ "release": single.release, "title": single.album_title }))
+                    }
+                    _ => None,
+                };
+                if let Some(pin) = pin {
+                    std::fs::write(&pin_path, format!("{pin}\n")).map_err(io)?;
+                }
+                let title = job.record.lock().expect("soulseek job").title.clone();
+                let mut names = placed.lock().expect("placed names");
+                for (name, tmp_path, _) in &downloaded {
+                    let wanted = single.as_ref().map_or(name, |single| &single.file);
+                    let dest = free_path(&album_dir, wanted);
+                    let dest_name = dest
+                        .file_name()
+                        .map(|name| name.to_string_lossy().into_owned())
+                        .unwrap_or_default();
+                    if !names.contains(&dest_name) {
+                        names.push(dest_name);
+                    }
+                    // Across file systems a rename fails: copy, then drop the original.
+                    if std::fs::rename(tmp_path, &dest).is_err() {
+                        std::fs::copy(tmp_path, &dest).map_err(io)?;
+                        let _ = std::fs::remove_file(tmp_path);
+                    }
+                    // A single file mirrored for a non-album id (a clip or film) carries that id
+                    // in a sidecar.
+                    if downloaded.len() == 1 && named_other {
+                        let sidecar = json!({ "id": caller_id, "title": title });
+                        let mut path = dest.into_os_string();
+                        path.push(".json");
+                        std::fs::write(path, sidecar.to_string()).map_err(io)?;
+                    }
+                }
+                note_mirrored(&album_dir, &names).map_err(io)?;
+                drop(names);
+                let _ = std::fs::remove_dir_all(&work_dir);
+                job.record.lock().expect("soulseek job").phase = "importing";
+                provider.changed();
+                Ok(())
             }
-            (Some(release), None) => Some(json!({ "release": release })),
-            (None, Some(single)) if !pin_path.exists() => {
-                Some(json!({ "release": single.release, "title": single.album_title }))
-            }
-            _ => None,
-        };
-        if let Some(pin) = pin {
-            std::fs::write(&pin_path, format!("{pin}\n")).map_err(io)?;
-        }
-        let title = job.record.lock().expect("soulseek job").title.clone();
-        let mut placed: Vec<String> = Vec::new();
-        for (name, tmp_path, _) in &downloaded {
-            let wanted = single.as_ref().map_or(name, |single| &single.file);
-            let dest = free_path(&album_dir, wanted);
-            let dest_name = dest
-                .file_name()
-                .map(|name| name.to_string_lossy().into_owned())
-                .unwrap_or_default();
-            if !placed.contains(&dest_name) {
-                placed.push(dest_name);
-            }
-            // Across file systems a rename fails: copy, then drop the original.
-            if std::fs::rename(tmp_path, &dest).is_err() {
-                std::fs::copy(tmp_path, &dest).map_err(io)?;
-                let _ = std::fs::remove_file(tmp_path);
-            }
-            // A single file mirrored for a non-album id (a clip or film) carries that id in a
-            // sidecar.
-            if downloaded.len() == 1 && named_other {
-                let sidecar = json!({ "id": request.caller_id, "title": title });
-                let mut path = dest.into_os_string();
-                path.push(".json");
-                std::fs::write(path, sidecar.to_string()).map_err(io)?;
-            }
-        }
-        note_mirrored(&album_dir, &placed).map_err(io)?;
-        let _ = std::fs::remove_dir_all(work_dir);
+        });
         let files = downloaded.len();
 
-        let empty = || json!({ "scanned": 0, "ingested": 0, "items": [] });
-        let scanned = match &scan {
-            Some(scan) => {
-                let mut result = scan().await.map_err(SoulseekError::plain)?;
-                // The import folder may be busy on another file: wait briefly and scan again, so
-                // this job settles after its files are imported.
-                for _ in 0..20 {
-                    let busy = result.get("busy").is_some_and(js_truthy);
-                    if !busy || self.state().closed {
-                        break;
-                    }
-                    tokio::time::sleep(Duration::from_millis(250)).await;
-                    result = scan().await.map_err(SoulseekError::plain)?;
-                }
-                result
+        let scanned = match &place_and_scan {
+            Some(host) => {
+                let stopped: Cancelled = Arc::new({
+                    let (provider, job) = (self.clone(), job.clone());
+                    move || provider.stopped(&job)
+                });
+                host(place, stopped).await.map_err(|error| SoulseekError {
+                    message: error.message,
+                    status: error.status,
+                    reason: None,
+                })?
             }
-            None => empty(),
+            // A bare provider has no host to import for it: the files are only placed.
+            None => {
+                place().map_err(SoulseekError::plain)?;
+                json!({ "scanned": 0, "ingested": 0, "items": [] })
+            }
         };
+        let placed = placed.lock().expect("placed names").clone();
         let items = scanned
             .get("items")
             .filter(|items| js_truthy(items))
             .cloned()
             .unwrap_or_else(|| json!([]));
         // The sha256 of each file this album added, so a client can open the album the mirror
-        // created.
+        // created. By path inside the import folder: another album's file of the same name is not
+        // this mirror's.
         let sha256s: Vec<Value> = items
             .as_array()
             .into_iter()
@@ -1181,7 +1211,11 @@ impl Provider {
             .filter(|item| {
                 item.get("file")
                     .and_then(Value::as_str)
-                    .is_some_and(|file| placed.iter().any(|name| name == file))
+                    .is_some_and(|file| {
+                        placed.iter().any(|name| name == file)
+                            && item.get("rel").and_then(Value::as_str)
+                                == Some(format!("{folder_name}/{file}").as_str())
+                    })
             })
             .map(|item| item.get("sha256").cloned().unwrap_or(Value::Null))
             .collect();
@@ -1440,13 +1474,16 @@ impl Provider {
         Some(Value::Object(job.view(self.now())))
     }
 
-    /// Cancels a mirror that waits or transfers; one that is over is removed from the list instead
-    /// (`status: "removed"`), and one that is being imported is left alone.
+    /// Cancels a mirror that waits or transfers, or that waits for another import with nothing
+    /// placed yet; one that is over is removed from the list instead (`status: "removed"`), and
+    /// one whose own import has started is left alone.
     pub fn cancel_job(&self, job_id: &str) -> Option<Value> {
         let job = self.job(job_id)?;
         let status = {
             let mut record = job.record.lock().expect("soulseek job");
-            if matches!(record.status, "queued" | "transferring") {
+            if matches!(record.status, "queued" | "transferring")
+                || (record.status == "announcing" && record.phase == "waiting")
+            {
                 record.cancelled = true;
                 record.status = "cancelled";
                 None
@@ -1571,6 +1608,12 @@ impl Provider {
             if matches!(record.status, "queued" | "transferring") {
                 record.cancelled = true;
             }
+            // A mirror waiting for another import has placed nothing: closing ends it as a
+            // cancel, not as a failure.
+            if record.status == "announcing" && record.phase == "waiting" {
+                record.cancelled = true;
+                record.status = "cancelled";
+            }
         }
         state.browse_cache.clear();
         Self::close_client(&mut state);
@@ -1581,7 +1624,7 @@ impl Provider {
     pub async fn run(
         &self,
         payload: &Value,
-        scan: Option<StagingScan>,
+        place_and_scan: Option<PlaceAndScan>,
     ) -> Result<Value, SoulseekError> {
         if !self.state().creds.configured() {
             let status = if self.probe() {
@@ -1602,7 +1645,7 @@ impl Provider {
             return self.search(payload).await;
         }
         if files {
-            return self.mirror(payload, scan).await;
+            return self.mirror(payload, place_and_scan).await;
         }
         self.logged_in().await?;
         let mut out = Map::new();
