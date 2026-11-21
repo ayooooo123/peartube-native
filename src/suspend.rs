@@ -193,14 +193,18 @@ mod tests {
         }
         fn resume(&self) -> io::Result<()> {
             self.resumes.fetch_add(1, Ordering::SeqCst);
-            let failing = self
-                .failures
-                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
-                    left.checked_sub(1)
-                })
-                .is_ok();
-            if failing {
-                return Err(io::Error::other("cannot reopen"));
+            // Takes one planned failure, if any is left.
+            let mut left = self.failures.load(Ordering::SeqCst);
+            while left > 0 {
+                match self.failures.compare_exchange(
+                    left,
+                    left - 1,
+                    Ordering::SeqCst,
+                    Ordering::SeqCst,
+                ) {
+                    Ok(_) => return Err(io::Error::other("cannot reopen")),
+                    Err(now) => left = now,
+                }
             }
             Ok(())
         }
