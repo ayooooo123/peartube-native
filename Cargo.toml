@@ -30,7 +30,8 @@ if-addrs = "0.13"
 rand = "0.8"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
-sha2 = "0.10"
+# `compress`: node/hash_state.rs keeps libsodium's exportable state and borrows the rounds.
+sha2 = { version = "0.10", features = ["compress"] }
 xsalsa20poly1305 = "0.9"
 protomux-rs = { path = "../protomux-rs" }
 protomux-wakeup-rs = { path = "../protomux-wakeup-rs" }
@@ -51,6 +52,12 @@ ubit = { git = "https://github.com/ayooooo123/ubit", rev = "a243219e3b98387e8052
 
 [target.'cfg(unix)'.dependencies]
 rustix = { version = "1", features = ["fs", "process"] }
+
+# sha2 0.10 uses the CPU's SHA-256 instructions on aarch64 only with `asm` (x86-64 finds SHA-NI
+# by itself); without it a publish or a copy check hashes the whole file in portable code.
+# It checks for the instructions at run time: a Raspberry Pi 4 has none and keeps the portable code.
+[target.'cfg(target_arch = "aarch64")'.dependencies]
+sha2 = { version = "0.10", features = ["asm"] }
 
 [dev-dependencies]
 tempfile = "3"
