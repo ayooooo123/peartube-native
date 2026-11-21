@@ -1229,12 +1229,18 @@ impl Inner {
         if !is_card(&v.value) || !verify_dht_mutable(&v.signature, v.seq, &v.value, &v.public_key) {
             return false;
         }
-        if self
-            .fail_mutable_puts
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_sub(1))
-            .is_ok()
-        {
-            return false;
+        // Takes one planned failure, if any is left.
+        let mut left = self.fail_mutable_puts.load(Ordering::Relaxed);
+        while left > 0 {
+            match self.fail_mutable_puts.compare_exchange(
+                left,
+                left - 1,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => return false,
+                Err(now) => left = now,
+            }
         }
         let put = self
             .dht

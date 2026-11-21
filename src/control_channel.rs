@@ -250,29 +250,28 @@ impl Control {
                     format!("{label} {name} could not be encoded"),
                 )
             })?;
-        let mut frame = None;
-        let taken = self
-            .inner
-            .seq
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |n| {
-                frame = (n <= MAX_UINT)
-                    .then(|| encode_frame(0, op, n, value.clone()))
-                    .flatten();
-                frame.as_ref().map(|_| n + 1)
-            });
-        let (id, frame) = match (taken, frame) {
-            (Ok(id), Some(frame)) => (id, frame),
-            (Err(next), _) if next > MAX_UINT => {
+        // A request whose frame does not encode takes no id.
+        let mut id = self.inner.seq.load(Ordering::Acquire);
+        let frame = loop {
+            if id > MAX_UINT {
                 return Err(ControlError::coded(
                     "ENCODE_ERROR",
                     format!("{label} channel ran out of request ids"),
                 ));
             }
-            _ => {
+            let Some(frame) = encode_frame(0, op, id, value.clone()) else {
                 return Err(ControlError::coded(
                     "ENCODE_ERROR",
                     format!("{label} {name} is too large"),
                 ));
+            };
+            match self
+                .inner
+                .seq
+                .compare_exchange(id, id + 1, Ordering::AcqRel, Ordering::Acquire)
+            {
+                Ok(_) => break frame,
+                Err(now) => id = now,
             }
         };
         let (tx, rx) = oneshot::channel();
