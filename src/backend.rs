@@ -74,6 +74,8 @@ enum Command {
     Suspend(u64, u64),
     /// The store is already resumed; the error is its own, if it could not reopen.
     Resume(Option<String>),
+    /// Answered when the loop reaches it: every earlier command is done.
+    Barrier(mpsc::SyncSender<()>),
     Shutdown,
 }
 
@@ -202,6 +204,9 @@ impl Backend {
                                     app.suspend(linger, generation)
                                 }
                                 Some(Command::Resume(error)) => app.resume(error).await,
+                                Some(Command::Barrier(reached)) => {
+                                    let _ = reached.send(());
+                                }
                                 Some(Command::Shutdown) => {
                                     app.shutdown().await;
                                     break;
@@ -246,6 +251,18 @@ impl Backend {
     /// swarm, even if the loop is blocked in a store access when the host comes back.
     pub fn resume(&self) {
         self.suspension.resume();
+    }
+    /// Blocks until the loop ran every line, `suspend` and `resume` sent so far, in the host's
+    /// order. Hosts do not need it. A test that steps a fake clock calls it before the clock
+    /// moves: the suspension thread hands a lifecycle step to the loop on its own time, and a
+    /// clock step that ran first would pass the linger timer by.
+    #[doc(hidden)]
+    pub fn caught_up(&self) {
+        self.suspension.settle();
+        let (reached, applied) = mpsc::sync_channel(1);
+        if self.commands.send(Command::Barrier(reached)).is_ok() {
+            let _ = applied.recv();
+        }
     }
     /// Resumes a suspended store first (as `close()` does), so a loop blocked in a store access
     /// reaches the shutdown.

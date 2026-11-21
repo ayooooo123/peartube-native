@@ -38,6 +38,8 @@ enum Request {
         Arc<dyn StoreSuspension>,
         oneshot::Sender<io::Result<()>>,
     ),
+    /// Answered once every earlier request was handled.
+    Settle(SyncSender<()>),
     Release(SyncSender<()>),
 }
 
@@ -74,6 +76,15 @@ impl Suspension {
 
     pub(crate) fn resume(&self) {
         let _ = self.requests.send(Request::Resume);
+    }
+
+    /// Blocks until the thread handled every request sent before this call, so each earlier
+    /// `suspend`/`resume` is in the loop's queue.
+    pub(crate) fn settle(&self) {
+        let (done, settled) = mpsc::sync_channel(1);
+        if self.requests.send(Request::Settle(done)).is_ok() {
+            let _ = settled.recv();
+        }
     }
 
     /// `close()` resumes a suspended store first: wakes every access that waits on a parked
@@ -138,6 +149,9 @@ fn run(incoming: &mpsc::Receiver<Request>, forward: &dyn Fn(Lifecycle)) {
                     Ok(())
                 };
                 let _ = reply.send(result);
+            }
+            Request::Settle(done) => {
+                let _ = done.send(());
             }
             Request::Release(done) => {
                 // `close()` swallows a failed `store.resume()` and closes the store; closing

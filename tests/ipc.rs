@@ -591,41 +591,53 @@ mod fake {
         }
     }
 
-    /// A clock the test advances, and a park counter so an advance returns only after the worker
-    /// has run every timer due at the new time.
+    /// A clock the test advances. An advance returns only after the worker went idle at the new
+    /// time, so it has run every timer due by then.
     pub struct TestClock {
-        now: Mutex<u64>,
-        parked: Mutex<u64>,
-        parked_cv: Condvar,
-        waker: Mutex<Option<Waker>>,
+        state: Mutex<ClockState>,
+        idle: Condvar,
+    }
+
+    struct ClockState {
+        now: u64,
+        /// Counts the advances. The worker's wait records the one it last went idle at.
+        advances: u64,
+        idle_at: u64,
+        waker: Option<Waker>,
     }
 
     impl TestClock {
         pub fn new(now: u64) -> Self {
             Self {
-                now: Mutex::new(now),
-                parked: Mutex::new(0),
-                parked_cv: Condvar::new(),
-                waker: Mutex::new(None),
+                state: Mutex::new(ClockState {
+                    now,
+                    advances: 0,
+                    idle_at: 0,
+                    waker: None,
+                }),
+                idle: Condvar::new(),
             }
         }
 
-        fn parked_count(&self) -> u64 {
-            *self.parked.lock().unwrap_or_else(|e| e.into_inner())
+        fn state(&self) -> std::sync::MutexGuard<'_, ClockState> {
+            self.state.lock().unwrap_or_else(|e| e.into_inner())
         }
 
+        /// The time moves and the waker is taken under one lock with the wait's own check, so the
+        /// worker cannot go idle on the old time and count for this advance.
         pub fn advance(&self, ms: u64) {
-            let before = self.parked_count();
-            *self.now.lock().unwrap_or_else(|e| e.into_inner()) += ms;
-            if let Some(waker) = self.waker.lock().unwrap_or_else(|e| e.into_inner()).take() {
+            let (advance, waker) = {
+                let mut state = self.state();
+                state.now += ms;
+                state.advances += 1;
+                (state.advances, state.waker.take())
+            };
+            if let Some(waker) = waker {
                 waker.wake();
             }
-            let mut parked = self.parked.lock().unwrap_or_else(|e| e.into_inner());
-            while *parked <= before {
-                parked = self
-                    .parked_cv
-                    .wait(parked)
-                    .unwrap_or_else(|e| e.into_inner());
+            let mut state = self.state();
+            while state.idle_at < advance {
+                state = self.idle.wait(state).unwrap_or_else(|e| e.into_inner());
             }
         }
     }
@@ -638,12 +650,13 @@ mod fake {
     impl Future for Wait<'_> {
         type Output = ();
         fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
-            if self.clock.now_ms_for_test() >= self.deadline {
+            let mut state = self.clock.state();
+            if state.now >= self.deadline {
                 return Poll::Ready(());
             }
-            *self.clock.waker.lock().unwrap_or_else(|e| e.into_inner()) = Some(cx.waker().clone());
-            *self.clock.parked.lock().unwrap_or_else(|e| e.into_inner()) += 1;
-            self.clock.parked_cv.notify_all();
+            state.waker = Some(cx.waker().clone());
+            state.idle_at = state.advances;
+            self.clock.idle.notify_all();
             Poll::Pending
         }
     }
@@ -662,7 +675,7 @@ mod fake {
 
     impl TestClock {
         fn now_ms_for_test(&self) -> u64 {
-            *self.now.lock().unwrap_or_else(|e| e.into_inner())
+            self.state().now
         }
     }
 }
@@ -726,6 +739,9 @@ fn run_scenario(scenario: &Value) -> Vec<String> {
         } else if step.get("resume").and_then(Value::as_bool) == Some(true) {
             backend.resume();
         }
+        // The step is applied before the clock moves: a line that the worker still handles, or a
+        // suspend that the suspension thread still holds, would read the next step's time.
+        backend.caught_up();
         clock.advance(0);
     }
     backend.shutdown();
