@@ -23,6 +23,12 @@ Artifacts in `target/release/`:
 `crate-type` also includes `rlib` so `tests/abi.rs` can link the crate as a Rust
 dependency; C hosts ignore it.
 
+Release assets are not built this way. `ffi/build.sh` builds the shared library
+alone under the `engine` profile in the root `Cargo.toml`: fat LTO, one codegen
+unit, and `opt-level = "s"` for everything except the crates that run once per
+byte. Cargo runs no LTO for a target that also emits an `rlib`, so `cargo build`
+cannot produce that library; `cargo rustc --crate-type cdylib` can.
+
 Link a *static* archive with the C++ driver (`clang++`/`c++`), not a plain C
 driver: the archive carries C++ dependencies and a C driver leaves the C++
 runtime unresolved. It also needs the Rust runtime's system dependencies:
@@ -43,9 +49,9 @@ The sibling crates build at the commits `STACK.lock` names, not at their latest
 
 | Asset | Built from |
 |---|---|
-| `peartube_native_ffi-android-arm64.so` | `aarch64-linux-android`, NDK r29 (`29.0.14206865`), API 29, release profile, stripped, `LOAD` segments aligned to 16 KiB (`-Wl,-z,max-page-size=16384`) |
+| `peartube_native_ffi-android-arm64.so` | `aarch64-linux-android`, NDK r29 (`29.0.14206865`), API 29, `engine` profile, stripped, `LOAD` segments aligned to 16 KiB (`-Wl,-z,max-page-size=16384`) |
 | `peartube_native_ffi-android-arm64-dev.so` | the same, built with the dev cargo profile (stripped) for the apps' debug builds: a debug APK never carries a release-speed engine |
-| `peartube_native_ffi-darwin-arm64.dylib` | `aarch64-apple-darwin`, release profile, install name `@rpath/libpeartube_native_ffi.dylib` |
+| `peartube_native_ffi-darwin-arm64.dylib` | `aarch64-apple-darwin`, `engine` profile, local symbols stripped, signed ad hoc, install name `@rpath/libpeartube_native_ffi.dylib` |
 | `peartube_native.h` | `ffi/include/peartube_native.h` at the same commit |
 | `ffi-manifest.json` | `commit`, `abiVersion` (the header's `PT_ABI_VERSION`), `jsRef` (`JS_REF`), `stack`: each sibling crate → the commit both builds used, `assets`: file name → sha256 |
 | `SHA256SUMS` | `sha256sum` format over the two libraries and the header |

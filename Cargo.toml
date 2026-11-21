@@ -69,6 +69,28 @@ members = ["ffi"]
 default = ["peeroxide-dht"]
 peeroxide-dht = []
 
+# The apps' engine (ffi/build.sh). App packages store it uncompressed, so its size is download
+# size. One codegen unit and fat LTO let LLVM see every crate at once: inline functions and drop
+# glue are emitted once instead of once per unit, and unreached code goes before the linker sees it.
+# Unwinding stays on: the C ABI answers PT_ERR_PANIC, and a panicking task must not end the app.
+# The relay keeps the stock release profile.
+[profile.engine]
+inherits = "release"
+lto = "fat"
+codegen-units = 1
+opt-level = "s"
+
+# What runs once per byte keeps full speed: the hashes, the MAC, signatures, and hypercore-rs,
+# whose block cipher is generic and so takes the level of the crate that uses it (XSalsa20:
+# 618 MB/s at 3, 456 MB/s at "s"). In a profile of a 1 GiB transfer no other crate reached 2 %.
+[profile.engine.package]
+sha2.opt-level = 3
+blake2b_simd.opt-level = 3
+poly1305.opt-level = 3
+curve25519-dalek.opt-level = 3
+ed25519-dalek.opt-level = 3
+hypercore-rs.opt-level = 3
+
 # Our fork: UDX write pipelining, C-compatible pacing and SACKs, reachability check (see ../peeroxide).
 [patch.crates-io]
 peeroxide = { path = "../peeroxide/peeroxide" }

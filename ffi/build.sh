@@ -30,13 +30,13 @@ remap="$remap${us}--remap-path-prefix=$cargo_home/git=~/.cargo/git"
 env_name() { printf '%s' "$1" | tr '-' '_'; }
 var_name() { printf '%s' "$1" | tr 'a-z-' 'A-Z_'; }
 
-# Release assets use the release profile; the dev asset matches a debug app build.
-profile=release
+# Release assets use the engine profile (Cargo.toml); the dev asset matches a debug app build.
+profile=engine
 case "$target" in
   android-arm64-dev) profile=dev ;;
 esac
 # cargo writes the dev profile to target/<triple>/debug.
-dir=$([ "$profile" = dev ] && echo debug || echo release)
+dir=$([ "$profile" = dev ] && echo debug || echo "$profile")
 
 case "$target" in
   android-arm64|android-arm64-dev)
@@ -77,7 +77,7 @@ case "$target" in
     asset=peartube_native_ffi-darwin-arm64.dylib
     # The host loads it from the app bundle as lib<name>.dylib, under @rpath.
     rustflags="-Clink-arg=-Wl,-install_name,@rpath/libpeartube_native_ffi.dylib"
-    built=$repo/target/$triple/release/libpeartube_native_ffi.dylib
+    built=$repo/target/$triple/$dir/libpeartube_native_ffi.dylib
     ;;
   *)
     echo "unsupported target $target (android-arm64 | android-arm64-dev | darwin-arm64)" >&2
@@ -85,8 +85,18 @@ case "$target" in
     ;;
 esac
 
-export CARGO_ENCODED_RUSTFLAGS="$rustflags${us}$remap"
-cargo build --manifest-path "$repo/Cargo.toml" -p peartube-native-ffi --profile "$profile" --target "$triple"
+# These flags replace .cargo/config.toml's, so its aarch64 one is repeated: both targets are aarch64.
+export CARGO_ENCODED_RUSTFLAGS="$rustflags${us}--cfg${us}chacha20_force_neon${us}$remap"
+# RocksDB's own release builds pass -fno-rtti (its CMake default) and its code asks for no
+# type information without ROCKSDB_USE_RTTI; librocksdb-sys leaves the compiler's default on,
+# which is 0.2 MB of type records nothing reads.
+export "CXXFLAGS_$(env_name "$triple")=-fno-rtti"
+# Only the shared library is asked for. Cargo skips LTO for a target that also emits an rlib
+# (ffi/Cargo.toml keeps `rlib` for tests/abi.rs), so `cargo build` would link the release
+# asset without the profile's LTO. --target-dir: with CARGO_TARGET_DIR set, cargo built
+# elsewhere and the steps below packaged whatever an earlier build left in target/.
+cargo rustc --manifest-path "$repo/Cargo.toml" --target-dir "$repo/target" -p peartube-native-ffi \
+  --lib --crate-type cdylib --profile "$profile" --target "$triple"
 
 # A released asset is frozen: fail the build rather than publish a wrong one.
 case "$target" in
@@ -98,7 +108,10 @@ case "$target" in
       { echo "$asset: the six pt_ symbols are not all exported" >&2; exit 1; }
     ;;
   darwin-arm64)
-    cp "$built" "$out/$asset"
+    # Local symbols are a third of the linked file and nothing reads them: the six pt_ exports stay.
+    # strip drops the linker's ad hoc signature, which arm64 macOS needs to load the library.
+    strip -x -o "$out/$asset" "$built"
+    codesign --force --sign - "$out/$asset"
     [ "$(otool -D "$out/$asset" | sed -n 2p)" = "@rpath/libpeartube_native_ffi.dylib" ] ||
       { echo "$asset: install name is not @rpath/libpeartube_native_ffi.dylib" >&2; exit 1; }
     [ "$(nm -gU "$out/$asset" | grep -c ' _pt_')" -eq 6 ] ||
