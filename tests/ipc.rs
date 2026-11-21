@@ -663,19 +663,13 @@ mod fake {
 
     impl Clock for TestClock {
         fn now_ms(&self) -> u64 {
-            self.now_ms_for_test()
+            self.state().now
         }
         fn wait_until(&self, deadline_ms: u64) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
             Box::pin(Wait {
                 clock: self,
                 deadline: deadline_ms,
             })
-        }
-    }
-
-    impl TestClock {
-        fn now_ms_for_test(&self) -> u64 {
-            self.state().now
         }
     }
 }

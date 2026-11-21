@@ -252,6 +252,18 @@ mod tests {
         received.recv_timeout(Duration::from_secs(10)).unwrap()
     }
 
+    /// `settle` returns only after the steps sent before it were forwarded: no wait is needed
+    /// to see them.
+    #[test]
+    fn settle_returns_after_the_earlier_steps_were_forwarded() {
+        let (suspension, forwarded) = spawn();
+        suspension.suspend(5);
+        suspension.resume();
+        suspension.settle();
+        assert_eq!(forwarded.try_recv().unwrap(), "suspend 5 #1");
+        assert_eq!(forwarded.try_recv().unwrap(), "resume None");
+    }
+
     /// A park that reaches the thread after the host came back is dropped, so the resume
     /// never woke a store that was not parked and the store stays open; a later suspend parks
     /// again and the next resume wakes it.

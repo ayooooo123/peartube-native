@@ -252,10 +252,10 @@ impl Backend {
     pub fn resume(&self) {
         self.suspension.resume();
     }
-    /// Blocks until the loop ran every line, `suspend` and `resume` sent so far, in the host's
-    /// order. Hosts do not need it. A test that steps a fake clock calls it before the clock
-    /// moves: the suspension thread hands a lifecycle step to the loop on its own time, and a
-    /// clock step that ran first would pass the linger timer by.
+    /// Blocks until the loop ran every line, `suspend` and `resume` sent so far. Hosts do not
+    /// need it. A test that steps a fake clock calls it before the clock moves: the suspension
+    /// thread hands a lifecycle step to the loop on its own time, and a clock step that ran
+    /// first would pass the linger timer by. Never call it from the line sink: the loop answers.
     #[doc(hidden)]
     pub fn caught_up(&self) {
         self.suspension.settle();
