@@ -139,7 +139,7 @@ metadata. This does not disable the eager system/view history mirror on landing.
 Blob wake observers do not retain sessions: Corestore's peer/session-aware GC
 can reclaim an owned or cached core after its last reader and peer leave.
 Cache reclamation offloads both the blocking RocksDB flush and compaction from
-the backend's single-thread Tokio executor, so HTTP and replication keep polling.
+the backend's runtime workers, so HTTP and replication keep polling.
 
 The standalone cast receiver uses RocksDB MemEnv (including media blobs), not
 flash. Its obsolete `peer_dir/corestore` cache and stale cache/catalog indexes
@@ -196,8 +196,9 @@ copy needed for the app's announcing-job restart bug. See
 
 `tests/blobs.rs::http_stream_survives_cache_ceiling` uses a real loopback JS
 Corestore seeder, incompressible blocks, HTTP Range playback and disk reclamation;
-only channel/swarm bookkeeping is scripted. It paces the reader below 8 MiB/s,
-starts with an older cached film, and reports the maximum chunk/read gap:
+only channel/swarm bookkeeping is scripted. It runs on two runtime workers, the
+engine's minimum, paces the reader below 8 MiB/s, starts with an older cached
+film, and reports the maximum chunk/read gap:
 
 ```sh
 PEARTUBE_APP=/path/to/peartube CACHE_FREEZE_BUDGET=2147483648 \

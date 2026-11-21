@@ -1375,7 +1375,9 @@ async fn cache_ceiling_matches_the_app() {
     assert!(h.blobs.open_core(&streaming).is_some());
 }
 
-#[tokio::test]
+// Two workers, the engine's minimum (`backend::runtime`). On one thread a debug build decrypts and
+// hashes a whole request window before the runtime serves this test's socket and timers again.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "needs the JS app's installed modules; CACHE_FREEZE_BUDGET scales the 64 MiB budget"]
 async fn http_stream_survives_cache_ceiling() {
     use hyperblobs::BlobId;
