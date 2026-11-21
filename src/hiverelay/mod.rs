@@ -43,6 +43,14 @@ pub fn publisher_key(material: &[u8]) -> KeyPair {
     KeyPair::from_seed(&h.finalize().into())
 }
 
+fn safe_uint(r: &mut Reader) -> compact_encoding::Result<u64> {
+    let n = r.uint()?;
+    if n > crate::control_protocol::MAX_UINT {
+        return Err(compact_encoding::Error::Invalid("unsafe uint", n));
+    }
+    Ok(n)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SeedRequest {
     pub app_key: [u8; 32],
@@ -114,7 +122,7 @@ impl SeedRequest {
     pub fn decode(data: &[u8]) -> compact_encoding::Result<Self> {
         let mut r = Reader::new(data.to_vec().into());
         let app_key = r.fixed()?;
-        let n = r.uint()?.min(MAX_SEED_CORES as u64);
+        let n = safe_uint(&mut r)?.min(MAX_SEED_CORES as u64);
         let mut discovery_keys = Vec::with_capacity(n as usize);
         for _ in 0..n {
             discovery_keys.push(r.fixed()?);
@@ -122,16 +130,16 @@ impl SeedRequest {
         Ok(Self {
             app_key,
             discovery_keys,
-            replication_factor: r.uint()?,
+            replication_factor: safe_uint(&mut r)?,
             geo_preference: r.string()?,
-            max_storage_bytes: r.uint()?,
-            bounty_rate: r.uint()?,
-            ttl_seconds: r.uint()?,
+            max_storage_bytes: safe_uint(&mut r)?,
+            bounty_rate: safe_uint(&mut r)?,
+            ttl_seconds: safe_uint(&mut r)?,
             publisher_pubkey: r.fixed()?,
             publisher_signature: r.fixed()?,
-            revocable: if r.is_empty() { 1 } else { r.uint()? },
-            unseed_freeze_ms: if r.is_empty() { 0 } else { r.uint()? },
-            durability: if r.is_empty() { 0 } else { r.uint()? },
+            revocable: if r.is_empty() { 1 } else { safe_uint(&mut r)? },
+            unseed_freeze_ms: if r.is_empty() { 0 } else { safe_uint(&mut r)? },
+            durability: if r.is_empty() { 0 } else { safe_uint(&mut r)? },
         })
     }
 }
@@ -175,7 +183,7 @@ impl SeedAccept {
             app_key: r.fixed()?,
             relay_pubkey: r.fixed()?,
             region: r.string()?,
-            available_storage_bytes: r.uint()?,
+            available_storage_bytes: safe_uint(&mut r)?,
             relay_signature: r.fixed()?,
         })
     }
@@ -242,7 +250,7 @@ impl UnseedRequest {
         let mut r = Reader::new(data.to_vec().into());
         Ok(Self {
             app_key: r.fixed()?,
-            timestamp: r.uint()?,
+            timestamp: safe_uint(&mut r)?,
             publisher_pubkey: r.fixed()?,
             publisher_signature: r.fixed()?,
         })
@@ -265,8 +273,19 @@ pub enum SeedMessage {
     Unseed(UnseedRequest),
     Deny(SeedDeny),
 }
+/// The largest unseed request: app key, a uint timestamp, publisher key, signature.
+pub const MAX_UNSEED_REQUEST: usize = 137;
 impl SeedMessage {
     pub fn decode(kind: u64, bytes: &[u8]) -> compact_encoding::Result<Self> {
+        // An unseed request's fields allow no more than 32 + 9 + 32 + 64 bytes.
+        let cap = if kind == 2 {
+            MAX_UNSEED_REQUEST
+        } else {
+            crate::control_channel::MAX_FRAME
+        };
+        if bytes.len() > cap {
+            return Err(compact_encoding::Error::OutOfBounds);
+        }
         match kind {
             0 => SeedRequest::decode(bytes).map(Self::Request),
             1 => SeedAccept::decode(bytes).map(Self::Accept),

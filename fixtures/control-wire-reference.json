@@ -1,0 +1,264 @@
+{
+  "cases": [
+    {
+      "name": "remote-error",
+      "hex": "0d48414e444c45525f4552524f5203626164"
+    },
+    {
+      "name": "search-query",
+      "hex": "0000ffffffffffffff1f00"
+    },
+    {
+      "name": "search-hit",
+      "hex": "0178"
+    },
+    {
+      "name": "search-hits",
+      "hex": "00"
+    },
+    {
+      "name": "search-hits",
+      "hex": "01020178"
+    },
+    {
+      "name": "cast-pair",
+      "hex": "0163"
+    },
+    {
+      "name": "cast-paired",
+      "hex": "0164016e000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f00"
+    },
+    {
+      "name": "cast-subscribe",
+      "hex": "00"
+    },
+    {
+      "name": "cast-entry",
+      "hex": "016b01690174ffffffffffffff1f000168"
+    },
+    {
+      "name": "cast-track",
+      "hex": "0105617564696f01610000"
+    },
+    {
+      "name": "cast-command",
+      "hex": "000006766f6c756d650000000101000000000000e03f01"
+    },
+    {
+      "name": "cast-command",
+      "hex": "010006766f6c756d6511016b01690174ffffffffffffff1f000168000000ffffffffffffff1f00fffeffffffffff1f00000000000000e03f01"
+    },
+    {
+      "name": "cast-state",
+      "hex": "00000469646c650000000000000000000000f03f030300000001"
+    },
+    {
+      "name": "cast-state",
+      "hex": "3f010b0105617564696f016100000469646c650011016b01690174ffffffffffffff1f00016800000000000000000000e03f030300ffffffffffffff1f000001"
+    },
+    {
+      "name": "guard-hello",
+      "hex": "03686f70"
+    },
+    {
+      "name": "guard-ack",
+      "hex": "01"
+    },
+    {
+      "name": "guard-register",
+      "hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1fffffffffffffff1f00"
+    },
+    {
+      "name": "guard-key",
+      "hex": "0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    {
+      "name": "guard-put-mutable",
+      "hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1fffffffffffffff1f00000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f0178"
+    },
+    {
+      "name": "guard-record",
+      "hex": "ffffffffffffff1f00000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f0178"
+    },
+    {
+      "name": "guard-get-result",
+      "hex": "00"
+    },
+    {
+      "name": "guard-get-result",
+      "hex": "014bffffffffffffff1f00000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f0178"
+    },
+    {
+      "name": "guard-rv-register",
+      "hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f000102030405060708090a0b0c0d0e0f000178"
+    },
+    {
+      "name": "guard-rv-slot",
+      "hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f000102030405060708090a0b0c0d0e0f"
+    },
+    {
+      "name": "guard-cards",
+      "hex": "0201610162"
+    },
+    {
+      "name": "guard-dial",
+      "hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f0000000000000000000000000000000000000000000000000000000000000000ffffffffffffff1f000162"
+    },
+    {
+      "name": "guard-open",
+      "hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f00"
+    },
+    {
+      "name": "guard-ready",
+      "hex": "0200"
+    },
+    {
+      "name": "guard-circuit-dead",
+      "hex": "2a"
+    },
+    {
+      "name": "frame",
+      "hex": "0000070403686f70"
+    },
+    {
+      "name": "frame",
+      "hex": "0100070101"
+    },
+    {
+      "name": "frame",
+      "hex": "020007120d48414e444c45525f4552524f5203626164"
+    },
+    {
+      "name": "frame",
+      "hex": "030b00012a"
+    }
+  ],
+  "protocols": [
+    {
+      "protocol": "peartube/search/v2",
+      "ops": [
+        {
+          "name": "query",
+          "kind": "request",
+          "request": "@peartube/search-query",
+          "response": "@peartube/search-hits",
+          "maxItems": 20,
+          "flags": false
+        }
+      ]
+    },
+    {
+      "protocol": "peartube-cast/v2",
+      "ops": [
+        {
+          "name": "pair",
+          "kind": "request",
+          "request": "@peartube/cast-pair",
+          "response": "@peartube/cast-paired"
+        },
+        {
+          "name": "subscribe",
+          "kind": "request",
+          "request": "@peartube/cast-subscribe",
+          "response": "@peartube/cast-state",
+          "maxItems": 128,
+          "flags": true
+        },
+        {
+          "name": "command",
+          "kind": "request",
+          "request": "@peartube/cast-command",
+          "response": "@peartube/cast-state",
+          "maxItems": 128,
+          "flags": true
+        },
+        {
+          "name": "state",
+          "kind": "event",
+          "event": "@peartube/cast-state",
+          "maxItems": 128,
+          "flags": true
+        }
+      ]
+    },
+    {
+      "protocol": "peartube/private-guard/v2",
+      "ops": [
+        {
+          "name": "hello",
+          "kind": "request",
+          "request": "@peartube/guard-hello",
+          "response": "@peartube/guard-ack"
+        },
+        {
+          "name": "register",
+          "kind": "request",
+          "request": "@peartube/guard-register",
+          "response": "@peartube/guard-ack"
+        },
+        {
+          "name": "putMutable",
+          "kind": "request",
+          "request": "@peartube/guard-put-mutable",
+          "response": "@peartube/guard-ack"
+        },
+        {
+          "name": "getMutable",
+          "kind": "request",
+          "request": "@peartube/guard-key",
+          "response": "@peartube/guard-get-result"
+        },
+        {
+          "name": "rvRegister",
+          "kind": "request",
+          "request": "@peartube/guard-rv-register",
+          "response": "@peartube/guard-ack"
+        },
+        {
+          "name": "rvUnregister",
+          "kind": "event",
+          "event": "@peartube/guard-rv-slot"
+        },
+        {
+          "name": "rvLookup",
+          "kind": "request",
+          "request": "@peartube/guard-key",
+          "response": "@peartube/guard-cards",
+          "maxItems": 64,
+          "flags": false
+        },
+        {
+          "name": "rvFetch",
+          "kind": "request",
+          "request": "@peartube/guard-key",
+          "response": "@peartube/guard-cards",
+          "maxItems": 64,
+          "flags": false
+        },
+        {
+          "name": "dialOpen",
+          "kind": "request",
+          "request": "@peartube/guard-dial",
+          "response": "@peartube/guard-ready"
+        },
+        {
+          "name": "hopOpen",
+          "kind": "request",
+          "request": "@peartube/guard-open",
+          "response": "@peartube/guard-ready"
+        },
+        {
+          "name": "incOpen",
+          "kind": "request",
+          "request": "@peartube/guard-open",
+          "response": "@peartube/guard-ready"
+        },
+        {
+          "name": "circuitDead",
+          "kind": "event",
+          "event": "@peartube/guard-circuit-dead"
+        }
+      ]
+    }
+  ]
+}

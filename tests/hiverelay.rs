@@ -21,6 +21,44 @@ fn bytes(s: &Value) -> Vec<u8> {
     hex_decode(s.as_str().unwrap()).unwrap()
 }
 
+#[test]
+fn an_unseed_request_is_at_most_137_bytes() {
+    let largest = UnseedRequest {
+        app_key: [1; 32],
+        timestamp: (1 << 53) - 1,
+        publisher_pubkey: [2; 32],
+        publisher_signature: [3; 64],
+    }
+    .encode();
+    assert_eq!(largest.len(), MAX_UNSEED_REQUEST);
+    assert!(SeedMessage::decode(2, &largest).is_ok());
+    let mut padded = largest.clone();
+    padded.push(0);
+    assert!(SeedMessage::decode(2, &padded).is_err());
+}
+
+#[test]
+fn seed_decoders_refuse_unsafe_fields_and_oversize_before_dispatch() {
+    let mut accept = SeedAccept {
+        app_key: [1; 32],
+        relay_pubkey: [2; 32],
+        region: "r".into(),
+        available_storage_bytes: 1 << 53,
+        relay_signature: [0; 64],
+    };
+    assert!(SeedMessage::decode(1, &accept.encode()).is_err());
+    accept.available_storage_bytes -= 1;
+    let valid = accept.encode();
+    assert_eq!(
+        SeedMessage::decode(1, &valid).unwrap(),
+        SeedMessage::Accept(accept)
+    );
+    assert!(SeedMessage::decode(4, &valid).is_err());
+    let mut large = valid;
+    large.resize(65537, 0);
+    assert!(SeedMessage::decode(1, &large).is_err());
+}
+
 /// The app checkout the generator reads: `PEARTUBE_APP`, else this repository's sibling `../peartube`.
 fn app_checkout() -> Option<std::path::PathBuf> {
     std::env::var_os("PEARTUBE_APP")

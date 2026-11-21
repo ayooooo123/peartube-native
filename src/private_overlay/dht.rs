@@ -119,7 +119,7 @@ pub struct NoiseOpened {
 /// A Noise handshake in flight (`new NoiseSecretStream(...)` before `opened`).
 ///
 /// Splitting creation from the handshake is required for parity: the accepting side must reply
-/// `OP_INC_READY` before the far side can start its half of the handshake.
+/// its `incOpen` before the far side can start its half of the handshake.
 pub struct PendingNoise {
     /// `enc.opened`.
     pub opened: BoxFuture<'static, Result<NoiseOpened, Error>>,

@@ -52,6 +52,9 @@ ubit = { git = "https://github.com/ayooooo123/ubit", rev = "a243219e3b98387e8052
 [target.'cfg(unix)'.dependencies]
 rustix = { version = "1", features = ["fs", "process"] }
 
+[build-dependencies]
+hyperschema-rs = { path = "../hyperschema-rs" }
+
 [dev-dependencies]
 tempfile = "3"
 

@@ -66,7 +66,7 @@ pub fn advertisement_txt(
 ) -> Vec<(String, String)> {
     vec![
         ("proto".to_owned(), CAST_SERVICE_TYPE.to_owned()),
-        ("v".to_owned(), "2".to_owned()),
+        ("v".to_owned(), "3".to_owned()),
         ("id".to_owned(), device_id.to_owned()),
         ("name".to_owned(), name.to_owned()),
         (
@@ -206,8 +206,7 @@ impl BrowsedService {
                 "code"
             }
             .to_owned(),
-            // Receivers from before the cast channel advertise v1 and cannot be reached.
-            current: txt("v") == "2",
+            current: txt("v") == "3",
         })
     }
 }
@@ -308,7 +307,7 @@ mod tests {
     }
 
     #[test]
-    fn a_v2_advert_names_the_lan_port() {
+    fn a_v3_advert_names_the_lan_port() {
         let txt = advertisement_txt(
             "dev1",
             "TV",
@@ -322,7 +321,7 @@ mod tests {
         assert!(!keys.contains(&"p2p"));
         assert_eq!(
             txt.iter().find(|(k, _)| k == "v").map(|(_, v)| v.as_str()),
-            Some("2")
+            Some("3")
         );
         let discovered = service(
             &txt.iter()
@@ -356,6 +355,22 @@ mod tests {
         let discovered = s.to_discovered().expect("record");
         assert!(!discovered.current);
         assert_eq!(discovered.lan, None, "v1 has no LAN DHT port to dial");
+    }
+
+    #[test]
+    fn a_v2_receiver_is_not_current_even_with_a_lan_port() {
+        let s = service(
+            &[
+                ("proto", "peartube-cast"),
+                ("id", "old"),
+                ("v", "2"),
+                ("h", "192.168.1.5"),
+                ("lp", "40123"),
+            ],
+            40123,
+            vec![],
+        );
+        assert!(!s.to_discovered().unwrap().current);
     }
 
     #[test]

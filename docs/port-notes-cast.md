@@ -3,12 +3,12 @@
 A cast runs over the peer connection the two nodes already share. The control channel is a
 Protomux protocol paired on that connection (`src/cast-control.js`); there is no separate Noise
 stream, no info handshake, no browser receiver, no thin mode and no HTTP video path. Receivers
-advertise mDNS TXT `v=2` with the LAN DHT port (`lp`); a v1 receiver is listed but not current.
+advertise mDNS TXT `v=3` with the LAN DHT port (`lp`); other versions are listed but not current.
 The receiver's HTTP is `/cast/v1/p2p/<token>` and `/cast/v1/info` on `127.0.0.1` only.
 
 | JS | Rust | Notes |
 | --- | --- | --- |
-| `cast-control.js` `serveControl` / `openControl` | `src/cast/control.rs` | the channel, its `c.json` frames, request ids and state pushes |
+| `cast-control.js` `serveControl` / `openControl` | `src/cast/control.rs` | typed cast messages on the shared request/reply channel, and the cast-to-host field mapping |
 | `createReceiver` | `src/cast/receiver.rs` (`Receiver::start`) | identity, the channel on every connection, the loopback player port, mDNS, media |
 | `createCastController` | `src/cast/controller.rs` (`CastController::start`) | mDNS discovery, pairing, the cast session over the peer connection |
 | `receiverKeyPair` | `src/cast/pairing.rs` `receiver_key_pair` | the seed in `receiver.json` becomes the receiver node's key pair |
@@ -23,20 +23,12 @@ peer-storage probe), `traits.rs` (the seams the host fills).
 
 ## The channel
 
-One Protomux protocol, `peartube-cast/v1`, one channel per connection (a second open is refused),
-one message type whose payload is `c.json` — a `compact uint` length followed by UTF-8 JSON, byte
-for byte what the app writes.
-
-- Sender → receiver: `{id, type: 'pair' | 'subscribe' | 'cmd', ...payload}`.
-- Receiver → sender: `{id, ok, result | error}`, and `{event: 'state', state}` once subscribed.
-- A message that is too long (> 64 KiB), not JSON, not an object, or broken is dropped; a decoder
-  never throws, because Protomux closes the whole connection on a throwing handler.
-- Requests are handled in order of arrival, each on its own task; a reply is sent as
-  `{id, ok: true, result}` or `{id, ok: false, error}` with the handler's message.
-- Backpressure: the app's `message.send` always writes and reports `drained`; `protomux-rs`'s
-  `send_raw` refuses while the transport is above its high-water mark. The port waits on
-  `Mux::drained` and retries, so a request or reply is never dropped; state pushes keep the
-  app's rule (skip while backpressured, push the newest state once the connection drains).
+`peartube-cast/v2` uses one Protomux message on the existing connection. Each Hyperschema
+frame carries `{kind, op, id, value}`. Op indexes are `pair` (0), `subscribe` (1), `command` (2)
+and the `state` event (3). The shared envelope matches replies by `(op, id)`, reports handler
+and codec errors, and closes only the channel after eight malformed inputs in ten seconds.
+Each encoded frame is at most 65,536 bytes. It is queued only once; a backpressured subscriber
+gets the newest intervening state after drain. An encode failure does not wait for drain.
 
 Pairing rules are the receiver's, exactly as in the app:
 
@@ -45,17 +37,19 @@ Pairing rules are the receiver's, exactly as in the app:
 - An open receiver (`openAuth`) on a **LAN** link is trusted: `pair` needs no code and answers an
   **empty** token, never its permanent pair token; commands from that link need no token.
 - Every other request needs the pair token (`Unauthorized; pair with this TV first`).
-- `subscribe` registers the channel for state pushes and answers `{state}`; `cmd` applies a
-  command and answers `{ok: true, state}`.
+- `subscribe` registers the channel for state pushes; both `subscribe` and `command` return a
+  bare `cast-state`. State decode restores absent fields to `null`; only the requested action's
+  arguments reach the host. Positions and durations round to whole nonnegative milliseconds;
+  skip deltas remain signed.
 
 ## The receiver
 
 `Receiver::start` loads `receiver.json` (creating it on first run), joins the LAN topic
-`hash('peartube-cast/v1')`, serves the channel on every connection the node has and will have,
+`hash('peartube-cast/v2')`, serves the channel on every connection the node has and will have,
 binds the loopback player port (any-port fallback) and advertises mDNS:
 
 ```
-v=2, proto=peartube-cast, id, name, h, pk, lp=<LAN DHT port>, auth=open|code
+v=3, proto=peartube-cast, id, name, h, pk, lp=<LAN DHT port>, auth=open|code
 ```
 
 There is no `p2p` key and no receiver HTTP port in the record: a sender dials the node's LAN DHT
@@ -98,7 +92,8 @@ re-attaches to the TV on the link that is left.
 
 Pairing: by a `peartube://receiver/<64-hex key>?token=…` link (the token is trusted as given), or
 by the 64-hex key plus the code. A discovered receiver contributes its LAN address, display name
-and `current`; a v1 receiver is refused with `This receiver runs an older PearTube: update it`.
+and `current`; a mismatched TXT version is not dialed. A saved or linked receiver on another
+version refuses the channel before any secret is sent; the sender asks to update both devices.
 The saved key wins over mDNS, which is unsigned.
 
 `castPlay` resolves the entry, warms the film when this device holds it (the TV then fetches from

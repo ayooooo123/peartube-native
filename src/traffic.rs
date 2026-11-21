@@ -229,7 +229,11 @@ impl TrafficGate {
                 match event {
                     Event::Opened { .. } => gate.on_busy_open(id, sender.clone()),
                     Event::Message(message) => {
-                        if let Ok(value) = decode_compact::<u64>(message.data.clone()) {
+                        if message.kind == 0
+                            && message.data.len() <= 9
+                            && let Ok(value) = decode_compact::<u64>(message.data)
+                            && value <= crate::control_protocol::MAX_UINT
+                        {
                             gate.on_busy_message(id, value == 1);
                         }
                     }

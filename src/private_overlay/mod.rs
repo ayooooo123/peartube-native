@@ -13,26 +13,35 @@ use std::net::IpAddr;
 use std::sync::LazyLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use compact_encoding::{Reader, Writer};
 use sha2::{Digest, Sha256};
 use xsalsa20poly1305::aead::{Aead, KeyInit};
 use xsalsa20poly1305::{Nonce, XSalsa20Poly1305};
+
+use crate::control_channel::{ControlError, Spec};
+use crate::control_protocol::GUARD;
+use crate::wire::peartube::GuardReady;
 
 pub mod dht;
 pub mod guard;
 #[cfg(feature = "peeroxide-dht")]
 pub mod peeroxide;
-pub mod rpc;
 pub mod swarm;
 
 pub use guard::{ControlPeer, GuardOptions, GuardStats, PrivateGuard, create_private_guard};
 pub use swarm::{
-    ExposureReport, PrivateRouting, PrivateSwarm, SourceHandle, SwarmOptions,
-    attempt_direct_hop_bypass, create_private_swarm, publish_standalone_route_card,
+    ExposureReport, PrivateRouting, PrivateSwarm, SourceHandle, SwarmOptions, create_private_swarm,
+    publish_standalone_route_card,
 };
 
-/// Protomux protocol name of the guard control channel.
-pub const PROTOCOL: &str = "peartube/private-guard/v1";
+/// The guard control channel, `peartube/private-guard/v2`, on the shared typed envelope; its
+/// ordered ops are [`GUARD`]. Endpoints and hops open it, guards serve it.
+static GUARD_CHANNEL: Spec = Spec {
+    protocol: &GUARD,
+    label: "Guard",
+    refused: "Guard refused the private-guard channel",
+    duplicate: "A private-guard channel is already open with this peer",
+    timed_out: "Timed out opening the private-guard channel",
+};
 /// Domain separator for the owner signature on a route card.
 pub const CARD_DOMAIN: &[u8] = b"peartube/private-route-card/v1\0";
 /// How long a registered route or rendezvous slot lives.
@@ -46,7 +55,8 @@ pub const MAX_RV_SLOTS_PER_TOPIC: usize = 64;
 pub const MAX_CIRCUITS_TOTAL: usize = 1024;
 pub const MAX_CIRCUITS_PER_CONN: usize = 32;
 pub const MAX_CARD_BYTES: usize = 512;
-pub const MAX_RPC_FRAME: usize = 64 * 1024;
+/// Cards in one `guard-cards` answer.
+pub const MAX_CARDS: usize = 64;
 pub const MAX_DHT_OPS_PER_10S: usize = 256;
 /// `crypto_secretbox` nonce plus MAC.
 const BOX_OVERHEAD: usize = 24 + 16;
@@ -56,30 +66,23 @@ pub const CARD_BYTES: usize = 176;
 pub const CARD_MAX_LIFETIME_MS: u64 = 30 * 60_000;
 /// Rendezvous guard re-announce interval.
 pub const RV_REANNOUNCE_MS: u64 = 45_000;
+/// Opening the guard channel, and its `hello`.
+const HELLO_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(4);
 
-/// Control-frame op codes.
+/// Indexes of the guard ops in [`GUARD`] (contract section 5); the frame's `op`.
 pub mod op {
-    pub const HELLO: u64 = 1;
-    pub const REGISTER: u64 = 2;
-    pub const REGISTER_ACK: u64 = 3;
-    pub const PUT_MUTABLE: u64 = 4;
-    pub const PUT_MUTABLE_ACK: u64 = 5;
-    pub const GET_MUTABLE: u64 = 6;
-    pub const GET_MUTABLE_REPLY: u64 = 7;
-    pub const RV_REGISTER: u64 = 8;
-    pub const RV_REGISTER_ACK: u64 = 9;
-    pub const RV_UNREGISTER: u64 = 10;
-    pub const RV_LOOKUP: u64 = 11;
-    pub const RV_LOOKUP_REPLY: u64 = 12;
-    pub const RV_FETCH: u64 = 13;
-    pub const RV_FETCH_REPLY: u64 = 14;
-    pub const DIAL_OPEN: u64 = 15;
-    pub const DIAL_READY: u64 = 16;
-    pub const HOP_OPEN: u64 = 17;
-    pub const HOP_READY: u64 = 18;
-    pub const INC_OPEN: u64 = 19;
-    pub const INC_READY: u64 = 20;
-    pub const CIRCUIT_DEAD: u64 = 21;
+    pub const HELLO: u64 = 0;
+    pub const REGISTER: u64 = 1;
+    pub const PUT_MUTABLE: u64 = 2;
+    pub const GET_MUTABLE: u64 = 3;
+    pub const RV_REGISTER: u64 = 4;
+    pub const RV_UNREGISTER: u64 = 5;
+    pub const RV_LOOKUP: u64 = 6;
+    pub const RV_FETCH: u64 = 7;
+    pub const DIAL_OPEN: u64 = 8;
+    pub const HOP_OPEN: u64 = 9;
+    pub const INC_OPEN: u64 = 10;
+    pub const CIRCUIT_DEAD: u64 = 11;
 }
 
 /// The Ed25519 identity the overlay signs cards and mutable records with.
@@ -92,8 +95,9 @@ pub enum Error {
     Dht(String),
     /// The control channel closed under us.
     Closed(&'static str),
-    /// An RPC did not answer in time; carries the op code.
-    Timeout(u64),
+    /// A guard-channel call failed: refused, timed out, closed, or answered with an error; the
+    /// envelope's `code` stays with it.
+    Channel(ControlError),
     /// The peer refused the request.
     Rejected(&'static str),
     /// The DHT backend cannot do this; the string names the missing capability.
@@ -111,7 +115,7 @@ impl std::fmt::Display for Error {
         match self {
             Self::Dht(message) => f.write_str(message),
             Self::Closed(message) => f.write_str(message),
-            Self::Timeout(op) => write!(f, "RPC {op} timeout"),
+            Self::Channel(error) => f.write_str(&error.message),
             Self::Rejected(message) => f.write_str(message),
             Self::Unsupported(capability) => {
                 write!(f, "peeroxide-dht is missing the `{capability}` capability")
@@ -121,6 +125,12 @@ impl std::fmt::Display for Error {
 }
 
 impl std::error::Error for Error {}
+
+impl From<ControlError> for Error {
+    fn from(error: ControlError) -> Self {
+        Self::Channel(error)
+    }
+}
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
@@ -157,7 +167,7 @@ pub fn to_hex(bytes: &[u8]) -> String {
 
 /// The four guard discovery topics. Note `HyperDHT.hash` is BLAKE2b-256, not SHA-256.
 pub static GUARD_TOPICS: LazyLock<[[u8; 32]; 4]> = LazyLock::new(|| {
-    [0usize, 1, 2, 3].map(|i| peeroxide_dht::crypto::hash(format!("{PROTOCOL}/{i}").as_bytes()))
+    [0usize, 1, 2, 3].map(|i| peeroxide_dht::crypto::hash(format!("{}/{i}", GUARD.name).as_bytes()))
 });
 
 /// `hypercoreCrypto.namespace('hyperswarm/dht', [4, 5, 6, 0, 1, 10])[2]`.
@@ -384,69 +394,21 @@ pub fn decode_and_verify_card(
     })
 }
 
-/// One control-channel frame (`frameEnc`).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Frame {
-    pub op: u64,
-    pub id: u64,
-    pub payload: Vec<u8>,
+/// `isU32(n)`: the guard's bound on `ttlMs`, `seq` and `udxId`.
+pub fn is_u32(n: u64) -> bool {
+    n <= u64::from(u32::MAX)
 }
 
-impl Frame {
-    pub fn new(op: u64, id: u64, payload: Vec<u8>) -> Self {
-        Self { op, id, payload }
-    }
-
-    pub fn encode(&self) -> Vec<u8> {
-        let mut w = Writer::with_capacity(
-            compact_encoding::uint_len(self.op)
-                + compact_encoding::uint_len(self.id)
-                + compact_encoding::uint_len(self.payload.len() as u64)
-                + self.payload.len(),
-        );
-        w.uint(self.op);
-        w.uint(self.id);
-        w.buffer(&self.payload);
-        w.into_vec()
-    }
-
-    pub fn decode(buf: &[u8]) -> Option<Self> {
-        if buf.len() > MAX_RPC_FRAME {
-            return None;
-        }
-        let mut r = Reader::new(buf.to_vec().into());
-        let op = r.uint().ok()?;
-        let id = r.uint().ok()?;
-        let payload = r.buffer().ok()?.to_vec();
-        Some(Self { op, id, payload })
-    }
+/// `isCard(b)`: a mutable value, sealed card or rendezvous card of 1 to [`MAX_CARD_BYTES`] bytes.
+pub fn is_card(bytes: &[u8]) -> bool {
+    (1..=MAX_CARD_BYTES).contains(&bytes.len())
 }
 
-/// `bufArrEnc` encode: a uint count then each buffer.
-pub fn encode_buf_arr(items: &[Vec<u8>]) -> Vec<u8> {
-    let mut w = Writer::with_capacity(
-        compact_encoding::uint_len(items.len() as u64)
-            + items
-                .iter()
-                .map(|i| compact_encoding::uint_len(i.len() as u64) + i.len())
-                .sum::<usize>(),
-    );
-    w.uint(items.len() as u64);
-    for item in items {
-        w.buffer(item);
-    }
-    w.into_vec()
-}
-
-/// `bufArrEnc.decode`: the count is capped at 128 like the JS decoder.
-pub fn decode_buf_arr(buf: &[u8]) -> Option<Vec<Vec<u8>>> {
-    let mut r = Reader::new(buf.to_vec().into());
-    let n = r.uint().ok()?.min(128);
-    let mut out = Vec::with_capacity(n as usize);
-    for _ in 0..n {
-        out.push(r.buffer().ok()?.to_vec());
-    }
-    Some(out)
+/// `ready(rep)`: the UDX stream id of a circuit answer worth using (status 1, id in 1..2^32).
+pub fn ready(reply: &GuardReady) -> Option<u32> {
+    (reply.status == 1 && reply.udx_id > 0)
+        .then(|| u32::try_from(reply.udx_id).ok())
+        .flatten()
 }
 
 /// Route/slot lifetime from a peer-supplied TTL, floored at 15s and capped at [`ROUTE_TTL_MS`].
@@ -459,14 +421,47 @@ mod tests {
     use super::*;
 
     #[test]
-    fn guard_topics_are_hyperdht_hash_of_the_protocol() {
+    fn guard_topics_are_hyperdht_hash_of_the_v2_preimages() {
         for (i, topic) in GUARD_TOPICS.iter().enumerate() {
-            assert_eq!(
-                *topic,
-                peeroxide_dht::crypto::hash(format!("{PROTOCOL}/{i}").as_bytes())
-            );
+            let v2 = format!("peartube/private-guard/v2/{i}");
+            let v1 = format!("peartube/private-guard/v1/{i}");
+            assert_eq!(*topic, peeroxide_dht::crypto::hash(v2.as_bytes()));
+            assert_ne!(*topic, peeroxide_dht::crypto::hash(v1.as_bytes()));
         }
         assert_ne!(GUARD_TOPICS[0], GUARD_TOPICS[1]);
+    }
+
+    #[test]
+    fn op_indexes_follow_the_guard_table() {
+        let names = [
+            (op::HELLO, "hello"),
+            (op::REGISTER, "register"),
+            (op::PUT_MUTABLE, "putMutable"),
+            (op::GET_MUTABLE, "getMutable"),
+            (op::RV_REGISTER, "rvRegister"),
+            (op::RV_UNREGISTER, "rvUnregister"),
+            (op::RV_LOOKUP, "rvLookup"),
+            (op::RV_FETCH, "rvFetch"),
+            (op::DIAL_OPEN, "dialOpen"),
+            (op::HOP_OPEN, "hopOpen"),
+            (op::INC_OPEN, "incOpen"),
+            (op::CIRCUIT_DEAD, "circuitDead"),
+        ];
+        assert_eq!(GUARD.ops.len(), names.len());
+        for (index, name) in names {
+            assert_eq!(GUARD.ops[index as usize].name, name);
+        }
+    }
+
+    #[test]
+    fn ready_needs_status_one_and_a_u32_stream_id() {
+        let reply = |status, udx_id| GuardReady { status, udx_id };
+        assert_eq!(ready(&reply(1, 7)), Some(7));
+        assert_eq!(ready(&reply(1, u64::from(u32::MAX))), Some(u32::MAX));
+        assert_eq!(ready(&reply(1, 0)), None);
+        assert_eq!(ready(&reply(1, u64::from(u32::MAX) + 1)), None);
+        assert_eq!(ready(&reply(2, 7)), None);
+        assert_eq!(ready(&reply(0, 7)), None);
     }
 
     #[test]
@@ -499,19 +494,6 @@ mod tests {
             diversity_bucket_for_address("example.com", None, false),
             None
         );
-    }
-
-    #[test]
-    fn frames_round_trip() {
-        let frame = Frame::new(19, 7, b"payload".to_vec());
-        assert_eq!(Frame::decode(&frame.encode()), Some(frame));
-        assert_eq!(Frame::decode(&[]), None);
-    }
-
-    #[test]
-    fn buf_arr_round_trip() {
-        let items = vec![b"a".to_vec(), vec![], b"ccc".to_vec()];
-        assert_eq!(decode_buf_arr(&encode_buf_arr(&items)), Some(items));
     }
 
     #[test]
