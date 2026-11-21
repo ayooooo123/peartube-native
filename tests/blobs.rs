@@ -1224,14 +1224,15 @@ async fn replicate_core(
 }
 
 #[tokio::test]
-async fn memory_receiver_evicts_behind_without_media_files() {
+async fn receiver_evicts_behind_and_drops_future_data_on_a_backward_seek() {
     for block_size in [BLOCK, 16 * 1024] {
         let blocks = (64 * BLOCK / block_size) as u64;
         let dir = tempfile::tempdir().unwrap();
+        // The receiver's store: on disk, without a write-ahead log.
         let store = Corestore::open_with_options(
             dir.path(),
             hypercore::storage::StoreOptions {
-                memory: true,
+                wal: false,
                 ..Default::default()
             },
         )
@@ -1299,19 +1300,8 @@ async fn memory_receiver_evicts_behind_without_media_files() {
             "backwards seek must discard stale future data"
         );
         assert!(session.has(blocks - 1), "retain the tail metadata guard");
-        assert_eq!(std::fs::read_dir(dir.path().join("db")).unwrap().count(), 0);
         writer.close().await;
         store.close().await;
-        let reopened = Corestore::open_with_options(
-            dir.path(),
-            hypercore::storage::StoreOptions {
-                memory: true,
-                ..Default::default()
-            },
-        )
-        .unwrap();
-        assert!(reopened.list().unwrap().is_empty());
-        reopened.close().await;
     }
 }
 

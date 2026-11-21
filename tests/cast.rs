@@ -1432,8 +1432,7 @@ async fn receiver_on(bootstrap: &Value, dir: &Path) -> Arc<CoreNode> {
         "storage": peer_dir.to_string_lossy(),
         "bootstrap": bootstrap,
         "keyPair": key_pair,
-        "storageWal": false,
-        "storageMemory": false
+        "storageWal": false
     }))
     .await
     .expect("receiver node")

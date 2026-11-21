@@ -976,11 +976,7 @@ pub async fn create_node(options: Value) -> Result<Arc<CoreNode>, NodeError> {
         .get("storageWal")
         .and_then(Value::as_bool)
         .unwrap_or(true);
-    let memory = options
-        .get("storageMemory")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    let storage = Storage::open(&storage_path, worklet, wal, memory)?;
+    let storage = Storage::open(&storage_path, worklet, wal)?;
     let closing = Arc::new(AtomicBool::new(false));
     let handle = ChannelHandle::default();
     let wakeup = Arc::new(WakeupSwarm::new(|_, _| {}));
