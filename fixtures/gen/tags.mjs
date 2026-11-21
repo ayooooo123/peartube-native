@@ -160,7 +160,8 @@ const cases = {
 }
 
 // A Rust string cannot hold a lone surrogate. Every use of a tag passes through `toWellFormed` before it leaves the
-// relay (the announce's `music` and `title`) or is folded to ASCII (`albumKey`), so the reference is taken after it.
+// relay (the announce's `music` and `title`) or through `albumKey`, which keeps letters and digits only (a lone
+// surrogate is neither), so the reference is taken after it.
 const wellFormed = tags => tags && Object.fromEntries(Object.entries(tags).map(([k, v]) => [k, typeof v === 'string' ? v.toWellFormed() : v]))
 
 const parse = Object.entries(cases).map(([name, data]) => ({ name, hex: data.toString('hex'), expected: wellFormed(parseTags(data)) }))
@@ -192,7 +193,20 @@ const keys = [
   { albumArtist: '坂本龍一', album: '千のナイフ', year: 1978 },
   { albumArtist: 'İstanbul ΣΊΣΥΦΟΣ ẞ', album: 'Straße K', year: 2010 },
   { albumArtist: 'AC/DC', album: 'Back in Black (Remastered) [Deluxe]', year: 1980 },
-  { albumArtist: 'a\u0301\u0300b', album: '\ud83d\ude00 emoji', year: 2020 }
+  { albumArtist: 'a\u0301\u0300b', album: '\ud83d\ude00 emoji', year: 2020 },
+  // Letters and digits of every script are kept, marks are not. A vowel sign is a mark that Unicode also calls
+  // alphabetic (Devanagari U+093F and U+093E, Thai U+0E34), so "alphabetic" is not the same test as "letter".
+  { albumArtist: '\u0915\u093f\u0924\u093e\u092c', album: '\u0e28\u0e34\u0e25\u0e1b\u0e34\u0e19', year: 2003 },
+  { albumArtist: '\u0419\u043e\u0433\u0430', album: '\u041a\u0438\u043d\u043e', year: 1988 },
+  { albumArtist: '\ubc29\ud0c4', album: '\u05e9\u05b8\u05c1\u05dc\u05d5\u05b9\u05dd', year: 2015 },
+  // The three kinds of number: a decimal digit (U+0663), a letter number (U+3007), another number (U+0F2A).
+  { albumArtist: 'Hawai\u02bbi', album: '\u0663 \u3007 \u0f2a', year: 1977 },
+  // A capital sigma lowers to the final form only at the end of a word: after a cased letter, and with no cased
+  // letter after it once marks and punctuation are passed over.
+  { albumArtist: '\u039f\u0394\u039f\u03a3 \u039f\u0394\u039f\u03a3', album: '\u03a3\u039f\u03a6\u039f\u03a3.', year: 1969 },
+  { albumArtist: '\u03a3', album: '\u039b\u039f\u0393\u039f\u03a3\u0301 \u0391', year: 1970 },
+  // Not final: a cased letter follows the sigma, behind an apostrophe (U+2019) or a mark that are passed over.
+  { albumArtist: '\u039f\u03a3\u2019\u0391', album: '\u039f\u03a3\u0301\u0391', year: 1971 }
 ].map(input => ({ input, expected: albumKey(input) }))
 
 writeFileSync(outFile('tags-reference.json'), JSON.stringify({ parse, cuts, albumKey: keys }, null, 2) + '\n')

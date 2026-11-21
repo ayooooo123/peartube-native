@@ -33,10 +33,11 @@ use futures_util::future::Shared;
 use serde_json::{Map, Value, json};
 
 use self::client::{Backend, Client, ClientSetup, Phase, Progress, ProgressFn};
-use self::place::{
-    LoneTrack, format_album_dir, peer_folder_hint, place_single_track, safe_segment, split_ext,
-};
+use self::place::{LoneTrack, peer_folder_hint, place_single_track};
 use self::rank::{Candidate, ShareList, rank, share_list};
+use super::staging::{
+    ALBUM_PIN, format_album_dir, free_path, is_release_id, note_mirrored, safe_segment, split_ext,
+};
 use crate::acquire::RandomSource;
 use crate::app_settings::{js_string_or_empty, js_truthy};
 use crate::identify::js_num;
@@ -58,36 +59,6 @@ const BROWSE_CACHE_MAX: usize = 16;
 // the file connection is failed with the reason; a peer that reported a queue place is waited on.
 const NO_ANSWER_MS: u64 = 3 * 60_000;
 const NO_CONNECT_MS: u64 = 90_000;
-
-/// A mirror told which album it fills pins its folder to that release in this dot file (skipped by
-/// the media walk); the importer then announces every file in the folder under it, whatever the
-/// peer's tags say. Peer bytes are never rewritten, so a mirrored file's sha256 is the hash of
-/// exactly what the peer served.
-pub const ALBUM_PIN: &str = ".peartube-album.json";
-/// The files this relay mirrored into an album folder, by name, in this dot file. Deleting an
-/// entry deletes its file only when the file is listed here (or sits in `<storage>/staging`, where
-/// nothing else writes): a file the owner put in the import folder is theirs, and only its
-/// announce goes.
-pub const MIRRORED_LIST: &str = ".peartube-mirrored.json";
-
-/// `RELEASE_ID`: `mb:<32 hex>`, `discogs:r<1 to 12 digits>` or `album:<20 hex>`.
-pub fn is_release_id(text: &str) -> bool {
-    let hex = |text: &str, len: usize| {
-        text.len() == len
-            && text
-                .bytes()
-                .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
-    };
-    if let Some(id) = text.strip_prefix("mb:") {
-        return hex(id, 32);
-    }
-    if let Some(id) = text.strip_prefix("album:") {
-        return hex(id, 20);
-    }
-    text.strip_prefix("discogs:r").is_some_and(|id| {
-        (1..=12).contains(&id.len()) && id.bytes().all(|byte| byte.is_ascii_digit())
-    })
-}
 
 /// A request the provider refuses or could not finish. `status` is the HTTP status the app's error
 /// carries, when it carries one; `reason` tags a peer failure so `info` can flag the listen port.
@@ -1842,20 +1813,6 @@ fn parse_release(raw: &str) -> Option<String> {
     is_release_id(&release).then_some(release)
 }
 
-/// `<dir>/<name>`, or `<stem> (2)<ext>`… when that name is taken: a mirror never overwrites a file
-/// already there.
-fn free_path(dir: &Path, name: &str) -> PathBuf {
-    let (stem, ext) = split_ext(name);
-    let mut candidate = dir.join(name);
-    for n in 2..1000 {
-        if std::fs::metadata(&candidate).is_err() {
-            return candidate;
-        }
-        candidate = dir.join(format!("{stem} ({n}){ext}"));
-    }
-    candidate
-}
-
 /// A folder only this user can read.
 fn make_private_dir(dir: &Path) -> std::io::Result<()> {
     let mut builder = std::fs::DirBuilder::new();
@@ -1878,28 +1835,6 @@ fn read_head_tags(path: &Path) -> Option<Tags> {
         .read_to_end(&mut head)
         .ok()?;
     parse_tags(&head)
-}
-
-/// Adds `names` to the folder's list of files this relay mirrored ([`MIRRORED_LIST`]), which
-/// deletion reads.
-fn note_mirrored(dir: &Path, names: &[String]) -> std::io::Result<()> {
-    let file = dir.join(MIRRORED_LIST);
-    let listed = std::fs::read_to_string(&file)
-        .ok()
-        .and_then(|text| serde_json::from_str::<Value>(&crate::ipc::well_formed(&text)).ok());
-    let mut next: Vec<Value> = Vec::new();
-    let listed = listed
-        .as_ref()
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten();
-    for name in listed.cloned().chain(names.iter().map(|name| json!(name))) {
-        // A list or an object is never the same as another one, as in the app's `Set`.
-        if name.is_array() || name.is_object() || !next.contains(&name) {
-            next.push(name);
-        }
-    }
-    std::fs::write(file, format!("{}\n", Value::Array(next)))
 }
 
 /// A name as text and numbers by turns ("a10b" is "a", 10, "b"), lowercased.

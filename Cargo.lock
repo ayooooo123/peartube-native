@@ -1151,6 +1151,7 @@ dependencies = [
  "hyperblobs-rs",
  "hypercore-rs",
  "icu_collator",
+ "icu_properties",
  "if-addrs 0.13.4",
  "libudx",
  "mdns-sd",

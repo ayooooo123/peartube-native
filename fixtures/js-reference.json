@@ -1,7 +1,7 @@
 {
   "meta": {
     "source": "fixtures/gen/gen.mjs from the PEARTUBE_APP checkout",
-    "commit": "2a3f14eeb5f7da6bf37477e65adc808e28c3f2ab",
+    "commit": "90e19081f78fbcbc9197c9fe6ba2c10610993430",
     "node": "v24.18.0",
     "hypercore": "github:ayooooo123/hypercore#ca652cae7aca0430a1e9d86c1acd4f783243a265",
     "hypercoreCrypto": "^3.7.0",
@@ -1073,55 +1073,55 @@
     {
       "videoKey": "5eafc7ae898c4542bdb20e661367ae18ba282e904350658a92e8b320affd0ec1",
       "epochKey": "8810524237cb7b224bb08c9ec5756dd75e0ad3672d85265818c1522cec43d21e",
-      "wrapped": "7a79ad95b58c46331bc96f9bd9fdc47a24a72d003fa4666f3ac493c1a11a502187c5da1c9a2a0188ea0eefe2068832193c201586c9ff11463ac59315c30cf3c7acc991c061995b99",
+      "wrapped": "3fe84ecd9feaeebce21f1683d34e62c6f928c96166248f2d6f3fbb3432fe18a26c00a4e1df999977816a326f0192119be407da4f24dcc38c7f3b81d2c1735927b6409cbc28645b03",
       "unwrap": "5eafc7ae898c4542bdb20e661367ae18ba282e904350658a92e8b320affd0ec1"
     },
     {
       "videoKey": "ba34a12b1d152ae563cfd8a24670fd40e1107b706f98160c3e9b8248590a8a65",
       "epochKey": "c1d3760fb2296891ffeb2484fcffdee9ef0b7cd6ac801b4a1f4be21793f05b83",
-      "wrapped": "e26483b0af1e1eb54b289a0613d5e123fee5d3c2b77fe5e40ce76b797e42086128fdd9e25d31ad4f5af3c98c6e68a40009b984d1ed7f76937c3920621a2b983d53fe07c88051ead5",
+      "wrapped": "2268c4a9648b51f0a3548513f20e76bfa9819e2c8feb56079071eae80352cf4bf021f64c1a42fd2a7babbd37de1c83fd61d0c2a08f3cabb1b5defdd9eddb0d81b6e04044cfb3c11f",
       "unwrap": "ba34a12b1d152ae563cfd8a24670fd40e1107b706f98160c3e9b8248590a8a65"
     },
     {
       "videoKey": "b1450907d0487cd9df114d4cdc1d68b1caf769cfda7fe03855a18311be61ba20",
       "epochKey": "ed80545268123c55c6fdfa8b02b020a88d4a9c6ade11dd31cf2a2b151f5e74c9",
-      "wrapped": "ea652c353423d27a21fd779725c625b2881ab6690f0c9b0d389141f60c1d55c095a3469dfdc3193dd04efc5d2abe285664e59bc2c37e377a80f681ced0b23fab6cc7fbbf92d1c8de",
+      "wrapped": "f33ac24ba7f48e7d3f4dcd08785d8f5b6ca0c9df1e87b46479b7680b8fbcaff66d3649495c5bd4a9ff81d0326c5c9835987e4341f9df59f8eecb54fac068458db26511218a91e60a",
       "unwrap": "b1450907d0487cd9df114d4cdc1d68b1caf769cfda7fe03855a18311be61ba20"
     },
     {
       "videoKey": "7d43473e1d934954cb0b2c92ee1e7ddf",
       "epochKey": "9d92905ac166724b3f7f16b635a021fb533bb977efcc58baac878d778b0c5546",
-      "wrapped": "c94d1830e1bb07736e92d126704191f66ea39f04cfa89accc5d852804ee4845d9c49fc7b84ea618f6cecb35b7e51e1aad77c9f055a263dbb",
+      "wrapped": "31e4d393f59e56c45d0dcb04bc44bdef617df72180d6034ac408ea2af0df4137d6b088f439d4a997f6134c12423a81b8ccc350e03087eb32",
       "unwrap": null
     },
     {
       "videoKey": "7f512c1e2532f8057027169d3102109a6754b22f047b094b",
       "epochKey": "8d471307eb39a88386724223d10f33866113900f3268ca4deda85f6833d446a3",
-      "wrapped": "301e4f48a92cecaf87f4dd74c6052de3ba29871e89770d6428b27d1104e9becabb84145c630143028f39f33eac2996540d649d41d9b02c60c06d903c63e0f3c3",
+      "wrapped": "db0fca317f8b1dc4db724ecfc6316ef99e787748beb18d7015ddfe162d3bec12be68c58b0fcb36515cd3714ecbd13d9996d804465c94eb676f9181c552243749",
       "unwrap": null
     },
     {
       "videoKey": "e0",
       "epochKey": "80129e0486da4f6f3df1281e258d47acc451d24765972d263c19c6b9c3152e96",
-      "wrapped": "ada7441597b640857a99af08a8e9f224ad4721a512c38fbb93fe4adde72ec95b3f964c0d6c51c2484f",
+      "wrapped": "2692cc21c9cc49fcbc580f204457511f7d9354b7f2050b2529e846fa0def85b2bfcf018df9c3f367fa",
       "unwrap": null
     },
     {
       "videoKey": "4d21c96ef035cfbb4569cbef13cd1cd72effaeeeadc2860213ae2ef5a7133dd1",
       "epochKey": "79171fa394068289d7ab74354a4ce9fcf9aadb43afedddb8944faa098e312c9d",
-      "wrapped": "2fbfccf3798306569f989d4982f9f91a691132822ab5ca7ff5d5b9e66e33faf80ae31ece2fe988ded7ec9b11cb4674d587ce31bd7108c8ac4cdeac1a9da6ba7d7209e79f493d2a09",
+      "wrapped": "b2a84250bf5b25f23c324578f903eb75f55d2a5f2e6b2fed4ff4f1dbc46d33e9317c082c939262cefffefc239b184b8c6d39ab5a055ea67ab6fa03657ba91ec1fa40022c63e19b36",
       "unwrap": "4d21c96ef035cfbb4569cbef13cd1cd72effaeeeadc2860213ae2ef5a7133dd1"
     },
     {
       "videoKey": "6cc45cca23f6aeffb2dfe573c76fb0ce8f318a5e97a38ddb01e5704cf51e4f16",
       "epochKey": "4748b8b9e0e9fbb8c5142ba6487e46e967cd7d1d4edfcca609123b7f58de9f91",
-      "wrapped": "f4eecf104c5d35e8eb16bc72253505b04e9d2530d8ae20b08b7f188afc7af3b11942f03a490fd29fa2c3de4f46918a55248ad8f6e905bc12a832ed5d85e90ae796536821aafbb965",
+      "wrapped": "1f24ccb2c1706bc02a3cbad8bef54a0691bc148dae1f3469b9f116f214c7f461e7f3855ccfce575087de6ad38e056c74148e78e0d87482e54c3731055bd4281243256d516496c6f9",
       "unwrap": "6cc45cca23f6aeffb2dfe573c76fb0ce8f318a5e97a38ddb01e5704cf51e4f16"
     },
     {
       "videoKey": "5eafc7ae898c4542bdb20e661367ae18ba282e904350658a92e8b320affd0ec1",
       "epochKey": "8810524237cb7b224bb08c9ec5756dd75e0ad3672d85265818c1522cec43d21e",
-      "wrapped": "a586c9ff11463ac59315c30cf3c7acc991c061995b99",
+      "wrapped": "aa4f24dcc38c7f3b81d2c1735927b6409cbc28645b03",
       "unwrap": null
     }
   ],
@@ -3325,6 +3325,22 @@
     {
       "name": "x.m2ts",
       "value": true
+    },
+    {
+      "name": "song.m4a",
+      "value": true
+    },
+    {
+      "name": "SONG.M4A",
+      "value": true
+    },
+    {
+      "name": "book.m4b",
+      "value": false
+    },
+    {
+      "name": "m4a",
+      "value": false
     }
   ]
 }

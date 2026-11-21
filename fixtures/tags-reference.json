@@ -1297,7 +1297,7 @@
         "album": "Ágætis byrjun",
         "year": 1999
       },
-      "expected": "sigurros|agtisbyrjun|1999"
+      "expected": "sigurros|agætisbyrjun|1999"
     },
     {
       "input": {
@@ -1305,7 +1305,7 @@
         "album": "Agætis Byrjun!",
         "year": 1999
       },
-      "expected": "sigurros|agtisbyrjun|1999"
+      "expected": "sigurros|agætisbyrjun|1999"
     },
     {
       "input": {
@@ -1361,7 +1361,7 @@
         "album": "千のナイフ",
         "year": 1978
       },
-      "expected": "||1978"
+      "expected": "坂本龍一|千のナイフ|1978"
     },
     {
       "input": {
@@ -1369,7 +1369,7 @@
         "album": "Straße K",
         "year": 2010
       },
-      "expected": "istanbul|straek|2010"
+      "expected": "istanbulσισυφοςß|straßek|2010"
     },
     {
       "input": {
@@ -1386,6 +1386,62 @@
         "year": 2020
       },
       "expected": "ab|emoji|2020"
+    },
+    {
+      "input": {
+        "albumArtist": "किताब",
+        "album": "ศิลปิน",
+        "year": 2003
+      },
+      "expected": "कतब|ศลปน|2003"
+    },
+    {
+      "input": {
+        "albumArtist": "Йога",
+        "album": "Кино",
+        "year": 1988
+      },
+      "expected": "иога|кино|1988"
+    },
+    {
+      "input": {
+        "albumArtist": "방탄",
+        "album": "שָׁלוֹם",
+        "year": 2015
+      },
+      "expected": "방탄|שלום|2015"
+    },
+    {
+      "input": {
+        "albumArtist": "Hawaiʻi",
+        "album": "٣ 〇 ༪",
+        "year": 1977
+      },
+      "expected": "hawaiʻi|٣〇༪|1977"
+    },
+    {
+      "input": {
+        "albumArtist": "ΟΔΟΣ ΟΔΟΣ",
+        "album": "ΣΟΦΟΣ.",
+        "year": 1969
+      },
+      "expected": "οδοςοδος|σοφος|1969"
+    },
+    {
+      "input": {
+        "albumArtist": "Σ",
+        "album": "ΛΟΓΟΣ́ Α",
+        "year": 1970
+      },
+      "expected": "σ|λογοςα|1970"
+    },
+    {
+      "input": {
+        "albumArtist": "ΟΣ’Α",
+        "album": "ΟΣ́Α",
+        "year": 1971
+      },
+      "expected": "οσα|οσα|1971"
     }
   ]
 }

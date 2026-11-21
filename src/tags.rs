@@ -17,6 +17,7 @@
 //! what the app's `toWellFormed` makes of it before a tag leaves the relay.
 
 use crate::protocol::{is_js_space, media_format, truncate_utf16};
+use icu_properties::props::{EnumeratedProperty, GeneralCategory, GeneralCategoryGroup};
 use unicode_normalization::UnicodeNormalization;
 
 const MAX_TEXT: usize = 300;
@@ -96,16 +97,29 @@ pub fn parse_tags(buf: &[u8]) -> Option<Tags> {
 }
 
 /// The album identity two rips of the same album must share, and two different albums must not
-/// (`albumKey`). Names are folded the way a person compares them: case, punctuation and spacing
-/// carry no meaning here. The year is part of it because a self-titled album and its remaster are
-/// different releases; the disc and track count are not, because a lossless and a lossy rip of one
-/// album may drop the bonus disc and still be the same album.
+/// (`albumKey`). Names are folded the way a person compares them: case, punctuation, spacing and
+/// accents carry no meaning here. Letters and digits of every script are kept: folding to a-z alone
+/// made every album named in Chinese, Japanese, Korean, Cyrillic or Greek the same album. The year
+/// is part of it because a self-titled album and its remaster are different releases; the disc and
+/// track count are not, because a lossless and a lossy rip of one album may drop the bonus disc and
+/// still be the same album.
 pub fn album_key(album_artist: Option<&str>, album: Option<&str>, year: Option<u32>) -> String {
     let fold = |text: Option<&str>| -> String {
-        text.unwrap_or_default()
+        // Lowered as one string, not letter by letter: a capital sigma takes its final form at the
+        // end of a word, as in the app's `toLowerCase`.
+        let lowered = text
+            .unwrap_or_default()
             .nfkd()
-            .flat_map(char::to_lowercase)
-            .filter(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+            .collect::<String>()
+            .to_lowercase();
+        // `\p{L}` and `\p{N}`. A mark is neither, so the app's separate removal of marks is covered.
+        lowered
+            .chars()
+            .filter(|c| {
+                let category = GeneralCategory::for_char(*c);
+                GeneralCategoryGroup::Letter.contains(category)
+                    || GeneralCategoryGroup::Number.contains(category)
+            })
             .collect()
     };
     let year = year

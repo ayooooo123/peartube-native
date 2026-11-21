@@ -26,7 +26,7 @@ use crate::acquire::AcquireError;
 use crate::app_settings::{js_string, js_truthy};
 use crate::node::Node;
 use crate::protocol::{MAX_TITLE, is_id, is_js_space, is_media_file, truncate_utf16};
-use crate::providers::soulseek::{ALBUM_PIN, MIRRORED_LIST, is_release_id};
+use crate::providers::staging::{ALBUM_PIN, MIRRORED_LIST, is_release_id};
 use crate::tags::{Tags, album_key, parse_tags};
 
 /// The ledger prefix of a file under `<storage>/staging`.

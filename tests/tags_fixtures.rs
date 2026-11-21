@@ -93,17 +93,27 @@ fn tags_fixtures() {
             );
         }
     }
-    for key in fixtures.album_key {
-        assert_eq!(
-            album_key(
+    // Every key is compared before the test fails, so one run names all the inputs that differ.
+    let differing: Vec<String> = fixtures
+        .album_key
+        .iter()
+        .filter_map(|key| {
+            let ours = album_key(
                 key.input.album_artist.as_deref(),
                 key.input.album.as_deref(),
-                key.input.year
-            ),
-            key.expected,
-            "{:?} {:?}",
-            key.input.album_artist,
-            key.input.album
-        );
-    }
+                key.input.year,
+            );
+            (ours != key.expected).then(|| {
+                format!(
+                    "{:?} {:?}: ours {ours:?}, the app's {:?}",
+                    key.input.album_artist, key.input.album, key.expected
+                )
+            })
+        })
+        .collect();
+    assert!(
+        differing.is_empty(),
+        "album keys differ:\n{}",
+        differing.join("\n")
+    );
 }
