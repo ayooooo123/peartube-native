@@ -638,7 +638,10 @@ async fn a_paused_connection_receives_no_new_blocks_until_resumed() {
         })
         .await
         .unwrap();
-    let blocks: Vec<Vec<u8>> = (0..64u8).map(|i| vec![i; 64 * 1024]).collect();
+    // Far more blocks than one request window (48 without an RTT): the sender answers a window
+    // under one cork, as npm does, so the read that is in flight when the pause lands can carry a
+    // whole window. The pause still has to stop the transfer long before the last block.
+    let blocks: Vec<Vec<u8>> = (0..1024u32).map(|i| vec![i as u8; 64 * 1024]).collect();
     let blocks_len = blocks.len() as u64;
     writer.append(&blocks).await.unwrap();
     let reader = reader_store

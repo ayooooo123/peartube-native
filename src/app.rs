@@ -29,6 +29,7 @@ use crate::node::api::{
     Reciprocity, Revoke, Route, Routes, Source, SourceSpec, Status, Swarm,
 };
 use crate::protocol::{self, ParsedUri};
+use crate::suspend::{Lifecycle, Parker, Suspension};
 
 /// The events the app emits, each the body of one `worker.js` event line.
 pub use crate::node::api::WorkerEvent as AppEvent;
@@ -334,8 +335,12 @@ where
     seq: u64,
     update_timer: Option<(u64, u64)>,
     suspending: Option<(u64, u64)>,
+    /// The host suspend the app last heard of; its parks name it (see [`Parker::park`]).
+    suspend_generation: u64,
     last_update_at: u64,
     was_transferring: bool,
+    /// Parks the node's store on the suspension thread, in order with the host's resume.
+    parker: Parker,
 }
 
 impl<N, F, C, L, A, K> App<N, F, C, L, A, K>
@@ -347,7 +352,8 @@ where
     A: ApiServer<N> + 'static,
     K: CastFactory<N> + 'static,
 {
-    pub fn new(
+    #[allow(clippy::too_many_arguments)] // `worker.js`'s adapters, plus the suspension thread
+    pub(crate) fn new(
         factory: Arc<F>,
         clock: Arc<C>,
         lan: Arc<L>,
@@ -355,6 +361,7 @@ where
         cast: Option<Arc<K>>,
         events: UnboundedSender<AppEvent>,
         changes: UnboundedSender<()>,
+        parker: Parker,
     ) -> Self {
         let shared = Arc::new(Shared {
             node: Mutex::new(None),
@@ -386,8 +393,10 @@ where
             seq: 0,
             update_timer: None,
             suspending: None,
+            suspend_generation: 0,
             last_update_at: 0,
             was_transferring: false,
+            parker,
         };
         app.schedule(LAN_POLL_MS, Timer::LanPoll);
         app.schedule(TRAFFIC_POLL_MS, Timer::TrafficPoll);
@@ -443,37 +452,62 @@ where
                 self.schedule(TRAFFIC_POLL_MS, Timer::TrafficPoll);
             }
             Timer::Suspend => {
-                self.set_suspended(true);
-                let error = match self.node() {
-                    Some(node) => node.swarm().suspend().await.err(),
-                    None => None,
-                };
-                if let Some(error) = error {
-                    self.fatal(error);
+                // `node.suspend()` returns early when the node is already suspended.
+                if !self.is_suspended() {
+                    self.set_suspended(true);
+                    if let Some(node) = self.node() {
+                        self.suspend_node(&node).await;
+                    }
                 }
                 self.move_lan().await;
             }
         }
     }
 
-    /// The app moved to the background; peers are dropped only if it lasts.
-    pub(crate) fn suspend(&mut self, linger_ms: u64) {
+    /// The app moved to the background; peers are dropped only if it lasts. `generation` is the
+    /// suspension thread's number for this host suspend.
+    pub(crate) fn suspend(&mut self, linger_ms: u64, generation: u64) {
         let pending = self.suspending.take();
         self.cancel(pending);
+        self.suspend_generation = generation;
         self.suspending = Some(self.schedule(linger_ms.min(MAX_LINGER_MS), Timer::Suspend));
     }
 
-    /// Comes back from [`Self::suspend`].
-    pub(crate) async fn resume(&mut self) {
+    /// Comes back from [`Self::suspend`]. The suspension thread resumed the store before this
+    /// command was sent (`store.resume()`); a store that could not reopen stops the resume, as
+    /// its rejection does in `src/index.js`.
+    pub(crate) async fn resume(&mut self, store_error: Option<String>) {
         let pending = self.suspending.take();
         self.cancel(pending);
         self.set_suspended(false);
+        if let Some(error) = store_error {
+            self.fatal(error);
+            return;
+        }
         if let Some(node) = self.node()
             && let Err(error) = node.swarm().resume().await
         {
             self.fatal(error);
         }
         self.move_lan().await;
+    }
+
+    /// `node.suspend()` in `src/index.js`: the swarm, then the store, unless the node is closing.
+    async fn suspend_node(&self, node: &N) {
+        if node.closing() {
+            return;
+        }
+        if let Err(error) = node.swarm().suspend().await {
+            self.fatal(error);
+            return;
+        }
+        let parked = self
+            .parker
+            .park(self.suspend_generation, node.store_suspension())
+            .await;
+        if let Err(error) = parked {
+            self.fatal(error);
+        }
     }
 
     /// A tracker/peer change reported through the swarm listener or the node's change stream.
@@ -707,10 +741,9 @@ where
                 }
             }
         });
-        if self.is_suspended()
-            && let Err(error) = node.swarm().suspend().await
-        {
-            self.fatal(error);
+        // `attachNode`: a suspend that came while the node was opening suspends it too.
+        if self.is_suspended() {
+            self.suspend_node(&node).await;
         }
     }
 
@@ -1451,14 +1484,17 @@ type Subscriber = Box<dyn Fn(&AppEvent) -> bool + Send + Sync>;
 
 enum Command {
     Call(Call),
-    Suspend(u64),
-    Resume,
+    /// The linger and the suspension thread's number for this suspend.
+    Suspend(u64, u64),
+    /// The store is already resumed; the error is its own, if it could not reopen.
+    Resume(Option<String>),
     Shutdown,
 }
 
 /// A [`NativeApp`] on its own thread, called and subscribed to by typed messages.
 pub struct AppHost {
     commands: UnboundedSender<Command>,
+    suspension: Suspension,
     subscribers: Arc<Mutex<Vec<Subscriber>>>,
     thread: Mutex<Option<JoinHandle<()>>>,
 }
@@ -1467,6 +1503,17 @@ impl AppHost {
     /// Starts the app with `cast_storage` already initialized, as the Mac app does at launch.
     pub fn spawn(cast_storage: Option<String>) -> Result<Self, String> {
         let (commands, mut incoming) = mpsc::unbounded_channel();
+        let suspension = Suspension::spawn({
+            let commands = commands.clone();
+            move |step| {
+                let _ = commands.send(match step {
+                    Lifecycle::Suspend(linger, generation) => Command::Suspend(linger, generation),
+                    Lifecycle::Resume(error) => Command::Resume(error),
+                });
+            }
+        })
+        .map_err(|error| error.to_string())?;
+        let parker = suspension.parker();
         let subscribers: Arc<Mutex<Vec<Subscriber>>> = Arc::new(Mutex::new(Vec::new()));
         let (ready, started) = std_mpsc::sync_channel(1);
         let forwarded = subscribers.clone();
@@ -1496,6 +1543,7 @@ impl AppHost {
                         adapters.cast,
                         events,
                         changes,
+                        parker,
                     );
                     let _ = app.init(InitRequest { cast_storage }).await;
                     loop {
@@ -1508,8 +1556,10 @@ impl AppHost {
                             command = incoming.recv() => match command {
                                 None => break,
                                 Some(Command::Call(call)) => call(&mut app).await,
-                                Some(Command::Suspend(linger)) => app.suspend(linger),
-                                Some(Command::Resume) => app.resume().await,
+                                Some(Command::Suspend(linger, generation)) => {
+                                    app.suspend(linger, generation)
+                                }
+                                Some(Command::Resume(error)) => app.resume(error).await,
                                 Some(Command::Shutdown) => {
                                     app.shutdown().await;
                                     break;
@@ -1530,6 +1580,7 @@ impl AppHost {
             .map_err(|error: String| error)?;
         Ok(Self {
             commands,
+            suspension,
             subscribers,
             thread: Mutex::new(Some(thread)),
         })
@@ -1572,14 +1623,19 @@ impl AppHost {
     }
 
     pub fn suspend(&self, linger_ms: u64) {
-        let _ = self.commands.send(Command::Suspend(linger_ms));
+        self.suspension.suspend(linger_ms);
     }
 
+    /// Returns at once: the store reopens on the suspension thread, then the loop resumes the
+    /// swarm, even if the loop is blocked in a store access when the host comes back.
     pub fn resume(&self) {
-        let _ = self.commands.send(Command::Resume);
+        self.suspension.resume();
     }
 
+    /// Resumes a suspended store first (as `close()` does), so a loop blocked in a store access
+    /// reaches the shutdown.
     pub fn shutdown(&self) {
+        self.suspension.release();
         let _ = self.commands.send(Command::Shutdown);
         if let Some(handle) = lock(&self.thread).take()
             && handle.thread().id() != thread::current().id()
@@ -1628,5 +1684,514 @@ mod memory_budget_tests {
             receiver_memory_bytes("MemTotal: 8000000 kB\nMemAvailable: 0 kB\n"),
             64 * 1024 * 1024
         );
+    }
+}
+
+/// `suspend()`/`resume()` in `src/index.js` through the host's handle, with a real node.
+#[cfg(test)]
+mod suspend_tests {
+    use std::io;
+    use std::path::{Path, PathBuf};
+    use std::sync::Condvar;
+    use std::time::{Duration, Instant};
+
+    use super::*;
+    use crate::node::api::{SearchOptions, StoreSuspension};
+    use crate::node::core::{CoreNode, create_node};
+
+    const LONG: Duration = Duration::from_secs(20);
+    /// How long an access must stay unanswered to count as waiting for the resume.
+    const BLOCKED: Duration = Duration::from_millis(300);
+
+    type Task<T> = Box<
+        dyn for<'a> FnOnce(
+                &'a mut NativeApp,
+            )
+                -> Pin<Box<dyn Future<Output = Result<T, String>> + Send + 'a>>
+            + Send,
+    >;
+
+    fn options(dir: &Path) -> Value {
+        json!({ "storage": dir, "bootstrap": ["127.0.0.1:9"], "worklet": true })
+    }
+
+    fn announce(id: &str) -> Value {
+        json!({
+            "type": "announce", "id": id, "title": id, "size": 1,
+            "sha256": "33".repeat(32), "blobs": "22".repeat(32),
+            "blob": { "blockOffset": 0, "blockLength": 1, "byteOffset": 0, "byteLength": 1 }
+        })
+    }
+
+    /// Runs `work` on a thread of its own; the receiver answers once it returns.
+    fn on_thread<T: Send + 'static>(
+        work: impl FnOnce() -> T + Send + 'static,
+    ) -> std_mpsc::Receiver<T> {
+        let (done, finished) = std_mpsc::channel();
+        thread::spawn(move || {
+            let _ = done.send(work());
+        });
+        finished
+    }
+
+    fn run<T: Send + 'static>(
+        future: impl Future<Output = T> + Send + 'static,
+    ) -> std_mpsc::Receiver<T> {
+        on_thread(move || {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap()
+                .block_on(future)
+        })
+    }
+
+    /// [`AppHost::call`] on a thread of its own, so a call blocked in the loop blocks only it.
+    fn call<T: Send + 'static>(
+        host: &Arc<AppHost>,
+        task: Task<T>,
+    ) -> std_mpsc::Receiver<Result<T, String>> {
+        let host = host.clone();
+        run(async move { host.call(task).await })
+    }
+
+    fn done<T>(finished: &std_mpsc::Receiver<T>) -> T {
+        finished.recv_timeout(LONG).expect("finished in time")
+    }
+
+    fn blocked<T>(finished: &std_mpsc::Receiver<T>) -> bool {
+        matches!(
+            finished.recv_timeout(BLOCKED),
+            Err(std_mpsc::RecvTimeoutError::Timeout)
+        )
+    }
+
+    /// A node attached to the app, as `start` attaches one.
+    fn open(host: &Arc<AppHost>, dir: &Path) -> Arc<CoreNode> {
+        let options = options(dir);
+        done(&call(
+            host,
+            Box::new(move |app| {
+                Box::pin(async move {
+                    let node = create_node(options).await.map_err(|e| e.to_string())?;
+                    app.attach_node(node.clone(), Owner::App).await;
+                    Ok(node)
+                })
+            }),
+        ))
+        .unwrap()
+    }
+
+    /// Waits until the loop has handled the host's last suspend (and its timer) or resume.
+    fn settle(host: &Arc<AppHost>, suspended: bool) {
+        if suspended {
+            until(host, |app| app.is_suspended());
+        } else {
+            until(host, |app| !app.is_suspended());
+        }
+    }
+
+    /// Waits until `check` holds in the loop.
+    fn until(host: &Arc<AppHost>, check: fn(&NativeApp) -> bool) {
+        let deadline = Instant::now() + LONG;
+        while !done(&call(
+            host,
+            Box::new(move |app| Box::pin(async move { Ok(check(app)) })),
+        ))
+        .unwrap()
+        {
+            assert!(Instant::now() < deadline, "the loop never settled");
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    /// The `fatal` events, as error strings.
+    fn fatal_errors(host: &AppHost) -> futures_channel::mpsc::UnboundedReceiver<String> {
+        host.subscribe(|event| match event {
+            AppEvent::Fatal { error } => vec![error.clone()],
+            _ => Vec::new(),
+        })
+    }
+
+    fn next_fatal(errors: &mut futures_channel::mpsc::UnboundedReceiver<String>) -> String {
+        let deadline = Instant::now() + LONG;
+        loop {
+            if let Ok(error) = errors.try_recv() {
+                return error;
+            }
+            assert!(Instant::now() < deadline, "no fatal event");
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    /// An append started from a task on the app's runtime.
+    fn append(
+        host: &Arc<AppHost>,
+        node: &Arc<CoreNode>,
+        id: &str,
+    ) -> std_mpsc::Receiver<Result<(), String>> {
+        let (sent, appended) = std_mpsc::channel();
+        let node = node.clone();
+        let op = announce(id);
+        done(&call(
+            host,
+            Box::new(move |_app| {
+                Box::pin(async move {
+                    tokio::spawn(async move {
+                        let _ = sent.send(node.append(op).await.map_err(|e| e.to_string()));
+                    });
+                    Ok(())
+                })
+            }),
+        ))
+        .unwrap();
+        appended
+    }
+
+    /// A call that reads the store inside the loop.
+    fn read_in_loop(host: &Arc<AppHost>) -> std_mpsc::Receiver<Result<usize, String>> {
+        call(
+            host,
+            Box::new(|app| {
+                Box::pin(async move {
+                    let node = app.node().ok_or("no node")?;
+                    let cores = node.store().store().cores().map_err(|e| e.to_string())?;
+                    Ok(cores.len())
+                })
+            }),
+        )
+    }
+
+    fn titles_after_reopen(dir: &Path) -> Vec<String> {
+        let dir = PathBuf::from(dir);
+        done(&run(async move {
+            let node = create_node(options(&dir)).await.unwrap();
+            let entries = node.search(None, SearchOptions::default()).await.unwrap();
+            node.close().await.unwrap();
+            let mut titles: Vec<String> = entries.into_iter().map(|entry| entry.title).collect();
+            titles.sort();
+            titles
+        }))
+    }
+
+    /// A write started while suspended waits; the host's resume lets it land; a suspend after
+    /// the resume parks the store again.
+    #[test]
+    fn a_write_waits_for_the_host_resume_and_lands() {
+        let dir = tempfile::tempdir().unwrap();
+        let host = Arc::new(AppHost::spawn(None).unwrap());
+        let node = open(&host, dir.path());
+        done(&append(&host, &node, "imdb:tt0000001")).unwrap();
+        for id in ["imdb:tt0000002", "imdb:tt0000003"] {
+            host.suspend(0);
+            settle(&host, true);
+            let appended = append(&host, &node, id);
+            assert!(
+                blocked(&appended),
+                "a write waits while the store is suspended"
+            );
+            host.resume();
+            done(&appended).unwrap();
+            settle(&host, false);
+        }
+        host.shutdown();
+        assert_eq!(
+            titles_after_reopen(dir.path()),
+            ["imdb:tt0000001", "imdb:tt0000002", "imdb:tt0000003"]
+        );
+    }
+
+    /// The loop itself blocked in a store access still lets the host's resume through.
+    #[test]
+    fn the_host_resume_reaches_a_loop_blocked_in_the_store() {
+        let dir = tempfile::tempdir().unwrap();
+        let host = Arc::new(AppHost::spawn(None).unwrap());
+        let node = open(&host, dir.path());
+        done(&append(&host, &node, "imdb:tt0000001")).unwrap();
+        host.suspend(0);
+        settle(&host, true);
+        let read = read_in_loop(&host);
+        assert!(blocked(&read), "the loop waits in the store");
+        host.resume();
+        assert!(done(&read).unwrap() > 0);
+        settle(&host, false);
+        host.shutdown();
+    }
+
+    /// A shutdown while the loop waits on a suspended store returns, and keeps what was written.
+    #[test]
+    fn shutdown_while_suspended_releases_a_blocked_loop() {
+        let dir = tempfile::tempdir().unwrap();
+        let host = Arc::new(AppHost::spawn(None).unwrap());
+        let node = open(&host, dir.path());
+        done(&append(&host, &node, "imdb:tt0000001")).unwrap();
+        host.suspend(0);
+        settle(&host, true);
+        let read = read_in_loop(&host);
+        assert!(blocked(&read), "the loop waits in the store");
+        let closing = host.clone();
+        done(&on_thread(move || closing.shutdown()));
+        assert_eq!(titles_after_reopen(dir.path()), ["imdb:tt0000001"]);
+    }
+
+    /// A resume before the linger runs out cancels the suspend: the store stays usable.
+    #[test]
+    fn a_resume_before_the_linger_keeps_the_store_open() {
+        let dir = tempfile::tempdir().unwrap();
+        let host = Arc::new(AppHost::spawn(None).unwrap());
+        let node = open(&host, dir.path());
+        host.suspend(200);
+        host.resume();
+        thread::sleep(Duration::from_millis(500));
+        let state = done(&call(
+            &host,
+            Box::new(|app| Box::pin(async move { Ok((app.is_suspended(), app.suspending)) })),
+        ))
+        .unwrap();
+        assert_eq!(state, (false, None));
+        done(&read_in_loop(&host)).unwrap();
+        done(&append(&host, &node, "imdb:tt0000001")).unwrap();
+        host.shutdown();
+        assert_eq!(titles_after_reopen(dir.path()), ["imdb:tt0000001"]);
+    }
+
+    /// A store that never reopens; [`Unopenable::access`] waits as a store access does while
+    /// the store is parked.
+    #[derive(Default)]
+    struct Unopenable {
+        /// (parked, closed)
+        state: Mutex<(bool, bool)>,
+        woke: Condvar,
+    }
+
+    impl StoreSuspension for Unopenable {
+        fn suspend(&self) -> io::Result<()> {
+            lock(&self.state).0 = true;
+            Ok(())
+        }
+        fn resume(&self) -> io::Result<()> {
+            Err(io::Error::other("cannot reopen"))
+        }
+        fn close(&self) {
+            lock(&self.state).1 = true;
+            self.woke.notify_all();
+        }
+    }
+
+    impl Unopenable {
+        fn access(&self) -> Result<(), String> {
+            let mut state = lock(&self.state);
+            while state.0 && !state.1 {
+                state = self.woke.wait(state).unwrap_or_else(|e| e.into_inner());
+            }
+            if state.1 {
+                return Err("closed".to_owned());
+            }
+            Ok(())
+        }
+    }
+
+    /// A shutdown while the loop waits on a store that cannot reopen closes the store: the
+    /// access fails with `closed` and the shutdown returns.
+    #[test]
+    fn shutdown_closes_a_store_that_cannot_reopen() {
+        let host = Arc::new(AppHost::spawn(None).unwrap());
+        let store = Arc::new(Unopenable::default());
+        host.suspend(0);
+        settle(&host, true);
+        let parked = store.clone();
+        done(&call(
+            &host,
+            Box::new(move |app| {
+                Box::pin(async move {
+                    let generation = app.suspend_generation;
+                    app.parker
+                        .park(generation, parked)
+                        .await
+                        .map_err(|e| e.to_string())
+                })
+            }),
+        ))
+        .unwrap();
+        let waiting = store.clone();
+        let access = call(
+            &host,
+            Box::new(move |_app| Box::pin(async move { waiting.access() })),
+        );
+        assert!(blocked(&access), "the loop waits in the store");
+        let closing = host.clone();
+        done(&on_thread(move || closing.shutdown()));
+        assert_eq!(done(&access), Err("closed".to_owned()));
+    }
+
+    /// The timer of a suspend the host already came back from parks nothing, even when a newer
+    /// suspend reached the suspension thread before that park: the loop then resumes, the store
+    /// stays open, and the newer suspend's timer is still armed.
+    #[test]
+    fn a_park_for_a_resumed_suspend_leaves_the_store_open() {
+        let dir = tempfile::tempdir().unwrap();
+        let host = Arc::new(AppHost::spawn(None).unwrap());
+        let node = open(&host, dir.path());
+        done(&append(&host, &node, "imdb:tt0000001")).unwrap();
+        host.suspend(5_000);
+        until(&host, |app| app.suspending.is_some());
+        // The loop is inside the first suspend's timer while the host comes back and leaves
+        // again; its park reaches the suspension thread after both.
+        let (entered, inside) = std_mpsc::channel::<()>();
+        let (go, wait) = std_mpsc::channel::<()>();
+        let stale = call(
+            &host,
+            Box::new(move |app| {
+                Box::pin(async move {
+                    let _ = entered.send(());
+                    let _ = wait.recv();
+                    app.timer(Timer::Suspend).await;
+                    Ok(())
+                })
+            }),
+        );
+        done(&inside);
+        host.resume();
+        host.suspend(5_000);
+        go.send(()).unwrap();
+        done(&stale).unwrap();
+        until(&host, |app| {
+            !app.is_suspended() && app.suspending.is_some() && app.suspend_generation == 2
+        });
+        assert!(done(&read_in_loop(&host)).unwrap() > 0);
+        host.resume();
+        host.shutdown();
+    }
+
+    /// A second suspend while suspended changes nothing: one resume reopens the store.
+    #[test]
+    fn a_second_suspend_while_suspended_needs_one_resume() {
+        let dir = tempfile::tempdir().unwrap();
+        let host = Arc::new(AppHost::spawn(None).unwrap());
+        let mut fatal = fatal_errors(&host);
+        let node = open(&host, dir.path());
+        done(&append(&host, &node, "imdb:tt0000001")).unwrap();
+        host.suspend(0);
+        settle(&host, true);
+        host.suspend(0);
+        until(&host, |app| {
+            app.suspend_generation == 2 && app.suspending.is_none()
+        });
+        let appended = append(&host, &node, "imdb:tt0000002");
+        assert!(blocked(&appended), "the store stays suspended");
+        host.resume();
+        done(&appended).unwrap();
+        settle(&host, false);
+        assert!(fatal.try_recv().is_err(), "no fatal event");
+        host.shutdown();
+        assert_eq!(
+            titles_after_reopen(dir.path()),
+            ["imdb:tt0000001", "imdb:tt0000002"]
+        );
+    }
+
+    /// `attachNode` while suspended: the new node's store is parked too, and the host's resume
+    /// reopens it; the old node's store, closed meanwhile, resumes as a no-op.
+    #[test]
+    fn a_node_attached_while_suspended_is_parked_too() {
+        let first = tempfile::tempdir().unwrap();
+        let second = tempfile::tempdir().unwrap();
+        let host = Arc::new(AppHost::spawn(None).unwrap());
+        let mut fatal = fatal_errors(&host);
+        open(&host, first.path());
+        host.suspend(0);
+        settle(&host, true);
+        let options = options(second.path());
+        let node = done(&call(
+            &host,
+            Box::new(move |app| {
+                Box::pin(async move {
+                    app.close_worker().await;
+                    let node = create_node(options).await.map_err(|e| e.to_string())?;
+                    app.attach_node(node.clone(), Owner::App).await;
+                    Ok(node)
+                })
+            }),
+        ))
+        .unwrap();
+        let appended = append(&host, &node, "imdb:tt0000002");
+        assert!(blocked(&appended), "the new node's store is suspended");
+        host.resume();
+        done(&appended).unwrap();
+        settle(&host, false);
+        assert!(fatal.try_recv().is_err(), "no fatal event");
+        host.shutdown();
+        assert_eq!(titles_after_reopen(second.path()), ["imdb:tt0000002"]);
+    }
+
+    /// A shutdown right behind a suspend returns whether the park lands before the release or
+    /// after it, and keeps what was written.
+    #[test]
+    fn shutdown_right_after_a_suspend_returns() {
+        let dir = tempfile::tempdir().unwrap();
+        let host = Arc::new(AppHost::spawn(None).unwrap());
+        let node = open(&host, dir.path());
+        done(&append(&host, &node, "imdb:tt0000001")).unwrap();
+        host.suspend(0);
+        let closing = host.clone();
+        done(&on_thread(move || closing.shutdown()));
+        assert_eq!(titles_after_reopen(dir.path()), ["imdb:tt0000001"]);
+    }
+
+    /// A shutdown called from the loop thread does not join itself; the loop stops after it.
+    #[test]
+    fn shutdown_from_the_loop_thread_returns() {
+        let host = Arc::new(AppHost::spawn(None).unwrap());
+        let inner = host.clone();
+        done(&call(
+            &host,
+            Box::new(move |_app| {
+                Box::pin(async move {
+                    inner.shutdown();
+                    Ok(())
+                })
+            }),
+        ))
+        .unwrap();
+        assert!(done(&call(&host, Box::new(|_app| Box::pin(async { Ok(()) })))).is_err());
+    }
+
+    /// A store that cannot reopen makes the host's resume `fatal`, once, and stays suspended;
+    /// the next resume reopens it.
+    #[test]
+    fn a_failed_host_resume_is_fatal_once_and_the_next_resume_reopens() {
+        let dir = tempfile::tempdir().unwrap();
+        let host = Arc::new(AppHost::spawn(None).unwrap());
+        let mut fatal = fatal_errors(&host);
+        let node = open(&host, dir.path());
+        done(&append(&host, &node, "imdb:tt0000001")).unwrap();
+        host.suspend(0);
+        settle(&host, true);
+        // RocksDB cannot reopen a database whose folder became a file.
+        let db = dir.path().join("corestore").join("db");
+        let aside = dir.path().join("db-aside");
+        std::fs::rename(&db, &aside).unwrap();
+        std::fs::write(&db, b"not a database").unwrap();
+        host.resume();
+        next_fatal(&mut fatal);
+        // The loop may wait in the store now, so the store is read from a plain thread.
+        let reader = node.clone();
+        let read = on_thread(move || {
+            reader
+                .store()
+                .store()
+                .cores()
+                .map(|cores| cores.len())
+                .map_err(|e| e.to_string())
+        });
+        assert!(blocked(&read), "the store stays suspended");
+        std::fs::remove_file(&db).unwrap();
+        std::fs::rename(&aside, &db).unwrap();
+        host.resume();
+        assert!(done(&read).unwrap() > 0);
+        settle(&host, false);
+        assert!(fatal.try_recv().is_err(), "one fatal event");
+        host.shutdown();
+        assert_eq!(titles_after_reopen(dir.path()), ["imdb:tt0000001"]);
     }
 }

@@ -328,8 +328,10 @@ impl SwarmInner {
                 .get(&previous_id)
                 .cloned();
             if let Some(previous) = previous.filter(|p| !*p.closed.borrow()) {
-                // The responder wins the duplicate exchange when the remote half sorts lower.
-                if opened.is_initiator || remote >= self.key_pair.public_key {
+                // Both ends keep the stream the lower key dialled, whatever order they open in.
+                // JS (`!enc.isInitiator && remote < local`) only lets the higher key replace,
+                // so on the lower key it keeps whichever stream opened first; see PARITY.md.
+                if opened.is_initiator != (remote > self.key_pair.public_key) {
                     drop(active);
                     close();
                     return;
@@ -1603,4 +1605,237 @@ pub async fn attempt_direct_hop_bypass(
         endpoint_bypass_accepted,
         spoofed_hop_accepted,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::private_overlay::dht::{
+        AcceptFn, ConnectionHandler, LengthFrames, MutableRecord, Server,
+    };
+    use protomux::Mux;
+    use std::net::SocketAddr;
+    use tokio::sync::watch;
+
+    /// No transport: the test hands opened streams straight to the admission code.
+    struct NoDht;
+
+    fn fail<T: Send + 'static>() -> BoxFuture<'static, Result<T>> {
+        Box::pin(async { Err(Error::dht("no transport in this test")) })
+    }
+
+    impl Dht for NoDht {
+        fn lookup(&self, _: [u8; 32]) -> BoxFuture<'_, Result<Vec<[u8; 32]>>> {
+            fail()
+        }
+        fn announce(&self, _: [u8; 32], _: &KeyPair) -> BoxFuture<'_, Result<()>> {
+            fail()
+        }
+        fn unannounce(&self, _: [u8; 32], _: &KeyPair) -> BoxFuture<'_, Result<()>> {
+            fail()
+        }
+        fn connect(&self, _: [u8; 32], _: &KeyPair) -> BoxFuture<'_, Result<Arc<dyn Connection>>> {
+            fail()
+        }
+        fn create_server(&self, _: ConnectionHandler) -> BoxFuture<'_, Result<Arc<dyn Server>>> {
+            fail()
+        }
+        fn protomux(&self, _: &Arc<dyn Connection>) -> BoxFuture<'_, Result<Mux>> {
+            fail()
+        }
+        fn create_raw_stream(
+            &self,
+            _: bool,
+            _: AcceptFn,
+        ) -> BoxFuture<'_, Result<Arc<dyn RawStream>>> {
+            fail()
+        }
+        fn connect_raw_stream(
+            &self,
+            _: &Arc<dyn Connection>,
+            _: &Arc<dyn RawStream>,
+            _: u32,
+        ) -> BoxFuture<'_, Result<()>> {
+            fail()
+        }
+        fn open_noise(
+            &self,
+            _: bool,
+            _: Arc<dyn RawStream>,
+            _: &KeyPair,
+            _: Option<[u8; 32]>,
+            _: u64,
+        ) -> BoxFuture<'_, Result<PendingNoise>> {
+            fail()
+        }
+        fn mutable_put_signed(
+            &self,
+            _: [u8; 32],
+            _: u64,
+            _: [u8; 64],
+            _: &[u8],
+        ) -> BoxFuture<'_, Result<()>> {
+            fail()
+        }
+        fn mutable_get(&self, _: [u8; 32]) -> BoxFuture<'_, Result<Option<MutableRecord>>> {
+            fail()
+        }
+        fn address(&self) -> Option<SocketAddr> {
+            None
+        }
+        fn local_address(&self) -> Option<SocketAddr> {
+            None
+        }
+        fn remote_address(&self) -> Option<SocketAddr> {
+            None
+        }
+        fn suspend(&self) -> BoxFuture<'_, Result<()>> {
+            fail()
+        }
+        fn resume(&self) -> BoxFuture<'_, Result<()>> {
+            fail()
+        }
+        fn destroy(&self) -> BoxFuture<'_, Result<()>> {
+            fail()
+        }
+    }
+
+    /// One end of a guard-spliced Noise stream, as `enc.opened` hands it to `admitInnerStream`.
+    struct End {
+        opened: NoiseOpened,
+        close: Arc<dyn Fn() + Send + Sync>,
+        closed: watch::Receiver<bool>,
+        expected: Option<[u8; 32]>,
+    }
+
+    /// A stream `dialer` opened to `listener`. Destroying either end closes both, as the guard
+    /// tears down the circuit when one raw stream goes away.
+    fn spliced(dialer: [u8; 32], listener: [u8; 32]) -> (End, End, watch::Receiver<bool>) {
+        let (closed_tx, closed) = watch::channel(false);
+        let closed_tx = Arc::new(closed_tx);
+        let (dial_io, listen_io) = tokio::io::duplex(1024);
+        let end = |remote, is_initiator, io, expected| {
+            let sender = Arc::clone(&closed_tx);
+            End {
+                opened: NoiseOpened {
+                    remote_public_key: remote,
+                    is_initiator,
+                    handshake_hash: None,
+                    stream: Box::new(LengthFrames::new(io)),
+                },
+                close: Arc::new(move || {
+                    sender.send_replace(true);
+                }),
+                closed: closed_tx.subscribe(),
+                expected,
+            }
+        };
+        let dial_end = end(listener, true, dial_io, Some(listener));
+        let listen_end = end(dialer, false, listen_io, None);
+        (dial_end, listen_end, closed)
+    }
+
+    fn endpoint(seed: u8) -> (PrivateSwarm, Arc<Mutex<Vec<NoiseConnection>>>) {
+        let emitted = Arc::new(Mutex::new(Vec::new()));
+        let sink = Arc::clone(&emitted);
+        let swarm = create_private_swarm(
+            Arc::new(NoDht),
+            SwarmOptions {
+                key_pair: Some(KeyPair::from_seed([seed; 32])),
+                on_connection: Some(Arc::new(move |connection| {
+                    sink.lock().unwrap().push(connection);
+                })),
+                ..SwarmOptions::default()
+            },
+        );
+        (swarm, emitted)
+    }
+
+    fn admit(swarm: &PrivateSwarm, end: End) {
+        swarm
+            .inner
+            .admit_opened(end.opened, end.close, end.closed, end.expected);
+    }
+
+    /// The one emitted connection that is still open.
+    fn live(emitted: &Mutex<Vec<NoiseConnection>>) -> NoiseConnection {
+        let mut emitted = emitted.lock().unwrap();
+        let open: Vec<usize> = (0..emitted.len())
+            .filter(|&i| !*emitted[i].closed.borrow())
+            .collect();
+        assert_eq!(open.len(), 1, "exactly one emitted connection stays open");
+        emitted.remove(open[0])
+    }
+
+    #[tokio::test]
+    async fn simultaneous_dials_keep_one_stream_in_every_arrival_order() {
+        let (seed_low, seed_high) = {
+            let (three, four) = (KeyPair::from_seed([3; 32]), KeyPair::from_seed([4; 32]));
+            if three.public_key < four.public_key {
+                (3, 4)
+            } else {
+                (4, 3)
+            }
+        };
+        for (low_sees_x_first, high_sees_x_first) in
+            [(true, true), (true, false), (false, true), (false, false)]
+        {
+            let order = format!("low x-first={low_sees_x_first} high x-first={high_sees_x_first}");
+            let (low, low_emitted) = endpoint(seed_low);
+            let (high, high_emitted) = endpoint(seed_high);
+            let (low_key, high_key) = (low.key_pair().public_key, high.key_pair().public_key);
+            // X: the lower key dialled the higher one. Y: the reverse, at the same moment.
+            let (x_at_low, x_at_high, x_closed) = spliced(low_key, high_key);
+            let (y_at_high, y_at_low, y_closed) = spliced(high_key, low_key);
+            let (low_first, low_second) = if low_sees_x_first {
+                (x_at_low, y_at_low)
+            } else {
+                (y_at_low, x_at_low)
+            };
+            let (high_first, high_second) = if high_sees_x_first {
+                (x_at_high, y_at_high)
+            } else {
+                (y_at_high, x_at_high)
+            };
+            admit(&low, low_first);
+            admit(&high, high_first);
+            admit(&low, low_second);
+            admit(&high, high_second);
+            // Let the close watchers publish what the rule closed.
+            for _ in 0..100 {
+                tokio::task::yield_now().await;
+            }
+
+            assert!(
+                !*x_closed.borrow(),
+                "{order}: the lower key's dial survives"
+            );
+            assert!(
+                *y_closed.borrow(),
+                "{order}: the higher key's dial is closed"
+            );
+            assert_eq!(low.connection_count(), 1, "{order}");
+            assert_eq!(high.connection_count(), 1, "{order}");
+            // `dialCard` and `lookupAndDialPeer` skip an active peer: nobody re-dials.
+            for (swarm, remote) in [(&low, high_key), (&high, low_key)] {
+                let active = swarm.inner.active_by_peer.lock().unwrap();
+                assert!(active.contains_key(&remote), "{order}: peer stays active");
+            }
+
+            let at_low = live(&low_emitted);
+            let at_high = live(&high_emitted);
+            assert!(at_low.is_initiator && !at_high.is_initiator, "{order}");
+            let (mut low_read, mut low_write) = at_low.stream.split();
+            let (mut high_read, mut high_write) = at_high.stream.split();
+            low_write.write_message(b"ping").await.expect("low writes");
+            high_write
+                .write_message(b"pong")
+                .await
+                .expect("high writes");
+            let from_low = high_read.read_message().await.expect("high reads");
+            let from_high = low_read.read_message().await.expect("low reads");
+            assert_eq!(from_low.as_deref(), Some(&b"ping"[..]), "{order}");
+            assert_eq!(from_high.as_deref(), Some(&b"pong"[..]), "{order}");
+        }
+    }
 }

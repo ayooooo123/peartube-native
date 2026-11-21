@@ -41,6 +41,9 @@ pub trait Node: Send + Sync + 'static {
     fn store(&self) -> &Self::Store;
     fn channel(&self) -> &Self::Channel;
     fn swarm(&self) -> &Self::Swarm;
+    /// The store half of `suspend()`/`resume()`, as a handle the backend keeps; see
+    /// [`api::StoreSuspension`].
+    fn store_suspension(&self) -> std::sync::Arc<dyn api::StoreSuspension>;
     fn dht(&self) -> &Self::Dht;
     fn blob_server(&self) -> &Self::BlobServer;
     fn private_routing(&self) -> bool;

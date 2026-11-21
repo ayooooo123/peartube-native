@@ -545,6 +545,19 @@ impl peartube_native::node::api::Swarm for NoSwarm {
 
 static SWARM: NoSwarm = NoSwarm;
 
+/// The fake has no store to suspend.
+struct NoStore;
+
+impl peartube_native::node::api::StoreSuspension for NoStore {
+    fn suspend(&self) -> std::io::Result<()> {
+        Ok(())
+    }
+    fn resume(&self) -> std::io::Result<()> {
+        Ok(())
+    }
+    fn close(&self) {}
+}
+
 impl Node for FakeNode {
     type Error = TestError;
     type Store = ();
@@ -567,6 +580,9 @@ impl Node for FakeNode {
     }
     fn swarm(&self) -> &Self::Swarm {
         &SWARM
+    }
+    fn store_suspension(&self) -> Arc<dyn peartube_native::node::api::StoreSuspension> {
+        Arc::new(NoStore)
     }
     fn dht(&self) -> &Self::Dht {
         &()

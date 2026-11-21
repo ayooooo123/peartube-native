@@ -1342,35 +1342,47 @@ async fn guards_and_swarms_rendezvous_and_exchange_bytes() {
     )
     .await;
 
-    let mut connection_a = tokio::time::timeout(Duration::from_secs(5), rx_a.recv())
-        .await
-        .expect("connection a")
-        .expect("connection a channel");
-    let mut connection_b = tokio::time::timeout(Duration::from_secs(5), rx_b.recv())
-        .await
-        .expect("connection b")
-        .expect("connection b channel");
+    // The swarm emits every admitted connection, also one the duplicate rule replaces a moment
+    // later (the replaced stream was emitted when it was admitted; JS likewise), so take the
+    // newest open one on each side. Picks with equal initiator flags are halves of different
+    // streams.
+    let (mut seen_a, mut seen_b) = (Vec::new(), Vec::new());
+    let mut pair = None;
+    eventually(
+        "one open stream on both sides",
+        Duration::from_secs(5),
+        || {
+            while let Ok(connection) = rx_a.try_recv() {
+                seen_a.push(connection);
+            }
+            while let Ok(connection) = rx_b.try_recv() {
+                seen_b.push(connection);
+            }
+            seen_a.retain(|c: &NoiseConnection| !*c.closed.borrow());
+            seen_b.retain(|c: &NoiseConnection| !*c.closed.borrow());
+            let opposite = matches!(
+                (seen_a.last(), seen_b.last()),
+                (Some(a), Some(b)) if a.is_initiator != b.is_initiator
+            );
+            if opposite {
+                pair = seen_a.pop().zip(seen_b.pop());
+            }
+            opposite
+        },
+    )
+    .await;
+    let (mut connection_a, mut connection_b) = pair.expect("an open pair");
     assert_eq!(connection_a.remote_public_key, key(4).public_key);
     assert_eq!(connection_b.remote_public_key, key(3).public_key);
 
-    // Simultaneous dials can leave each side holding a different half of the pair; the swarm
-    // re-dials on its next poll, exactly like the app. Retry until one pair carries both ways.
-    let mut exchanged = false;
-    for _ in 0..5 {
-        if exchange(&mut connection_a, &mut connection_b).await {
-            exchanged = true;
-            break;
-        }
-        connection_a = tokio::time::timeout(Duration::from_secs(15), rx_a.recv())
-            .await
-            .expect("a redial")
-            .expect("a redial channel");
-        connection_b = tokio::time::timeout(Duration::from_secs(15), rx_b.recv())
-            .await
-            .expect("b redial")
-            .expect("b redial channel");
-    }
-    assert!(exchanged, "no working circuit carried bytes both ways");
+    // What this checks: one open pair with opposite flags, bytes both ways over it, and (below)
+    // one circuit per guard. The fake transport carries bytes on a closed stream while the test
+    // holds both ends, so the rule itself is proven by the unit test
+    // `simultaneous_dials_keep_one_stream_in_every_arrival_order`, not here.
+    assert!(
+        exchange(&mut connection_a, &mut connection_b).await,
+        "no working circuit carried bytes both ways"
+    );
     assert_ne!(connection_a.is_initiator, connection_b.is_initiator);
 
     // One spliced path is one circuit record in the guard that dialled it and one in the guard

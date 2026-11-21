@@ -9,6 +9,8 @@ use std::path::{Path, PathBuf};
 
 use corestore::Corestore;
 
+use super::api::StoreSuspension;
+
 use super::blobs::BlobsError;
 
 /// Where the Corestore lives.
@@ -85,6 +87,28 @@ impl Storage {
     /// `blobGarbageCollectionPolicy: 1` (a full wipe with no live blobs left), else policy 2.
     pub fn compact(&self, relocate_blobs: bool) {
         let _ = self.store.store().compact(relocate_blobs);
+    }
+}
+
+/// `store.suspend()`/`store.resume()`: RocksDB is flushed and closed, and its accesses wait,
+/// until the resume reopens it. A closed store has nothing to park or wake.
+impl StoreSuspension for Corestore {
+    fn suspend(&self) -> std::io::Result<()> {
+        match self.store().suspend() {
+            Err(_) if self.store().is_closed() => Ok(()),
+            result => result.map_err(|error| std::io::Error::other(error.to_string())),
+        }
+    }
+
+    fn resume(&self) -> std::io::Result<()> {
+        match self.resume_blocking() {
+            Err(_) if self.store().is_closed() => Ok(()),
+            result => result.map_err(|error| std::io::Error::other(error.to_string())),
+        }
+    }
+
+    fn close(&self) {
+        self.store().close();
     }
 }
 

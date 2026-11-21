@@ -1784,9 +1784,15 @@ impl super::blobs::ContentSwarm for Arc<Network> {
     }
 }
 
-/// `Node::Swarm`.
+/// `Node::Swarm`: the swarm half of the node's `suspend()`/`resume()` in `src/index.js`. The
+/// store half is `Node::store_suspension`, which the backend parks after this suspend and
+/// resumes, on its suspension thread, before this resume.
 pub struct NetworkSwarm {
     pub network: Arc<Network>,
+}
+
+fn io_error(error: impl std::fmt::Display) -> std::io::Error {
+    std::io::Error::other(error.to_string())
 }
 
 impl super::api::Swarm for NetworkSwarm {
@@ -1799,6 +1805,7 @@ impl super::api::Swarm for NetworkSwarm {
         for connection in self.network.connections() {
             connection.close();
         }
+        self.network.swarm.suspend().await.map_err(io_error)?;
         let private = { lock(&self.network.private).clone() };
         if let Some(private) = private {
             private.suspend().await;
@@ -1807,6 +1814,7 @@ impl super::api::Swarm for NetworkSwarm {
     }
 
     async fn resume(&self) -> Result<(), Self::Error> {
+        self.network.swarm.resume().await.map_err(io_error)?;
         let private = { lock(&self.network.private).clone() };
         if let Some(private) = private {
             private.resume().await;

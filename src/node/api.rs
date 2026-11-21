@@ -393,6 +393,20 @@ pub trait NodeFactory: Send + Sync {
     ) -> impl Future<Output = Result<std::sync::Arc<Self::Node>, Self::Error>> + Send;
 }
 
+/// The store half of a node's `suspend()`/`resume()` in `src/index.js` (`store.suspend()`,
+/// `store.resume()`). While suspended, every store access blocks its thread until `resume` or the
+/// node's close, as `rocksdb-native` makes operations wait. Both calls do disk work (flush, reopen)
+/// and block the calling thread, so the backend runs them on a thread of its own that no store
+/// access can be blocking. Suspending twice, or resuming a store that is open or closed, does
+/// nothing.
+pub trait StoreSuspension: Send + Sync {
+    fn suspend(&self) -> std::io::Result<()>;
+    fn resume(&self) -> std::io::Result<()>;
+    /// Closes the storage engine, so accesses waiting on a store that cannot reopen fail with
+    /// `Closed` instead of waiting for good. The node's own close still runs afterwards.
+    fn close(&self);
+}
+
 /// The lifecycle operations required from a node's native swarm handle.
 #[allow(async_fn_in_trait)]
 pub trait Swarm: Send + Sync {

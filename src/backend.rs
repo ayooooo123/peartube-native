@@ -13,6 +13,7 @@ use tokio::sync::mpsc as tokio_mpsc;
 use crate::app::{App, SystemClock};
 use crate::ipc::Framer;
 use crate::lifecycle;
+use crate::suspend::{Lifecycle, Suspension};
 
 #[derive(Debug)]
 pub struct BackendError(String);
@@ -69,8 +70,10 @@ fn raise_fd_limit() {
 
 enum Command {
     Input(String),
-    Suspend(u64),
-    Resume,
+    /// The linger and the suspension thread's number for this suspend.
+    Suspend(u64, u64),
+    /// The store is already resumed; the error is its own, if it could not reopen.
+    Resume(Option<String>),
     Shutdown,
 }
 
@@ -87,6 +90,7 @@ pub struct Adapters<F, C, L, A, K> {
 
 pub struct Backend {
     commands: tokio_mpsc::UnboundedSender<Command>,
+    suspension: Suspension,
     thread: Mutex<Option<JoinHandle<()>>>,
 }
 
@@ -136,6 +140,17 @@ impl Backend {
     {
         let _ = config;
         let (commands, mut incoming) = tokio_mpsc::unbounded_channel();
+        let suspension = Suspension::spawn({
+            let commands = commands.clone();
+            move |step| {
+                let _ = commands.send(match step {
+                    Lifecycle::Suspend(linger, generation) => Command::Suspend(linger, generation),
+                    Lifecycle::Resume(error) => Command::Resume(error),
+                });
+            }
+        })
+        .map_err(|e| BackendError(e.to_string()))?;
+        let parker = suspension.parker();
         let (ready_tx, ready_rx) = mpsc::sync_channel(1);
         let thread = thread::Builder::new()
             .name("peartube-backend".into())
@@ -159,7 +174,8 @@ impl Backend {
                         let sink = sink.lock().unwrap_or_else(|error| error.into_inner());
                         sink(line);
                     };
-                    let mut app = App::new(factory, clock.clone(), lan, api, cast, events, changes);
+                    let mut app =
+                        App::new(factory, clock.clone(), lan, api, cast, events, changes, parker);
                     let mut framing = Framer::new();
                     let mut lines: Vec<String> = Vec::new();
                     loop {
@@ -182,8 +198,10 @@ impl Backend {
                                         }
                                     }
                                 }
-                                Some(Command::Suspend(linger)) => app.suspend(linger),
-                                Some(Command::Resume) => app.resume().await,
+                                Some(Command::Suspend(linger, generation)) => {
+                                    app.suspend(linger, generation)
+                                }
+                                Some(Command::Resume(error)) => app.resume(error).await,
                                 Some(Command::Shutdown) => {
                                     app.shutdown().await;
                                     break;
@@ -207,6 +225,7 @@ impl Backend {
             .map_err(BackendError)?;
         Ok(Self {
             commands,
+            suspension,
             thread: Mutex::new(Some(thread)),
         })
     }
@@ -221,12 +240,17 @@ impl Backend {
             .map_err(|_| BackendError("backend is shut down".into()))
     }
     pub fn suspend(&self, linger_ms: u64) {
-        let _ = self.commands.send(Command::Suspend(linger_ms));
+        self.suspension.suspend(linger_ms);
     }
+    /// Returns at once: the store reopens on the suspension thread, then the loop resumes the
+    /// swarm, even if the loop is blocked in a store access when the host comes back.
     pub fn resume(&self) {
-        let _ = self.commands.send(Command::Resume);
+        self.suspension.resume();
     }
+    /// Resumes a suspended store first (as `close()` does), so a loop blocked in a store access
+    /// reaches the shutdown.
     pub fn shutdown(&self) {
+        self.suspension.release();
         let _ = self.commands.send(Command::Shutdown);
         if let Some(handle) = self.thread.lock().unwrap_or_else(|e| e.into_inner()).take()
             && handle.thread().id() != thread::current().id()
@@ -321,6 +345,9 @@ impl crate::node::Node for MissingNode {
         match *self {}
     }
     fn swarm(&self) -> &Self::Swarm {
+        match *self {}
+    }
+    fn store_suspension(&self) -> Arc<dyn crate::node::api::StoreSuspension> {
         match *self {}
     }
     fn dht(&self) -> &Self::Dht {

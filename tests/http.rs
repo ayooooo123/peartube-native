@@ -117,6 +117,19 @@ impl Swarm for FakeSwarm {
     }
 }
 
+/// The fake has no store to suspend.
+struct NoStore;
+
+impl peartube_native::node::api::StoreSuspension for NoStore {
+    fn suspend(&self) -> std::io::Result<()> {
+        Ok(())
+    }
+    fn resume(&self) -> std::io::Result<()> {
+        Ok(())
+    }
+    fn close(&self) {}
+}
+
 impl Fake {
     fn new(stream: &str) -> Self {
         Self {
@@ -307,6 +320,9 @@ impl Node for Fake {
     }
     fn swarm(&self) -> &FakeSwarm {
         &FAKE_SWARM
+    }
+    fn store_suspension(&self) -> Arc<dyn peartube_native::node::api::StoreSuspension> {
+        Arc::new(NoStore)
     }
     fn dht(&self) -> &() {
         &UNIT

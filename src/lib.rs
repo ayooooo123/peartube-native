@@ -31,4 +31,5 @@ pub mod resolution;
 pub mod search;
 pub mod settings;
 pub mod ssrf;
+mod suspend;
 pub mod traffic;

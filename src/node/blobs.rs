@@ -1314,7 +1314,7 @@ where
                         blobs.record_cached(
                             key,
                             listener.length(),
-                            content_bytes(&listener),
+                            listener.byte_length(),
                             counter.blocks(),
                         );
                         blobs.touch_cached(Some(key));
@@ -1328,7 +1328,7 @@ where
                         Blobs::from_inner(inner.clone()).record_cached(
                             key,
                             listener.length(),
-                            content_bytes(&listener),
+                            listener.byte_length(),
                             blocks,
                         );
                     }
@@ -1436,7 +1436,7 @@ where
                     key,
                     OwnedMeta {
                         length: session.length(),
-                        byte_length: content_bytes(&session),
+                        byte_length: session.byte_length(),
                     },
                 );
             }
@@ -1513,7 +1513,7 @@ where
         self.record_cached(
             *key,
             session.length(),
-            content_bytes(&session),
+            session.byte_length(),
             self.local_blocks(key),
         );
         self.touch_cached(Some(*key));
@@ -1550,7 +1550,7 @@ where
                 self.record_cached(
                     *key,
                     entry.session.length(),
-                    content_bytes(&entry.session),
+                    entry.session.byte_length(),
                     self.local_blocks(key),
                 );
                 victims.push(*key);
@@ -1870,7 +1870,7 @@ where
         self.record_cached(
             *key,
             session.length(),
-            content_bytes(&session),
+            session.byte_length(),
             self.local_blocks(key),
         );
         self.gc_storage(false, true).await.reclaimed_bytes
@@ -1906,18 +1906,18 @@ where
             if self.is_owned_blob(&key)
                 || self.is_kept(&key)
                 || session.length() == 0
-                || content_bytes(&session) == 0
+                || session.byte_length() == 0
             {
                 continue;
             }
             self.ensure_block_counter(&session).await;
             let blocks = self.local_blocks(&key);
-            self.record_cached(key, session.length(), content_bytes(&session), blocks);
+            self.record_cached(key, session.length(), session.byte_length(), blocks);
             if blocks > 0 {
-                total += content_bytes(&session).min(scaled(
+                total += session.byte_length().min(scaled(
                     blocks,
                     session.length(),
-                    content_bytes(&session),
+                    session.byte_length(),
                 ));
             }
         }
@@ -1984,7 +1984,9 @@ where
         };
         let mut cleared = 0u64;
         if blocks > 0 {
-            cleared = content_bytes(core).min(scaled(blocks, core.length(), content_bytes(core)));
+            cleared = core
+                .byte_length()
+                .min(scaled(blocks, core.length(), core.byte_length()));
             let _ = core.clear(0, core.length()).await;
             if is_slot {
                 self.sync_block_counter(core).await;
@@ -1994,7 +1996,7 @@ where
             counter.blocks.store(0, Ordering::Relaxed);
             lock(&counter.slices).clear();
         }
-        self.record_cached(*key, core.length(), content_bytes(core), 0);
+        self.record_cached(*key, core.length(), core.byte_length(), 0);
         lock(&self.inner.ledger).last_used.remove(key);
         cleared
     }
@@ -2107,7 +2109,7 @@ where
                     block_offset: 0,
                     block_length: core.length(),
                     byte_offset: 0,
-                    byte_length: content_bytes(&core),
+                    byte_length: core.byte_length(),
                 },
                 EvictOptions {
                     playhead_byte: progress.get(&playing).copied().unwrap_or(0),
@@ -2257,7 +2259,7 @@ where
                     } else {
                         0
                     };
-                    self.record_cached(blobs, core.length(), content_bytes(&core), remaining);
+                    self.record_cached(blobs, core.length(), core.byte_length(), remaining);
                     reclaimed = self.gc_storage(false, false).await.reclaimed_bytes;
                     self.inner.host.update();
                 }
@@ -2357,7 +2359,7 @@ where
         opts.encryption_key = video_key;
         let session = self.inner.store.get(opts).await?;
         let started = {
-            let start = if named { content_bytes(&session) } else { 0 };
+            let start = if named { session.byte_length() } else { 0 };
             if private
                 && start > 0
                 && meta
@@ -2386,7 +2388,7 @@ where
                     key,
                     OwnedMeta {
                         length: session.length(),
-                        byte_length: content_bytes(&session),
+                        byte_length: session.byte_length(),
                     },
                 );
                 if let Some(video_key) = video_key {
@@ -2510,7 +2512,7 @@ where
                 }
                 if held
                     .as_ref()
-                    .is_some_and(|(_, bytes)| content_bytes(session) >= *bytes)
+                    .is_some_and(|(_, bytes)| session.byte_length() >= *bytes)
                 {
                     let (state, bytes) = held.take().expect("checked above");
                     source.on_hash_state(&state, bytes);
@@ -2524,7 +2526,7 @@ where
             // checkpoint the core now covers goes out too (`emitCheckpoint()` after the pipeline): a
             // restart resumes from the whole film instead of folding its tail in again.
             if let Some((state, bytes)) = held
-                && content_bytes(session) >= bytes
+                && session.byte_length() >= bytes
             {
                 source.on_hash_state(&state, bytes);
             }
@@ -2554,7 +2556,7 @@ where
                 block_offset: 0,
                 block_length: session.length(),
                 byte_offset: 0,
-                byte_length: content_bytes(session),
+                byte_length: session.byte_length(),
                 extra: Map::new(),
             },
             epoch: None,
@@ -3100,6 +3102,7 @@ where
             ServerOptions {
                 token: None,
                 window_bytes,
+                ..ServerOptions::default()
             },
             resolve,
         )
@@ -3322,14 +3325,6 @@ fn write_private(path: &std::path::Path, bytes: &[u8]) {
     {
         let _ = std::fs::write(path, bytes);
     }
-}
-
-/// Bytes of content in a core. hypercore-rs counts an encrypted core's per-block padding in
-/// `byte_length`, where the JS reports the plaintext length the app links use.
-fn content_bytes(session: &Session) -> u64 {
-    session
-        .byte_length()
-        .saturating_sub(session.padding() as u64 * session.length())
 }
 
 async fn slot_has_blocks(slot: &Session, entry: &Announce) -> bool {

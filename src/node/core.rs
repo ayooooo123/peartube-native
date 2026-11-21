@@ -912,6 +912,13 @@ impl CoreNode {
             *closed = true;
         }
         self.inner.closing.store(true, Ordering::Release);
+        // `close()` resumes a suspended store before anything else touches it; here first,
+        // because a store access blocks its thread while the store is suspended. A store that
+        // cannot reopen is closed instead, so the accesses waiting on it fail with `Closed`
+        // and the steps below cannot wait on it for good.
+        if StoreSuspension::resume(self.store()).is_err() {
+            StoreSuspension::close(self.store());
+        }
         if let Some(search) = self.inner.net.get().and_then(|net| net.search.get()) {
             search.close();
         }
@@ -1872,6 +1879,10 @@ impl Node for CoreNode {
         })
     }
 
+    fn store_suspension(&self) -> Arc<dyn StoreSuspension> {
+        Arc::new(self.store().clone())
+    }
+
     fn dht(&self) -> &Self::Dht {
         self.inner.dht.get_or_init(|| self.net().dht().clone())
     }
@@ -2448,6 +2459,136 @@ mod tests {
         node.remove(&changed[0].key).await.unwrap();
         assert!(node.search(None, options).await.unwrap().is_empty());
         node.close().await.unwrap();
+    }
+
+    /// `suspend()`/`resume()` in `src/index.js`: while the store is suspended a write waits, a
+    /// resume from a plain thread lets it finish, and `close()` while suspended resumes the store
+    /// first, so nothing hangs and nothing written is lost.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_suspended_node_waits_for_resume_and_closes() {
+        use crate::node::api::Swarm as _;
+        use std::time::Duration;
+
+        let dir = tempfile::tempdir().unwrap();
+        let options =
+            || json!({ "storage": dir.path(), "bootstrap": ["127.0.0.1:9"], "worklet": true });
+        let announce = |id: &str| {
+            json!({
+                "type": "announce", "id": id, "title": id, "size": 1,
+                "sha256": "33".repeat(32), "blobs": "22".repeat(32),
+                "blob": { "blockOffset": 0, "blockLength": 1, "byteOffset": 0, "byteLength": 1 }
+            })
+        };
+        let titles = |entries: Vec<Entry>| {
+            let mut titles: Vec<String> = entries.into_iter().map(|entry| entry.title).collect();
+            titles.sort();
+            titles
+        };
+        let node = create_node(options()).await.unwrap();
+        node.append(announce("imdb:tt0000001")).await.unwrap();
+        let store = node.store_suspension();
+        node.swarm().suspend().await.unwrap();
+        store.suspend().unwrap();
+
+        let (done, appended) = std::sync::mpsc::channel();
+        let writer = node.clone();
+        let op = announce("imdb:tt0000002");
+        let runtime = tokio::runtime::Handle::current();
+        std::thread::spawn(move || {
+            let _ = done.send(
+                runtime
+                    .block_on(writer.append(op))
+                    .map_err(|e| e.to_string()),
+            );
+        });
+        assert!(
+            appended.recv_timeout(Duration::from_millis(300)).is_err(),
+            "a write waits while the store is suspended"
+        );
+        let resumer = store.clone();
+        std::thread::spawn(move || resumer.resume())
+            .join()
+            .unwrap()
+            .unwrap();
+        appended
+            .recv_timeout(Duration::from_secs(10))
+            .expect("the write finishes after the resume")
+            .unwrap();
+        node.swarm().resume().await.unwrap();
+
+        node.swarm().suspend().await.unwrap();
+        store.suspend().unwrap();
+        let (done, closed) = std::sync::mpsc::channel();
+        let closer = node.clone();
+        let runtime = tokio::runtime::Handle::current();
+        std::thread::spawn(move || {
+            let _ = done.send(runtime.block_on(closer.close()).map_err(|e| e.to_string()));
+        });
+        closed
+            .recv_timeout(Duration::from_secs(10))
+            .expect("close resumes a suspended store")
+            .unwrap();
+        let node = create_node(options()).await.unwrap();
+        assert_eq!(
+            titles(node.search(None, SearchOptions::default()).await.unwrap()),
+            ["imdb:tt0000001", "imdb:tt0000002"]
+        );
+        node.close().await.unwrap();
+    }
+
+    /// `close()` of a node whose suspended store cannot reopen closes the store instead: a write
+    /// waiting on it fails, and the close returns.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_node_whose_store_cannot_reopen_still_closes() {
+        use crate::node::api::Swarm as _;
+        use std::time::Duration;
+
+        let dir = tempfile::tempdir().unwrap();
+        let node = create_node(
+            json!({ "storage": dir.path(), "bootstrap": ["127.0.0.1:9"], "worklet": true }),
+        )
+        .await
+        .unwrap();
+        let store = node.store_suspension();
+        node.swarm().suspend().await.unwrap();
+        store.suspend().unwrap();
+        // RocksDB cannot reopen a database whose folder became a file.
+        let db = dir.path().join("corestore").join("db");
+        std::fs::rename(&db, dir.path().join("db-aside")).unwrap();
+        std::fs::write(&db, b"not a database").unwrap();
+        assert!(store.resume().is_err());
+
+        let runtime = tokio::runtime::Handle::current();
+        let (done, appended) = std::sync::mpsc::channel();
+        let writer = node.clone();
+        let op = json!({
+            "type": "announce", "id": "imdb:tt0000001", "title": "imdb:tt0000001", "size": 1,
+            "sha256": "33".repeat(32), "blobs": "22".repeat(32),
+            "blob": { "blockOffset": 0, "blockLength": 1, "byteOffset": 0, "byteLength": 1 }
+        });
+        let writing = runtime.clone();
+        std::thread::spawn(move || {
+            let _ = done.send(writing.block_on(writer.append(op)).is_ok());
+        });
+        assert!(
+            appended.recv_timeout(Duration::from_millis(300)).is_err(),
+            "a write waits while the store is suspended"
+        );
+        let (done, closed) = std::sync::mpsc::channel();
+        let closer = node.clone();
+        std::thread::spawn(move || {
+            let _ = done.send(runtime.block_on(closer.close()).map_err(|e| e.to_string()));
+        });
+        closed
+            .recv_timeout(Duration::from_secs(10))
+            .expect("close returns")
+            .unwrap();
+        assert!(
+            !appended
+                .recv_timeout(Duration::from_secs(10))
+                .expect("the waiting write wakes"),
+            "the waiting write fails on the closed store"
+        );
     }
 
     #[tokio::test]

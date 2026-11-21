@@ -92,6 +92,47 @@ mod fake {
         }
     }
 
+    /// The fake's store: [`Gate::access`] waits while it is parked, as a store access does.
+    #[derive(Default)]
+    pub struct Gate {
+        /// (parked, closed)
+        state: Mutex<(bool, bool)>,
+        woke: Condvar,
+    }
+
+    impl Gate {
+        fn state(&self) -> std::sync::MutexGuard<'_, (bool, bool)> {
+            self.state.lock().unwrap_or_else(|e| e.into_inner())
+        }
+
+        pub fn parked(&self) -> bool {
+            self.state().0
+        }
+
+        fn access(&self) {
+            let mut state = self.state();
+            while state.0 && !state.1 {
+                state = self.woke.wait(state).unwrap_or_else(|e| e.into_inner());
+            }
+        }
+    }
+
+    impl StoreSuspension for Gate {
+        fn suspend(&self) -> std::io::Result<()> {
+            self.state().0 = true;
+            Ok(())
+        }
+        fn resume(&self) -> std::io::Result<()> {
+            self.state().0 = false;
+            self.woke.notify_all();
+            Ok(())
+        }
+        fn close(&self) {
+            self.state().1 = true;
+            self.woke.notify_all();
+        }
+    }
+
     pub struct FakePutSource;
 
     impl PutSource for FakePutSource {
@@ -109,14 +150,16 @@ mod fake {
 
     pub struct FakeNode {
         fixtures: Value,
+        gate: Arc<Gate>,
         lan: Mutex<bool>,
         changes: watch::Sender<u64>,
     }
 
     impl FakeNode {
-        pub fn new(fixtures: Value) -> Self {
+        pub fn new(fixtures: Value, gate: Arc<Gate>) -> Self {
             Self {
                 fixtures,
+                gate,
                 lan: Mutex::new(false),
                 changes: watch::channel(0).0,
             }
@@ -154,6 +197,9 @@ mod fake {
         fn swarm(&self) -> &FakeSwarm {
             static SWARM: FakeSwarm = FakeSwarm;
             &SWARM
+        }
+        fn store_suspension(&self) -> Arc<dyn StoreSuspension> {
+            self.gate.clone()
         }
         fn dht(&self) -> &() {
             &()
@@ -219,6 +265,7 @@ mod fake {
             _id: Option<&str>,
             _options: SearchOptions,
         ) -> Result<Vec<Entry>, FakeError> {
+            self.gate.access();
             Ok(serde_json::from_value(self.fixture("entries")).expect("entries"))
         }
         async fn put(&self, _meta: PutMeta, _source: FakePutSource) -> Result<Announce, FakeError> {
@@ -399,13 +446,17 @@ mod fake {
 
     pub struct FakeFactory {
         pub fixtures: Value,
+        pub gate: Arc<Gate>,
     }
 
     impl NodeFactory for FakeFactory {
         type Node = FakeNode;
         type Error = FakeError;
         async fn create(&self, _options: Value) -> Result<Arc<FakeNode>, FakeError> {
-            Ok(Arc::new(FakeNode::new(self.fixtures.clone())))
+            Ok(Arc::new(FakeNode::new(
+                self.fixtures.clone(),
+                self.gate.clone(),
+            )))
         }
     }
 
@@ -644,6 +695,7 @@ fn run_scenario(scenario: &Value) -> Vec<String> {
         Adapters {
             factory: Arc::new(FakeFactory {
                 fixtures: fixtures.clone(),
+                gate: Arc::default(),
             }),
             clock: clock.clone(),
             lan: Arc::new(FakeLan {
@@ -743,4 +795,116 @@ fn backend_processes_lines_on_owned_thread() {
     );
     backend.shutdown();
     assert!(backend.send("{}").is_err());
+}
+
+const LONG: std::time::Duration = std::time::Duration::from_secs(20);
+/// How long a request must stay unanswered to count as waiting in the store.
+const BLOCKED: std::time::Duration = std::time::Duration::from_millis(300);
+
+/// A started backend over the fakes, whose node store is `gate`; the lines it writes arrive
+/// on the receiver.
+fn gated_backend(gate: &Arc<Gate>) -> (Backend, std::sync::mpsc::Receiver<Value>) {
+    let fixtures = scenario()["fixtures"].clone();
+    let (sink, lines) = std::sync::mpsc::channel();
+    let backend = Backend::spawn_with(
+        json!({}),
+        Adapters {
+            factory: Arc::new(FakeFactory {
+                fixtures: fixtures.clone(),
+                gate: gate.clone(),
+            }),
+            clock: Arc::new(TestClock::new(0)),
+            lan: Arc::new(FakeLan {
+                interfaces: Arc::default(),
+                events: Mutex::new(Vec::new()),
+            }),
+            api: Some(Arc::new(FakeApi {
+                url: format!("http://127.0.0.1:{}", fixtures["apiPort"].as_u64().unwrap()),
+                notified: Mutex::new(Vec::new()),
+            })),
+            cast: Some(Arc::new(FakeCastFactory { fixtures })),
+        },
+        move |line: String| {
+            let _ = sink.send(serde_json::from_str(line.trim()).expect("a JSON line"));
+        },
+    )
+    .expect("backend starts");
+    backend
+        .send(r#"{"id":1,"method":"start","params":{"trackersDir":"/tmp/trackers","defaultFolder":"default","settings":{}}}"#)
+        .unwrap();
+    let started = reply(&lines, 1, LONG).expect("start answers");
+    assert!(started.get("error").is_none(), "start failed: {started}");
+    (backend, lines)
+}
+
+/// The response to `id`, skipping other lines, if it comes within `wait`.
+fn reply(
+    lines: &std::sync::mpsc::Receiver<Value>,
+    id: u64,
+    wait: std::time::Duration,
+) -> Option<Value> {
+    let deadline = std::time::Instant::now() + wait;
+    loop {
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        let line = lines.recv_timeout(remaining).ok()?;
+        if line.get("id").and_then(Value::as_u64) == Some(id) {
+            return Some(line);
+        }
+    }
+}
+
+/// Waits until the backend has parked the gate.
+fn until_parked(gate: &Gate) {
+    let deadline = std::time::Instant::now() + LONG;
+    while !gate.parked() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the store was never parked"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
+
+/// `Backend::resume` gets through while the loop waits in the suspended store.
+#[test]
+fn backend_resume_reaches_a_loop_blocked_in_the_store() {
+    let gate = Arc::new(Gate::default());
+    let (backend, lines) = gated_backend(&gate);
+    backend.suspend(0);
+    until_parked(&gate);
+    backend
+        .send(r#"{"id":2,"method":"search","params":{}}"#)
+        .unwrap();
+    assert!(
+        reply(&lines, 2, BLOCKED).is_none(),
+        "the loop waits in the store"
+    );
+    backend.resume();
+    assert!(
+        reply(&lines, 2, LONG).is_some(),
+        "the search answers after the resume"
+    );
+    backend.shutdown();
+}
+
+/// `Backend::shutdown` returns while the loop waits in the suspended store.
+#[test]
+fn backend_shutdown_while_the_loop_waits_in_the_store_returns() {
+    let gate = Arc::new(Gate::default());
+    let (backend, lines) = gated_backend(&gate);
+    backend.suspend(0);
+    until_parked(&gate);
+    backend
+        .send(r#"{"id":2,"method":"search","params":{}}"#)
+        .unwrap();
+    assert!(
+        reply(&lines, 2, BLOCKED).is_none(),
+        "the loop waits in the store"
+    );
+    let (done, finished) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        backend.shutdown();
+        let _ = done.send(());
+    });
+    finished.recv_timeout(LONG).expect("shutdown returns");
 }
