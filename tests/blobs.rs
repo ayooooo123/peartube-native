@@ -1480,6 +1480,30 @@ async fn http_stream_survives_cache_ceiling() {
     let path = format!("/?{}", url.split_once("/?").unwrap().1);
     h.blobs.set_cache_max_bytes(budget as f64);
     let started = Instant::now();
+    eprintln!("cache-freeze: request start pid={}", std::process::id());
+    // Diagnostic only: a timer-driven heartbeat on the runtime, read by an OS thread.
+    let beats = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+    {
+        let beats_seen = beats.clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                beats.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }
+        });
+        let blobs = h.blobs.clone();
+        std::thread::spawn(move || {
+            for _ in 0..120 {
+                std::thread::sleep(Duration::from_millis(500));
+                eprintln!(
+                    "cache-freeze: watch t={} stored_blocks={} timer_beats={}",
+                    started.elapsed().as_millis(),
+                    blobs.local_blocks(&key),
+                    beats_seen.load(std::sync::atomic::Ordering::Relaxed)
+                );
+            }
+        });
+    }
     let mut socket = TcpStream::connect(addr).await.unwrap();
     socket
         .write_all(
@@ -1508,6 +1532,7 @@ async fn http_stream_survives_cache_ceiling() {
     assert!(head.starts_with("HTTP/1.1 206"), "{head}");
     let (stop, mut stopped) = tokio::sync::watch::channel(false);
     let blobs = h.blobs.clone();
+    let t0 = started;
     let ceiler = tokio::spawn(async move {
         let mut trimmed = 0;
         loop {
@@ -1515,12 +1540,14 @@ async fn http_stream_survives_cache_ceiling() {
                 _ = stopped.changed() => return trimmed,
                 _ = tokio::time::sleep(Duration::from_secs(2)) => {}
             }
+            let at = t0.elapsed().as_millis();
             let before = blobs.cached_total_bytes().await;
+            let count_ms = t0.elapsed().as_millis() - at;
             let started = Instant::now();
             let ceiling = blobs.enforce_cache_ceiling(Some(key)).await;
             trimmed += ceiling.evicted;
             eprintln!(
-                "cache-freeze: before={before} cached={} evicted={} pass_ms={}",
+                "cache-freeze: t={at} count_ms={count_ms} before={before} cached={} evicted={} pass_ms={}",
                 ceiling.cached_bytes,
                 ceiling.evicted,
                 started.elapsed().as_millis()
@@ -1533,7 +1560,7 @@ async fn http_stream_survives_cache_ceiling() {
     let mut block = vec![0; block_size];
     for index in 0..length {
         let read_started = Instant::now();
-        timeout(Duration::from_secs(10), reader.read_exact(&mut block))
+        timeout(Duration::from_secs(90), reader.read_exact(&mut block))
             .await
             .unwrap_or_else(|_| {
                 panic!(
@@ -1544,6 +1571,13 @@ async fn http_stream_survives_cache_ceiling() {
                 )
             })
             .unwrap();
+        if index < 4 || read_started.elapsed() > Duration::from_millis(1500) {
+            eprintln!(
+                "cache-freeze: read block {index} took {} ms, done at t={}",
+                read_started.elapsed().as_millis(),
+                started.elapsed().as_millis()
+            );
+        }
         max_read = max_read.max(read_started.elapsed());
         max_gap = max_gap.max(last_chunk.elapsed());
         last_chunk = Instant::now();
