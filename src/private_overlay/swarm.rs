@@ -15,12 +15,17 @@ use tokio::sync::Mutex as AsyncMutex;
 use super::dht::{
     self, Connection, Dht, NoiseConnection, NoiseOpened, PendingNoise, RawStream, ResolveAddress,
 };
-use super::rpc::{Handler, Rpc, attach_rpc_channel};
 use super::{
-    Error, Frame, GUARD_TOPICS, KeyPair, ROUTE_TTL_MS, RV_EPOCH_MS, Result, SignedCard,
-    decode_and_verify_card, decode_buf_arr, encode_signed_card, now_ms, op, open_box,
-    peer_seal_key, rand_bytes, rv_epoch, rv_seal_key, rv_topic, seal_box, sign_dht_mutable,
+    Error, GUARD_CHANNEL, GUARD_TOPICS, HELLO_TIMEOUT, KeyPair, ROUTE_TTL_MS, RV_EPOCH_MS, Result,
+    SignedCard, decode_and_verify_card, encode_signed_card, is_card, is_u32, now_ms, op, open_box,
+    peer_seal_key, rand_bytes, ready, rv_epoch, rv_seal_key, rv_topic, seal_box, sign_dht_mutable,
     verify_dht_mutable,
+};
+use crate::control_channel::{Control, ControlHandlers, open_channel};
+use crate::control_protocol::Body;
+use crate::wire::peartube::{
+    GuardAck, GuardCards, GuardCircuitDead, GuardDial, GuardGetResult, GuardHello, GuardKey,
+    GuardOpen, GuardPutMutable, GuardReady, GuardRegister, GuardRvRegister, GuardRvSlot,
 };
 use futures_util::future::BoxFuture;
 
@@ -83,12 +88,7 @@ impl PrivateRouting {
         ExposureReport {
             hops: 2,
             direct_destination_sends: 0,
-            guards: self
-                .inner
-                .guards
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .len(),
+            guards: self.inner.usable_guards(),
             transport_port: port,
         }
     }
@@ -149,21 +149,63 @@ struct Admitted {
     closed: tokio::sync::watch::Receiver<bool>,
 }
 
+/// The inner streams on a guard's circuits, by UDX id, with their close; `None` once the guard
+/// is gone.
+type Streams = Mutex<Option<HashMap<u32, Arc<dyn Fn() + Send + Sync>>>>;
+
 struct Guard {
     public_key: [u8; 32],
     bucket: String,
     conn: Arc<dyn Connection>,
-    rpc: Mutex<Option<Arc<Rpc>>>,
-    streams: Mutex<HashMap<u32, Arc<dyn Fn() + Send + Sync>>>,
+    rpc: Mutex<Option<Control>>,
+    streams: Streams,
 }
 
 impl Guard {
-    fn rpc(&self) -> Option<Arc<Rpc>> {
+    fn rpc(&self) -> Option<Control> {
         self.rpc.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
+    /// `isClosed(g.rpc)`.
     fn rpc_closed(&self) -> bool {
-        self.rpc().is_none_or(|rpc| rpc.is_closed())
+        self.conn.is_closed() || self.rpc().is_none_or(|rpc| rpc.is_closed())
+    }
+
+    /// Takes the inner stream of a circuit through this guard, closed with it. A circuit that
+    /// completes after the guard went is refused (`false`): checked under the lock the guard's
+    /// teardown drains the streams with.
+    fn track(&self, udx_id: u32, close: Arc<dyn Fn() + Send + Sync>) -> bool {
+        let mut streams = self.streams.lock().unwrap_or_else(|e| e.into_inner());
+        match streams.as_mut() {
+            Some(streams) if !self.conn.is_closed() => {
+                streams.insert(udx_id, close);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    fn untrack(&self, udx_id: u32) {
+        if let Some(streams) = self
+            .streams
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_mut()
+        {
+            streams.remove(&udx_id);
+        }
+    }
+}
+
+/// Closes a guard's dedicated connection unless disarmed: a guard setup that is dropped or
+/// fails leaves no connection behind.
+struct Setup(Option<Arc<dyn Connection>>);
+
+impl Drop for Setup {
+    fn drop(&mut self) {
+        if let Some(conn) = self.0.take() {
+            conn.destroy();
+        }
     }
 }
 
@@ -256,6 +298,17 @@ impl SwarmInner {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .clone()
+    }
+
+    /// `usableGuards()`: guards in the list whose channel is open on a live connection. Every
+    /// "two guards" gate counts these; a guard that just closed may still be in the list.
+    fn usable_guards(&self) -> usize {
+        self.guards
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .iter()
+            .filter(|guard| !guard.rpc_closed())
+            .count()
     }
 
     fn bucket_of(&self, conn: &Arc<dyn Connection>) -> Option<String> {
@@ -393,68 +446,100 @@ impl SwarmInner {
                 .connect(public_key, &self.transport_key_pair)
                 .await
                 .ok()?;
+            // Until the guard is accepted, a failure or a dropped future closes the connection.
+            let mut setup = Setup(Some(Arc::clone(&conn)));
             if self.closing() || self.suspended() {
-                conn.destroy();
                 return None;
             }
-            let Some(bucket) = self.bucket_of(&conn) else {
-                conn.destroy();
-                return None;
-            };
+            let bucket = self.bucket_of(&conn)?;
             let guard = Arc::new(Guard {
                 public_key,
                 bucket,
                 conn: Arc::clone(&conn),
                 rpc: Mutex::new(None),
-                streams: Mutex::new(HashMap::new()),
+                streams: Mutex::new(Some(HashMap::new())),
             });
-            let handler: Handler = {
-                let inner = Arc::clone(self);
-                let guard = Arc::clone(&guard);
-                Arc::new(move |frame: Frame, send| {
-                    let inner = Arc::clone(&inner);
-                    let guard = Arc::clone(&guard);
-                    Box::pin(async move {
-                        handle_guard_request(inner, guard, frame, send).await;
+            // The guard asks this endpoint to take an incoming circuit for its route, and tells
+            // it when a circuit dies. The channel holds the swarm and the guard weakly: it never
+            // keeps either alive.
+            let handlers = ControlHandlers {
+                handled: (1 << op::INC_OPEN) | (1 << op::CIRCUIT_DEAD),
+                on_request: Some({
+                    let inner = Arc::downgrade(self);
+                    let guard = Arc::downgrade(&guard);
+                    Arc::new(move |_, body, _| {
+                        let live = inner.upgrade().zip(guard.upgrade());
+                        Box::pin(async move {
+                            let Body::GuardOpen(open) = body else {
+                                return Err("Unknown operation".into());
+                            };
+                            let Some((inner, guard)) = live else {
+                                return Ok(NOT_READY.into());
+                            };
+                            Ok(inc_open(inner, guard, open).await.into())
+                        })
                     })
-                })
+                }),
+                on_event: Some({
+                    let guard = Arc::downgrade(&guard);
+                    Arc::new(move |_, body, _| {
+                        if let (Some(guard), Body::GuardCircuitDead(GuardCircuitDead { udx_id })) =
+                            (guard.upgrade(), body)
+                        {
+                            let close = u32::try_from(udx_id).ok().and_then(|id| {
+                                guard
+                                    .streams
+                                    .lock()
+                                    .unwrap_or_else(|e| e.into_inner())
+                                    .as_ref()?
+                                    .get(&id)
+                                    .cloned()
+                            });
+                            if let Some(close) = close {
+                                close();
+                            }
+                        }
+                    })
+                }),
+                // A guard channel that closes, at open or later, leaves the guard unusable:
+                // nothing else runs on its dedicated connection.
+                on_close: Some({
+                    let conn = Arc::clone(&conn);
+                    Arc::new(move |_| conn.destroy())
+                }),
+                ..ControlHandlers::default()
             };
-            let mux = match self.dht.protomux(&conn).await {
-                Ok(mux) => mux,
-                Err(_) => {
-                    conn.destroy();
-                    return None;
+            // A guard on another version refuses the channel, and one that refuses the
+            // endpoint is no better: it is not usable, its dedicated connection is closed, and
+            // this endpoint never goes around it.
+            let opened = async {
+                let mux = self.dht.protomux(&conn).await?;
+                mux.ready();
+                let rpc = open_channel(&mux, &GUARD_CHANNEL, handlers, HELLO_TIMEOUT).await?;
+                let hello = GuardHello {
+                    role: "endpoint".into(),
+                };
+                match rpc.call(op::HELLO, hello.into(), HELLO_TIMEOUT).await? {
+                    Body::GuardAck(GuardAck { status: 1 }) => Ok(rpc),
+                    _ => Err(Error::Rejected("Guard refused the endpoint")),
                 }
-            };
-            let rpc = match attach_rpc_channel(&mux, Arc::clone(&conn), Some(handler)) {
-                Ok(rpc) => rpc,
-                Err(_) => {
-                    conn.destroy();
-                    return None;
-                }
-            };
-            mux.ready();
-            *guard.rpc.lock().unwrap_or_else(|e| e.into_inner()) = Some(Arc::clone(&rpc));
-            if rpc
-                .request(op::HELLO, op::HELLO, b"endpoint", 4000)
-                .await
-                .is_err()
-            {
-                conn.destroy();
-                return None;
             }
+            .await;
+            *guard.rpc.lock().unwrap_or_else(|e| e.into_inner()) = Some(opened.ok()?);
+            setup.0 = None;
             let inner = Arc::clone(self);
             let watched = Arc::clone(&guard);
             tokio::spawn(async move {
                 conn.closed().await;
-                let streams: Vec<Arc<dyn Fn() + Send + Sync>> = watched
+                watched.rpc.lock().unwrap_or_else(|e| e.into_inner()).take();
+                // Closed under the lock `track` uses: a circuit completing later is refused.
+                let streams = watched
                     .streams
                     .lock()
                     .unwrap_or_else(|e| e.into_inner())
-                    .drain()
-                    .map(|(_, close)| close)
-                    .collect();
-                for close in streams {
+                    .take()
+                    .unwrap_or_default();
+                for close in streams.into_values() {
                     close();
                 }
                 {
@@ -464,7 +549,7 @@ impl SwarmInner {
                     }
                 }
                 if !inner.closing() && !inner.suspended() {
-                    if inner.guards.lock().unwrap_or_else(|e| e.into_inner()).len() < 2 {
+                    if inner.usable_guards() < 2 {
                         inner.set_state(RoutingState::Bootstrapping);
                     }
                     let inner = Arc::clone(&inner);
@@ -483,7 +568,7 @@ impl SwarmInner {
             let mut guards = self.guards.lock().unwrap_or_else(|e| e.into_inner());
             guards.retain(|guard| !guard.rpc_closed());
         }
-        if self.guards.lock().unwrap_or_else(|e| e.into_inner()).len() >= 2 {
+        if self.usable_guards() >= 2 {
             return true;
         }
         let mut lookups = FuturesUnordered::new();
@@ -522,7 +607,7 @@ impl SwarmInner {
             .map(|guard| guard.bucket.clone())
             .collect();
         for public_key in candidates {
-            if self.guard_list().len() >= 2 || self.closing() || self.suspended() {
+            if self.usable_guards() >= 2 || self.closing() || self.suspended() {
                 break;
             }
             let Some(guard) = self.connect_candidate_guard(public_key).await else {
@@ -533,12 +618,14 @@ impl SwarmInner {
                 continue;
             }
             used.insert(guard.bucket.clone());
-            self.guards
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .push(guard);
+            // Admitted under the lock its close watcher removes it with: a guard whose
+            // connection already closed is not added.
+            let mut guards = self.guards.lock().unwrap_or_else(|e| e.into_inner());
+            if !guard.rpc_closed() {
+                guards.push(guard);
+            }
         }
-        self.guard_list().len() >= 2
+        self.usable_guards() >= 2
     }
 
     /// `publishPresence()`.
@@ -546,10 +633,10 @@ impl SwarmInner {
         if self.closing() || self.suspended() {
             return Ok(false);
         }
-        let guards = self.guard_list();
-        if guards.len() < 2 {
+        if self.usable_guards() < 2 {
             return Ok(false);
         }
+        let guards = self.guard_list();
         let primary = Arc::clone(&guards[0]);
         let Some(primary_rpc) = primary.rpc() else {
             return Ok(false);
@@ -577,13 +664,14 @@ impl SwarmInner {
                 })
             || now >= self.next_renewal_at.load(Ordering::Relaxed);
         if need_card_renewal {
-            let mut ask = Vec::with_capacity(36);
-            ask.extend_from_slice(&token);
-            ask.extend_from_slice(&(ROUTE_TTL_MS as u32).to_be_bytes());
+            let register = GuardRegister {
+                route_token: token,
+                ttl_ms: ROUTE_TTL_MS,
+            };
             let ack = primary_rpc
-                .request(op::REGISTER, op::REGISTER_ACK, &ask, 5000)
+                .call(op::REGISTER, register.into(), Duration::from_millis(5000))
                 .await?;
-            if ack.first() != Some(&1) {
+            if !matches!(ack, Body::GuardAck(GuardAck { status: 1 })) {
                 return Err(Error::Rejected("Guard rejected route"));
             }
             let seq = self.card_seq.fetch_add(1, Ordering::Relaxed);
@@ -595,16 +683,16 @@ impl SwarmInner {
                 now + ROUTE_TTL_MS,
             );
             let sealed = seal_box(&card, &peer_seal_key(&self.key_pair.public_key));
-            let signature = sign_dht_mutable(seq, &sealed, &self.key_pair);
-            let mut put = Vec::with_capacity(32 + 4 + 64 + sealed.len());
-            put.extend_from_slice(&self.key_pair.public_key);
-            put.extend_from_slice(&(seq as u32).to_be_bytes());
-            put.extend_from_slice(&signature);
-            put.extend_from_slice(&sealed);
+            let put = GuardPutMutable {
+                public_key: self.key_pair.public_key,
+                seq,
+                signature: sign_dht_mutable(seq, &sealed, &self.key_pair),
+                value: sealed.into(),
+            };
             let ack = primary_rpc
-                .request(op::PUT_MUTABLE, op::PUT_MUTABLE_ACK, &put, 8000)
+                .call(op::PUT_MUTABLE, put.into(), Duration::from_millis(8000))
                 .await?;
-            if ack.first() != Some(&1) {
+            if !matches!(ack, Body::GuardAck(GuardAck { status: 1 })) {
                 return Err(Error::Rejected("Guard failed to publish mutable card"));
             }
             *self.cached_card.lock().unwrap_or_else(|e| e.into_inner()) = Some(card);
@@ -635,16 +723,22 @@ impl SwarmInner {
             }
             let topic = rv_topic(&source.source_key, &epoch);
             let sealed_card = seal_box(&cached_card, &rv_seal_key(&source.source_key));
-            let mut ask = Vec::with_capacity(32 + 16 + 4 + sealed_card.len());
-            ask.extend_from_slice(&topic);
-            ask.extend_from_slice(&source.slot_id);
-            ask.extend_from_slice(&(ROUTE_TTL_MS as u32).to_be_bytes());
-            ask.extend_from_slice(&sealed_card);
-            let ok = primary_rpc
-                .request(op::RV_REGISTER, op::RV_REGISTER_ACK, &ask, 6000)
-                .await
-                .map(|reply| reply.first() == Some(&1))
-                .unwrap_or(false);
+            let register = GuardRvRegister {
+                topic,
+                slot_id: source.slot_id,
+                ttl_ms: ROUTE_TTL_MS,
+                sealed_card: sealed_card.into(),
+            };
+            let ok = matches!(
+                primary_rpc
+                    .call(
+                        op::RV_REGISTER,
+                        register.into(),
+                        Duration::from_millis(6000)
+                    )
+                    .await,
+                Ok(Body::GuardAck(GuardAck { status: 1 }))
+            );
             if ok {
                 source.set_stamp(SourceStamp {
                     epoch: epoch.clone(),
@@ -653,6 +747,11 @@ impl SwarmInner {
                     next_renewal_at: now + ROUTE_TTL_MS / 2,
                 });
             }
+        }
+        // A guard may have gone during the awaits above: READY only with two still usable;
+        // otherwise the state stays what that guard's close set.
+        if self.usable_guards() < 2 {
+            return Ok(false);
         }
         self.set_state(RoutingState::Ready);
         Ok(true)
@@ -719,7 +818,7 @@ impl SwarmInner {
                 .remove(&peer);
             return;
         }
-        if self.guard_list().len() < 2 && !self.ensure_guards_and_publish().await {
+        if self.usable_guards() < 2 && !self.ensure_guards_and_publish().await {
             self.dialing
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
@@ -739,22 +838,31 @@ impl SwarmInner {
             let result = async {
                 let stream = dht::alloc_raw_stream(&self.dht, &source_guard.conn, true).await?;
                 raw = Some(Arc::clone(&stream));
-                let mut ask = Vec::with_capacity(68 + source_guard.bucket.len());
-                ask.extend_from_slice(&card.guard_public_key);
-                ask.extend_from_slice(&card.route_token);
-                ask.extend_from_slice(&stream.id().to_be_bytes());
-                ask.extend_from_slice(source_guard.bucket.as_bytes());
-                let reply = source_rpc
-                    .request(op::DIAL_OPEN, op::DIAL_READY, &ask, 10_000)
-                    .await?;
-                let non_diverse = reply.len() == 5 && reply[0] == 2;
-                if reply.len() != 5 || reply[0] != 1 {
-                    if non_diverse {
+                // A guard may have gone while the stream was allocated: no dial with fewer
+                // than two usable guards.
+                if self.usable_guards() < 2 {
+                    return Err(Error::Closed("Fewer than two usable guards"));
+                }
+                let dial = GuardDial {
+                    guard_key: card.guard_public_key,
+                    route_token: card.route_token,
+                    udx_id: u64::from(stream.id()),
+                    bucket: source_guard.bucket.clone(),
+                };
+                let reply = match source_rpc
+                    .call(op::DIAL_OPEN, dial.into(), Duration::from_millis(10_000))
+                    .await?
+                {
+                    Body::GuardReady(reply) => reply,
+                    _ => return Err(Error::Rejected("Guard rejected dial")),
+                };
+                // Bounds first, then the outcome: status 2 (not diverse) only with a valid id.
+                let Some(remote) = ready(&reply) else {
+                    if reply.status == 2 && is_u32(reply.udx_id) {
                         return Err(Error::Rejected("Non-diverse hop"));
                     }
                     return Err(Error::Rejected("Guard rejected dial"));
-                }
-                let remote = u32::from_be_bytes([reply[1], reply[2], reply[3], reply[4]]);
+                };
                 self.dht
                     .connect_raw_stream(&source_guard.conn, &stream, remote)
                     .await?;
@@ -769,21 +877,16 @@ impl SwarmInner {
                         8000,
                     )
                     .await?;
-                source_guard
-                    .streams
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .insert(udx_id, Arc::clone(&pending.close));
+                if !source_guard.track(udx_id, Arc::clone(&pending.close)) {
+                    (pending.close)();
+                    return Err(Error::Closed("Guard closed"));
+                }
                 let close = Arc::clone(&pending.close);
                 let guard = Arc::clone(&source_guard);
                 let mut closed = pending.closed.clone();
                 tokio::spawn(async move {
                     let _ = closed.wait_for(|closed| *closed).await;
-                    guard
-                        .streams
-                        .lock()
-                        .unwrap_or_else(|e| e.into_inner())
-                        .remove(&udx_id);
+                    guard.untrack(udx_id);
                     close();
                 });
                 self.admit_inner_stream(pending, Some(card.inner_public_key));
@@ -836,7 +939,7 @@ impl SwarmInner {
         {
             return;
         }
-        if self.guard_list().len() < 2 && !self.ensure_guards_and_publish().await {
+        if self.usable_guards() < 2 && !self.ensure_guards_and_publish().await {
             return;
         }
         let Some(guard) = self.guard_list().first().cloned() else {
@@ -845,19 +948,20 @@ impl SwarmInner {
         let Some(rpc) = guard.rpc() else {
             return;
         };
-        let Ok(reply) = rpc
-            .request(op::GET_MUTABLE, op::GET_MUTABLE_REPLY, &public_key, 6000)
+        let key = GuardKey { key: public_key };
+        let Ok(Body::GuardGetResult(GuardGetResult {
+            record: Some(record),
+        })) = rpc
+            .call(op::GET_MUTABLE, key.into(), Duration::from_millis(6000))
             .await
         else {
             return;
         };
-        if reply.len() <= 69 || reply[0] != 1 {
+        if !is_u32(record.seq) || !is_card(&record.value) {
             return;
         }
-        let seq = u32::from_be_bytes([reply[1], reply[2], reply[3], reply[4]]) as u64;
-        let signature = &reply[5..69];
-        let value = &reply[69..];
-        if !verify_dht_mutable(signature, seq, value, &public_key) {
+        let value = &record.value[..];
+        if !verify_dht_mutable(&record.signature, record.seq, value, &public_key) {
             return;
         }
         let Some(plain) = open_box(value, &peer_seal_key(&public_key)) else {
@@ -876,7 +980,7 @@ impl SwarmInner {
         if self.closing() || self.suspended() {
             return;
         }
-        if self.guard_list().len() < 2 && !self.ensure_guards_and_publish().await {
+        if self.usable_guards() < 2 && !self.ensure_guards_and_publish().await {
             return;
         }
         let Some(guard) = self.guard_list().first().cloned() else {
@@ -890,14 +994,15 @@ impl SwarmInner {
         let seal_key = rv_seal_key(&source.source_key);
         for epoch in [epoch_now, epoch_now.saturating_sub(1)] {
             let topic = rv_topic(&source.source_key, &epoch.to_string());
-            let Ok(raw) = rpc
-                .request(op::RV_LOOKUP, op::RV_LOOKUP_REPLY, &topic, 6000)
+            let key = GuardKey { key: topic };
+            let Ok(Body::GuardCards(GuardCards { cards })) = rpc
+                .call(op::RV_LOOKUP, key.into(), Duration::from_millis(6000))
                 .await
             else {
                 continue;
             };
             let at = now_ms();
-            for sealed in decode_buf_arr(&raw).unwrap_or_default() {
+            for sealed in cards {
                 let Some(plain) = open_box(&sealed, &seal_key) else {
                     continue;
                 };
@@ -921,7 +1026,7 @@ impl SwarmInner {
             return;
         }
         self.ensure_guards_and_publish().await;
-        if self.guard_list().len() < 2 {
+        if self.usable_guards() < 2 {
             return;
         }
         let mut work: FuturesUnordered<BoxFuture<'static, ()>> = FuturesUnordered::new();
@@ -971,53 +1076,32 @@ impl SwarmInner {
             return;
         };
         let topic = rv_topic(&source.source_key, &epoch);
-        let mut payload = Vec::with_capacity(48);
-        payload.extend_from_slice(&topic);
-        payload.extend_from_slice(&source.slot_id);
-        rpc.sender().send(op::RV_UNREGISTER, 0, &payload);
+        let slot = GuardRvSlot {
+            topic,
+            slot_id: source.slot_id,
+        };
+        // One event, sent as it comes and never resent.
+        rpc.push(op::RV_UNREGISTER, slot.into());
     }
 }
 
-/// `OP_INC_OPEN` / `OP_CIRCUIT_DEAD` on an endpoint's guard connection.
-async fn handle_guard_request(
-    inner: Arc<SwarmInner>,
-    guard: Arc<Guard>,
-    frame: Frame,
-    send: super::rpc::RpcSender,
-) {
-    if frame.op == op::CIRCUIT_DEAD {
-        if frame.payload.len() == 4 {
-            let id = u32::from_be_bytes([
-                frame.payload[0],
-                frame.payload[1],
-                frame.payload[2],
-                frame.payload[3],
-            ]);
-            let close = guard
-                .streams
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .get(&id)
-                .cloned();
-            if let Some(close) = close {
-                close();
-            }
-        }
-        return;
+/// A circuit that was not opened.
+const NOT_READY: GuardReady = GuardReady {
+    status: 0,
+    udx_id: 0,
+};
+
+/// `incOpen` on an endpoint's guard channel: take the incoming circuit for this route.
+async fn inc_open(inner: Arc<SwarmInner>, guard: Arc<Guard>, open: GuardOpen) -> GuardReady {
+    if inner.closing()
+        || inner.suspended()
+        || open.route_token != inner.route_token()
+        || !is_u32(open.udx_id)
+        || open.udx_id == 0
+    {
+        return NOT_READY;
     }
-    if frame.op != op::INC_OPEN {
-        return;
-    }
-    let payload = &frame.payload;
-    let accepted = !inner.closing()
-        && !inner.suspended()
-        && payload.len() == 36
-        && payload[..32] == inner.route_token()[..];
-    if !accepted {
-        send.send(op::INC_READY, frame.id, &[0; 5]);
-        return;
-    }
-    let caller_udx = u32::from_be_bytes([payload[32], payload[33], payload[34], payload[35]]);
+    let caller_udx = open.udx_id as u32;
     let result = async {
         let stream = dht::alloc_raw_stream(&inner.dht, &guard.conn, true).await?;
         inner
@@ -1029,22 +1113,20 @@ async fn handle_guard_request(
             .dht
             .open_noise(false, Arc::clone(&stream), &inner.key_pair, None, 8000)
             .await?;
-        guard
-            .streams
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .insert(udx_id, Arc::clone(&pending.close));
+        // The guard may have gone while this was set up: then the circuit, and the handshake
+        // under way on it, are closed and nothing is admitted.
+        if !guard.track(udx_id, Arc::clone(&pending.close)) {
+            (pending.close)();
+            stream.destroy();
+            return Err(Error::Closed("Guard closed"));
+        }
         // A responder closes the raw stream when the inner stream closes.
         let close = Arc::clone(&pending.close);
         let guard = Arc::clone(&guard);
         let mut closed = pending.closed.clone();
         tokio::spawn(async move {
             let _ = closed.wait_for(|closed| *closed).await;
-            guard
-                .streams
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .remove(&udx_id);
+            guard.untrack(udx_id);
             close();
             stream.destroy();
         });
@@ -1053,15 +1135,11 @@ async fn handle_guard_request(
     }
     .await;
     match result {
-        Ok(udx_id) => {
-            let mut ready = Vec::with_capacity(5);
-            ready.push(1);
-            ready.extend_from_slice(&udx_id.to_be_bytes());
-            send.send(op::INC_READY, frame.id, &ready);
-        }
-        Err(_) => {
-            send.send(op::INC_READY, frame.id, &[0; 5]);
-        }
+        Ok(udx_id) => GuardReady {
+            status: 1,
+            udx_id: u64::from(udx_id),
+        },
+        Err(_) => NOT_READY,
     }
 }
 
@@ -1429,98 +1507,124 @@ pub async fn publish_standalone_route_card(
     let responder = opts
         .responder_key_pair
         .unwrap_or_else(|| opts.advertised_key_pair.clone());
-    let handler: Handler = {
-        let dht = Arc::clone(&dht);
-        let conn = Arc::clone(&conn);
-        let responder = responder.clone();
-        let on_inner_connection = opts.on_inner_connection.clone();
-        Arc::new(move |frame: Frame, send| {
+    let handlers = ControlHandlers {
+        handled: 1 << op::INC_OPEN,
+        on_request: Some({
             let dht = Arc::clone(&dht);
             let conn = Arc::clone(&conn);
-            let responder = responder.clone();
-            let on_inner_connection = on_inner_connection.clone();
-            Box::pin(async move {
-                if frame.op != op::INC_OPEN || frame.payload.len() != 36 {
-                    return;
-                }
-                let caller = u32::from_be_bytes([
-                    frame.payload[32],
-                    frame.payload[33],
-                    frame.payload[34],
-                    frame.payload[35],
-                ]);
-                let result = async {
-                    let stream = dht::alloc_raw_stream(&dht, &conn, true).await?;
-                    dht.connect_raw_stream(&conn, &stream, caller).await?;
-                    let id = stream.id();
-                    let pending = dht
-                        .open_noise(false, Arc::clone(&stream), &responder, None, 8000)
-                        .await?;
-                    Ok::<(u32, PendingNoise), Error>((id, pending))
-                }
-                .await;
-                match result {
-                    Ok((id, pending)) => {
-                        let mut ready = Vec::with_capacity(5);
-                        ready.push(1);
-                        ready.extend_from_slice(&id.to_be_bytes());
-                        send.send(op::INC_READY, frame.id, &ready);
-                        let PendingNoise {
-                            opened,
-                            close,
-                            closed,
-                        } = pending;
-                        tokio::spawn(async move {
-                            match opened.await {
-                                Ok(opened) => match on_inner_connection {
-                                    Some(on_inner_connection) => {
-                                        on_inner_connection(NoiseConnection {
-                                            remote_public_key: opened.remote_public_key,
-                                            is_initiator: opened.is_initiator,
-                                            handshake_hash: opened.handshake_hash,
-                                            stream: opened.stream,
-                                            close,
-                                            closed,
-                                        })
-                                    }
-                                    None => close(),
-                                },
-                                Err(_) => close(),
-                            }
-                        });
+            let on_inner_connection = opts.on_inner_connection.clone();
+            Arc::new(move |_, body, _| {
+                let dht = Arc::clone(&dht);
+                let conn = Arc::clone(&conn);
+                let responder = responder.clone();
+                let on_inner_connection = on_inner_connection.clone();
+                Box::pin(async move {
+                    let Body::GuardOpen(open) = body else {
+                        return Err("Unknown operation".into());
+                    };
+                    let not_ready = GuardReady {
+                        status: 0,
+                        udx_id: 0,
+                    };
+                    if !is_u32(open.udx_id) || open.udx_id == 0 {
+                        return Ok(not_ready.into());
                     }
-                    Err(_) => {
-                        send.send(op::INC_READY, frame.id, &[0; 5]);
+                    let result = async {
+                        let stream = dht::alloc_raw_stream(&dht, &conn, true).await?;
+                        dht.connect_raw_stream(&conn, &stream, open.udx_id as u32)
+                            .await?;
+                        let id = stream.id();
+                        let pending = dht
+                            .open_noise(false, Arc::clone(&stream), &responder, None, 8000)
+                            .await?;
+                        Ok::<(u32, PendingNoise), Error>((id, pending))
                     }
-                }
+                    .await;
+                    let Ok((id, pending)) = result else {
+                        return Ok(not_ready.into());
+                    };
+                    let PendingNoise {
+                        opened,
+                        close,
+                        closed,
+                    } = pending;
+                    tokio::spawn(async move {
+                        match opened.await {
+                            Ok(opened) => match on_inner_connection {
+                                Some(on_inner_connection) => on_inner_connection(NoiseConnection {
+                                    remote_public_key: opened.remote_public_key,
+                                    is_initiator: opened.is_initiator,
+                                    handshake_hash: opened.handshake_hash,
+                                    stream: opened.stream,
+                                    close,
+                                    closed,
+                                }),
+                                None => close(),
+                            },
+                            Err(_) => close(),
+                        }
+                    });
+                    Ok(GuardReady {
+                        status: 1,
+                        udx_id: u64::from(id),
+                    }
+                    .into())
+                })
             })
-        })
+        }),
+        ..ControlHandlers::default()
     };
-    let mux = dht.protomux(&conn).await?;
-    let rpc = attach_rpc_channel(&mux, Arc::clone(&conn), Some(handler))?;
-    mux.ready();
-    rpc.request(op::HELLO, op::HELLO, b"endpoint", 4000).await?;
-    let mut register = Vec::with_capacity(36);
-    register.extend_from_slice(&route_token);
-    register.extend_from_slice(&(ROUTE_TTL_MS as u32).to_be_bytes());
-    rpc.request(op::REGISTER, op::REGISTER_ACK, &register, 4000)
-        .await?;
-    let seq = 1u64;
-    let card = encode_signed_card(
-        &opts.advertised_key_pair,
-        &opts.guard_public_key,
-        &route_token,
-        seq,
-        now_ms() + ROUTE_TTL_MS,
-    );
-    let sealed = seal_box(&card, &peer_seal_key(&opts.advertised_key_pair.public_key));
-    let mut put = Vec::with_capacity(32 + 4 + 64 + sealed.len());
-    put.extend_from_slice(&opts.advertised_key_pair.public_key);
-    put.extend_from_slice(&(seq as u32).to_be_bytes());
-    put.extend_from_slice(&sign_dht_mutable(seq, &sealed, &opts.advertised_key_pair));
-    put.extend_from_slice(&sealed);
-    rpc.request(op::PUT_MUTABLE, op::PUT_MUTABLE_ACK, &put, 6000)
-        .await?;
+    // Every step must be accepted; on any failure the connection is closed before the error.
+    let published = async {
+        let mux = dht.protomux(&conn).await?;
+        mux.ready();
+        let rpc = open_channel(&mux, &GUARD_CHANNEL, handlers, HELLO_TIMEOUT).await?;
+        let accepted = |answer: Body, refusal| match answer {
+            Body::GuardAck(GuardAck { status: 1 }) => Ok(()),
+            _ => Err(Error::Rejected(refusal)),
+        };
+        let hello = GuardHello {
+            role: "endpoint".into(),
+        };
+        accepted(
+            rpc.call(op::HELLO, hello.into(), HELLO_TIMEOUT).await?,
+            "Guard refused the endpoint",
+        )?;
+        let register = GuardRegister {
+            route_token,
+            ttl_ms: ROUTE_TTL_MS,
+        };
+        accepted(
+            rpc.call(op::REGISTER, register.into(), HELLO_TIMEOUT)
+                .await?,
+            "Guard rejected route",
+        )?;
+        let seq = 1u64;
+        let card = encode_signed_card(
+            &opts.advertised_key_pair,
+            &opts.guard_public_key,
+            &route_token,
+            seq,
+            now_ms() + ROUTE_TTL_MS,
+        );
+        let sealed = seal_box(&card, &peer_seal_key(&opts.advertised_key_pair.public_key));
+        let put = GuardPutMutable {
+            public_key: opts.advertised_key_pair.public_key,
+            seq,
+            signature: sign_dht_mutable(seq, &sealed, &opts.advertised_key_pair),
+            value: sealed.into(),
+        };
+        accepted(
+            rpc.call(op::PUT_MUTABLE, put.into(), Duration::from_millis(6000))
+                .await?,
+            "Guard failed to publish mutable card",
+        )
+    }
+    .await;
+    if let Err(error) = published {
+        conn.destroy();
+        return Err(error);
+    }
     Ok(StandaloneRouteCard { conn })
 }
 
@@ -1534,77 +1638,6 @@ impl StandaloneRouteCard {
     pub async fn close(&self) {
         self.conn.destroy();
     }
-}
-
-/// What [`attempt_direct_hop_bypass`] observes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct BypassReport {
-    pub endpoint_bypass_accepted: bool,
-    pub spoofed_hop_accepted: bool,
-}
-
-/// `attemptDirectHopBypass(...)`: the diagnostics page's probe of the guards' role separation.
-pub async fn attempt_direct_hop_bypass(
-    dht: Arc<dyn Dht>,
-    target_peer_public_key: [u8; 32],
-) -> Result<BypassReport> {
-    let record = dht
-        .mutable_get(target_peer_public_key)
-        .await?
-        .filter(|record| !record.value.is_empty())
-        .ok_or(Error::Rejected("Target mutable card not found"))?;
-    let plain = open_box(&record.value, &peer_seal_key(&target_peer_public_key))
-        .ok_or(Error::Rejected("Target card invalid"))?;
-    let card = decode_and_verify_card(&plain, now_ms(), Some(&target_peer_public_key))
-        .ok_or(Error::Rejected("Target card invalid"))?;
-    // 1. Endpoint session attempting a forbidden OP_HOP_OPEN on the destination guard.
-    let mut endpoint_bypass_accepted = false;
-    let endpoint_key_pair = KeyPair::from_seed(rand_bytes());
-    if let Ok(conn) = dht.connect(card.guard_public_key, &endpoint_key_pair).await {
-        if let Ok(mux) = dht.protomux(&conn).await
-            && let Ok(rpc) = attach_rpc_channel(&mux, Arc::clone(&conn), None)
-        {
-            mux.ready();
-            let _ = rpc.request(op::HELLO, op::HELLO, b"endpoint", 3000).await;
-            if let Ok(raw) = dht::alloc_raw_stream(&dht, &conn, true).await {
-                let mut ask = Vec::with_capacity(36);
-                ask.extend_from_slice(&card.route_token);
-                ask.extend_from_slice(&raw.id().to_be_bytes());
-                if let Ok(reply) = rpc.request(op::HOP_OPEN, op::HOP_READY, &ask, 3000).await {
-                    endpoint_bypass_accepted = reply.len() == 5 && reply[0] == 1;
-                }
-                raw.destroy();
-            }
-        }
-        conn.destroy();
-    }
-
-    // 2. An unadvertised key pair claiming the 'hop' role on the destination guard.
-    let mut spoofed_hop_accepted = false;
-    let hop_key_pair = KeyPair::from_seed(rand_bytes());
-    if let Ok(conn) = dht.connect(card.guard_public_key, &hop_key_pair).await {
-        if let Ok(mux) = dht.protomux(&conn).await
-            && let Ok(rpc) = attach_rpc_channel(&mux, Arc::clone(&conn), None)
-            && rpc
-                .request(op::HELLO, op::HELLO, b"hop", 3000)
-                .await
-                .is_ok()
-            && let Ok(raw) = dht::alloc_raw_stream(&dht, &conn, true).await
-        {
-            let mut ask = Vec::with_capacity(36);
-            ask.extend_from_slice(&card.route_token);
-            ask.extend_from_slice(&raw.id().to_be_bytes());
-            if let Ok(reply) = rpc.request(op::HOP_OPEN, op::HOP_READY, &ask, 3000).await {
-                spoofed_hop_accepted = reply.len() == 5 && reply[0] == 1;
-            }
-            raw.destroy();
-        }
-        conn.destroy();
-    }
-    Ok(BypassReport {
-        endpoint_bypass_accepted,
-        spoofed_hop_accepted,
-    })
 }
 
 #[cfg(test)]

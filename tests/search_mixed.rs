@@ -103,6 +103,15 @@ fn sha256_hex(bytes: &[u8]) -> String {
         .collect()
 }
 
+#[test]
+fn v2_search_discovery_vector() {
+    let hex = peartube_native::private_overlay::to_hex(&*peartube_native::search::SEARCH_TOPIC);
+    assert_eq!(
+        hex,
+        "4646a5cb08962943aef4a2e9d12a1ed5f150742b9aadf41389c8d4a894fefa6c"
+    );
+}
+
 fn runtime() -> tokio::runtime::Runtime {
     tokio::runtime::Builder::new_multi_thread()
         .worker_threads(4)

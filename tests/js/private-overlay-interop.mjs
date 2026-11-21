@@ -1,18 +1,22 @@
 // Interop driver for the Rust private-overlay port.
 //
-//   node private-overlay-interop.mjs endpoint     # JS peer + 2 JS guards; prints READY, then RESULT
-//   node private-overlay-interop.mjs self-check   # two JS peers + 2 JS guards, no Rust side
+//   node private-overlay-interop.mjs endpoint     # JS peer + one guard; Rust brings the other guard
+//   node private-overlay-interop.mjs self-check   # two JS peers with two JS guards each
 //
 // The app's own `src/private-overlay.js` runs on a hyperdht testnet. `endpoint` prints one JSON
 // line `READY {bootstrap,sourceKey,peerPublicKey}` and then waits for the Rust peer: both sides
 // send one `source-request` over the rendezvoused Noise stream and answer the other's, then the
-// script prints `RESULT {jsAnsweredRust, jsRequestAcknowledged}` and exits.
+// script prints `RESULT {answeredRust, acknowledged}` and exits.
+//
+// In `endpoint` mode a stdin line `BYPASS <hex public key>` runs the app's own
+// `attemptDirectHopBypass` against that peer's published route (on this test network only) and
+// prints `BYPASS {endpointBypassAccepted, spoofedHopAccepted}` or `BYPASS {error}`.
 import { createRequire } from 'node:module'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const here = fileURLToPath(new URL('.', import.meta.url))
-const APP = process.env.PEARTUBE_APP || resolve(here, '../../../../peartube')
+const APP = process.env.PEARTUBE_APP || resolve(here, '../../../peartube')
 const require = createRequire(join(APP, 'package.json'))
 
 const b4a = require('b4a')
@@ -55,7 +59,7 @@ function runExchange (stream, label) {
       if (message.type === 'source-request') {
         stream.write(JSON.stringify({ type: 'source-request-ack', from: label, echo: message.from }) + '\n')
         state.answeredRust = true
-      } else if (message.type === 'source-request-ack') {
+      } else if (message.type === 'source-request-ack' && message.echo === label) {
         state.acknowledged = true
       }
       if (state.answeredRust && state.acknowledged) {
@@ -67,9 +71,9 @@ function runExchange (stream, label) {
   })
 }
 
-async function start (host, bootstrap, seed) {
+async function start (host, bootstrap, seed, guardSeeds = [1, 2]) {
   const guards = []
-  for (const [index, guardSeed] of [seed(1), seed(2)].entries()) {
+  for (const [index, guardSeed] of guardSeeds.map(seed).entries()) {
     const guard = await overlay.createPrivateGuard({
       host,
       port: 0,
@@ -98,7 +102,7 @@ const seed = n => b4a.alloc(32, n)
 
 try {
   if (mode === 'endpoint') {
-    const { guards, swarm } = await start(host, testnet.bootstrap, seed)
+    const { guards, swarm } = await start(host, testnet.bootstrap, seed, [1])
     let done = null
     swarm.on('connection', enc => {
       process.stderr.write('js endpoint: connection from ' + b4a.toString(enc.remotePublicKey, 'hex').slice(0, 12) + '\n')
@@ -114,6 +118,12 @@ try {
       })
     })
     swarm.joinSource(SOURCE_ID, SOURCE_KEY)
+    lineReader(process.stdin, line => {
+      const [command, key] = line.trim().split(' ')
+      if (command !== 'BYPASS') return
+      overlay.attemptDirectHopBypass({ host, bootstrap: testnet.bootstrap, targetPeerPublicKey: b4a.from(key, 'hex') })
+        .then(result => emit('BYPASS', result), error => emit('BYPASS', { error: error.message }))
+    })
     emit('READY', {
       bootstrap: testnet.bootstrap,
       sourceKey: b4a.toString(SOURCE_KEY, 'hex'),

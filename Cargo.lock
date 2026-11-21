@@ -1150,6 +1150,7 @@ dependencies = [
  "hyperbee-rs",
  "hyperblobs-rs",
  "hypercore-rs",
+ "hyperschema-rs",
  "icu_collator",
  "icu_properties",
  "if-addrs 0.13.4",

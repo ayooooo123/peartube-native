@@ -9,8 +9,11 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
+use super::control::{command_to_wire, state_from_wire};
+use crate::control_protocol::Body;
+use crate::wire::peartube::{CastPair, CastSubscribe};
 use futures_util::future::BoxFuture;
-use serde_json::{Map, Value, json};
+use serde_json::{Value, json};
 
 use crate::protocol::{ParsedUri, WatchEntry, format_watch_uri, is_hex64, parse_uri};
 
@@ -31,23 +34,12 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(|error| error.into_inner())
 }
 
-fn now_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|elapsed| elapsed.as_millis() as u64)
-        .unwrap_or(0)
-}
-
 fn text(params: &Value, key: &str) -> String {
     params
         .get(key)
         .map(state::text_value)
         .filter(|text| text != "null" && text != "undefined")
         .unwrap_or_default()
-}
-
-fn obj(params: &Value) -> Map<String, Value> {
-    params.as_object().cloned().unwrap_or_default()
 }
 
 fn cast_error(message: impl Into<String>) -> CastError {
@@ -234,7 +226,7 @@ impl Inner {
         }
         if !current {
             return Err(cast_error(
-                "This receiver runs an older PearTube: update it",
+                "This receiver runs a different PearTube version: update PearTube on both devices",
             ));
         }
         let Some(node) = self.node() else {
@@ -275,13 +267,11 @@ impl Inner {
         let serial = self.serial.fetch_add(1, Ordering::AcqRel) + 1;
         let event_inner = self.clone();
         let close_inner = self.clone();
-        let on_event: EventHandler = Arc::new(move |message: Value| {
-            if message.get("event").and_then(Value::as_str) != Some("state") {
-                return;
-            }
-            let Some(next) = message.get("state").cloned() else {
+        let on_event: EventHandler = Arc::new(move |_, body, _| {
+            let Body::CastState(state) = body else {
                 return;
             };
+            let next = state_from_wire(state);
             let mut active = lock(&event_inner.active);
             if let Some(session) = active.as_mut()
                 && session.serial == serial
@@ -319,6 +309,7 @@ impl Inner {
             let _ = control;
         });
         let handlers = ControlHandlers {
+            handled: 1 << 3,
             on_request: None,
             on_event: Some(on_event),
             on_open: None,
@@ -333,22 +324,30 @@ impl Inner {
             )
             .await?;
         let session_result = async {
-            let mut subscribe = Map::new();
-            subscribe.insert("token".into(), json!(target.token));
             control
-                .call("subscribe", subscribe, DEFAULT_TIMEOUT)
+                .call(
+                    1,
+                    CastSubscribe {
+                        token: target.token.clone(),
+                    }
+                    .into(),
+                    DEFAULT_TIMEOUT,
+                )
                 .await?;
-            let mut payload = command.as_object().cloned().unwrap_or_default();
-            payload.insert("token".into(), json!(target.token));
-            control.call("cmd", payload, timeout).await
+            control
+                .call(
+                    2,
+                    command_to_wire(&command, target.token.clone()).into(),
+                    timeout,
+                )
+                .await
         }
         .await;
         match session_result {
-            Ok(reply) => {
-                let mut state = state::idle(now_ms());
-                if let Some(Value::Object(next)) = reply.get("state") {
-                    state = next.clone();
-                }
+            Ok(Body::CastState(reply)) => {
+                let Value::Object(state) = state_from_wire(reply) else {
+                    unreachable!()
+                };
                 Ok(Active {
                     serial,
                     receiver_id: receiver_id.to_owned(),
@@ -360,6 +359,7 @@ impl Inner {
                     control,
                 })
             }
+            Ok(_) => unreachable!("response type checked by the control channel"),
             Err(error) => {
                 control.close();
                 Err(error.into())
@@ -542,16 +542,19 @@ impl Inner {
                 session.serial,
             )
         };
-        let mut payload = obj(cmd);
-        payload.insert("token".into(), json!(pair_token));
-        let reply = control.call("cmd", payload, DEFAULT_TIMEOUT).await?;
+        let Body::CastState(reply) = control
+            .call(2, command_to_wire(cmd, pair_token).into(), DEFAULT_TIMEOUT)
+            .await?
+        else {
+            unreachable!()
+        };
         {
             let mut active = lock(&self.active);
             if let Some(session) = active.as_mut()
                 && session.serial == serial
-                && let Some(Value::Object(next)) = reply.get("state")
+                && let Value::Object(next) = state_from_wire(reply)
             {
-                session.state = next.clone();
+                session.state = next;
             }
         }
         let stop = cmd.get("action").and_then(Value::as_str) == Some("stop");
@@ -660,11 +663,19 @@ impl Inner {
                     ControlHandlers::default(),
                 )
                 .await?;
-            let mut payload = Map::new();
-            payload.insert("code".into(), json!(normalize_pair_code(Some(&code))));
-            let reply = control.call("pair", payload, DEFAULT_TIMEOUT).await;
+            let reply = control
+                .call(
+                    0,
+                    CastPair {
+                        code: super::control::bounded(&normalize_pair_code(Some(&code)), 16),
+                    }
+                    .into(),
+                    DEFAULT_TIMEOUT,
+                )
+                .await;
             let reply = match reply {
-                Ok(reply) => reply,
+                Ok(Body::CastPaired(reply)) => reply,
+                Ok(_) => unreachable!(),
                 Err(error) => {
                     control.close();
                     if let Some(node) = self.node() {
@@ -678,27 +689,21 @@ impl Inner {
                 node.leave_peer(&key);
             }
             record = SavedReceiver {
-                id: reply
-                    .get("deviceId")
-                    .map(state::text_value)
-                    .filter(|id| !id.is_empty())
-                    .unwrap_or_else(|| record.id.clone()),
+                id: if reply.device_id.is_empty() {
+                    record.id
+                } else {
+                    reply.device_id
+                },
                 name: crate::protocol::clean_name(
-                    Some(
-                        &reply
-                            .get("name")
-                            .map(state::text_value)
-                            .filter(|name| !name.is_empty())
-                            .unwrap_or_else(|| record.name.clone()),
-                    ),
+                    Some(if reply.name.is_empty() {
+                        &record.name
+                    } else {
+                        &reply.name
+                    }),
                     "PearTube TV",
                 ),
                 public_key: key,
-                token: reply
-                    .get("token")
-                    .map(state::text_value)
-                    .filter(|token| token != "null")
-                    .unwrap_or_default(),
+                token: reply.token,
             };
         }
         lock(&self.saved).set(record.clone());

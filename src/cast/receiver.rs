@@ -20,7 +20,9 @@ use crate::protocol::{
     BlobPointer, ParsedUri, RECEIVER_PORT, ReceiverUriInput, format_receiver_uri, parse_uri,
 };
 
-use super::control::{Control, ControlHandlers, RequestFuture, serve_control};
+use super::control::{
+    Control, ControlHandlers, RequestHandler, command_from_wire, serve_control, state_to_wire,
+};
 use super::http::{self, Body, HttpServer, guess_media_mime};
 use super::mdns::{self, AdvertiseHandle, AdvertiseInfo};
 use super::media::Media;
@@ -30,6 +32,8 @@ use super::traits::{
     CastPeer, ChangeSink, ClearCacheOptions, CommandSink, LanEndpoint, PeerConn, PeerStatus,
 };
 use super::{CastError, LOW_DISK_BOOT_BYTES, LOW_DISK_STREAM_BYTES, REMEMBERED_STREAMS, disk};
+use crate::control_protocol::Body as Payload;
+use crate::wire::peartube::CastPaired;
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(|error| error.into_inner())
@@ -42,10 +46,10 @@ fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
-/// `CAST_LAN_TOPIC`: `hash('peartube-cast/v1')`. Senders and receivers on one LAN join it, so LAN
+/// `CAST_LAN_TOPIC`: hash of the cast protocol name. Senders and receivers on one LAN join it, so LAN
 /// discovery links their nodes before a cast needs the link.
 pub fn cast_lan_topic() -> [u8; 32] {
-    peeroxide::discovery_key(b"peartube-cast/v1")
+    hypercore::crypto::hash(&[super::control::PROTOCOL.as_bytes()])
 }
 
 /// Options for [`Receiver::start`], the app's `createReceiver` argument object.
@@ -105,7 +109,8 @@ struct Inner {
     seq: AtomicU64,
     controls: Mutex<Vec<Control>>,
     subscribers: Mutex<Vec<Control>>,
-    backpressured: Mutex<Vec<u64>>,
+    // Per queued subscriber: whether a newer state arrived while waiting for drain.
+    backpressured: Mutex<HashMap<u64, bool>>,
     limiter_lan: Mutex<PairLimiter>,
     limiter_far: Mutex<PairLimiter>,
     peer: Arc<dyn CastPeer>,
@@ -211,7 +216,7 @@ impl Inner {
         let external = self.peer_root.to_string_lossy().starts_with("/mnt/expand/")
             || (self.peer_root != self.storage);
         let mut out = Map::new();
-        out.insert("protocol".into(), json!("peartube-cast/v1"));
+        out.insert("protocol".into(), json!(super::control::PROTOCOL));
         out.insert("deviceId".into(), json!(self.identity.device_id));
         out.insert("name".into(), json!(self.identity.name));
         out.insert("publicKey".into(), json!(self.public_key));
@@ -269,31 +274,37 @@ impl Inner {
     /// `drain` is pushed the latest state once the connection drains.
     fn broadcast_state(self: &Arc<Self>) {
         let state = self.state();
-        let message = json!({ "event": "state", "state": self.state_json(&state) });
         let subscribers = lock(&self.subscribers).clone();
         for control in subscribers {
-            if lock(&self.backpressured).contains(&control.id()) {
+            let mut pending = lock(&self.backpressured);
+            if let Some(dirty) = pending.get_mut(&control.id()) {
+                *dirty = true;
                 continue;
             }
-            if control.push(message.clone()) {
+            if control.push(3, state_to_wire(&state).into())
+                != crate::control_channel::PushResult::WaitForDrain
+            {
                 continue;
             }
-            if control.is_closed() {
-                continue;
-            }
-            lock(&self.backpressured).push(control.id());
+            pending.insert(control.id(), false);
             let inner = self.clone();
             let id = control.id();
             tokio::spawn(async move {
-                control.drained().await;
-                lock(&inner.backpressured).retain(|kept| *kept != id);
-                if inner.closing.load(Ordering::Acquire) {
-                    return;
-                }
-                if lock(&inner.subscribers).iter().any(|kept| kept.id() == id) {
-                    let state = inner.state();
-                    let _ = control
-                        .push(json!({ "event": "state", "state": inner.state_json(&state) }));
+                loop {
+                    control.drained().await;
+                    let mut pending = lock(&inner.backpressured);
+                    if pending.remove(&id) != Some(true)
+                        || control.is_closed()
+                        || inner.closing.load(Ordering::Acquire)
+                    {
+                        break;
+                    }
+                    if control.push(3, state_to_wire(&inner.state()).into())
+                        != crate::control_channel::PushResult::WaitForDrain
+                    {
+                        break;
+                    }
+                    pending.insert(id, false);
                 }
             });
         }
@@ -484,14 +495,12 @@ impl Inner {
     /// to every peer on the internet.
     async fn on_control(
         self: &Arc<Self>,
-        message: Value,
+        message: Payload,
         control: Control,
         on_lan: bool,
-    ) -> Result<Value, String> {
-        let kind = message.get("type").and_then(Value::as_str).unwrap_or("");
-        let token = message.get("token").and_then(Value::as_str).unwrap_or("");
+    ) -> Result<Payload, String> {
         let trusted = self.open_auth && on_lan;
-        if kind == "pair" {
+        if let Payload::CastPair(pair) = &message {
             let peer_key = control
                 .mux()
                 .stream_info()
@@ -499,7 +508,7 @@ impl Inner {
                 .map(|pk| crate::protocol::hex_encode(&pk))
                 .unwrap_or_else(|| if on_lan { "lan".into() } else { "far".into() });
             self.check_pair_limit(on_lan, &peer_key)?;
-            let code = message.get("code").and_then(Value::as_str);
+            let code = Some(pair.code.as_str());
             if !trusted
                 && !safe_equal(
                     Some(&super::pairing::normalize_pair_code(code)),
@@ -511,38 +520,44 @@ impl Inner {
             }
             // An open receiver on this LAN needs no token: it answers with an empty one, never the
             // permanent pair token.
-            return Ok(json!({
-                "deviceId": self.identity.device_id,
-                "name": self.identity.name,
-                "publicKey": self.public_key,
-                "token": if trusted { String::new() } else { self.identity.pair_token.clone() }
-            }));
+            return Ok(CastPaired {
+                device_id: super::control::bounded(&self.identity.device_id, 128),
+                name: super::control::bounded(&self.identity.name, 80),
+                public_key: crate::node::sources::topic_key(&self.public_key)
+                    .ok_or("Invalid receiver key")?,
+                token: if trusted {
+                    String::new()
+                } else {
+                    super::control::bounded(&self.identity.pair_token, 256)
+                },
+            }
+            .into());
         }
+        let token = match &message {
+            Payload::CastSubscribe(v) => &v.token,
+            Payload::CastCommand(v) => &v.token,
+            _ => return Err("Unknown cast message".into()),
+        };
         if !trusted && !safe_equal(Some(token), Some(&self.identity.pair_token)) {
             return Err("Unauthorized; pair with this TV first".to_owned());
         }
-        if kind == "subscribe" {
+        if matches!(message, Payload::CastSubscribe(_)) {
             let id = control.id();
             let mut subscribers = lock(&self.subscribers);
-            if !subscribers.iter().any(|kept| kept.id() == id) {
+            // A subscription belongs to its channel: one that already closed is not kept.
+            if !control.is_closed() && !subscribers.iter().any(|kept| kept.id() == id) {
                 subscribers.push(control);
             }
-            return Ok(json!({ "state": self.state_json(&self.state()) }));
+            return Ok(state_to_wire(&self.state()).into());
         }
-        if kind == "cmd" {
-            // The app destructures `{ id, type, token, ...msg }` before applying, so the player's
-            // command never carries the channel's id, type or pair token.
-            let mut command = message.as_object().cloned().unwrap_or_default();
-            command.remove("id");
-            command.remove("type");
-            command.remove("token");
+        if let Payload::CastCommand(command) = message {
             let state = self
-                .apply_command(&Value::Object(command))
+                .apply_command(&command_from_wire(command))
                 .await
                 .map_err(|error| error.message)?;
-            return Ok(json!({ "ok": true, "state": self.state_json(&state) }));
+            return Ok(state_to_wire(&state).into());
         }
-        Err(format!("Unknown cast message: {kind}"))
+        unreachable!()
     }
 
     fn check_pair_limit(&self, on_lan: bool, peer_key: &str) -> Result<(), String> {
@@ -729,12 +744,12 @@ impl Inner {
         let controls_close = self.clone();
         let subscribers = self.clone();
         let backpressured = self.clone();
-        let request: Arc<dyn Fn(Value, Control) -> RequestFuture + Send + Sync> =
-            Arc::new(move |message, control| {
-                let inner = inner.clone();
-                Box::pin(async move { inner.on_control(message, control, on_lan).await })
-            });
+        let request: RequestHandler = Arc::new(move |_, message, control| {
+            let inner = inner.clone();
+            Box::pin(async move { inner.on_control(message, control, on_lan).await })
+        });
         let handlers = ControlHandlers {
+            handled: 0b111,
             on_request: Some(request),
             on_event: None,
             on_open: Some(Arc::new(move |control| {
@@ -747,7 +762,7 @@ impl Inner {
                 let id = control.id();
                 lock(&controls_close.controls).retain(|kept| kept.id() != id);
                 lock(&subscribers.subscribers).retain(|kept| kept.id() != id);
-                lock(&backpressured.backpressured).retain(|kept| *kept != id);
+                lock(&backpressured.backpressured).remove(&id);
             })),
         };
         // One server per connection: a second `serve` (a listener call and the startup scan, or two
@@ -868,7 +883,7 @@ impl Receiver {
             seq: AtomicU64::new(0),
             controls: Mutex::new(Vec::new()),
             subscribers: Mutex::new(Vec::new()),
-            backpressured: Mutex::new(Vec::new()),
+            backpressured: Mutex::new(HashMap::new()),
             limiter_lan: Mutex::new(PairLimiter::default()),
             limiter_far: Mutex::new(PairLimiter::default()),
             peer: peer.clone(),

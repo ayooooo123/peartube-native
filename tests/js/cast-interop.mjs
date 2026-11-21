@@ -18,13 +18,13 @@ import { tmpdir } from 'node:os'
 import { Readable } from 'node:stream'
 
 const here = dirname(fileURLToPath(import.meta.url))
-const APP = process.env.PEARTUBE_APP || resolve(here, '../../../../peartube')
+const APP = process.env.PEARTUBE_APP || resolve(here, '../../../peartube')
 const require = createRequire(resolve(APP, 'package.json'))
 
 const { default: createTestnet } = await import(pathToFileURL(require.resolve('hyperdht/testnet.js')).href)
 const { createNode } = await import(pathToFileURL(resolve(APP, 'src/index.js')).href)
 const { createCastController } = await import(pathToFileURL(resolve(APP, 'src/cast.js')).href)
-const { openControl } = await import(pathToFileURL(resolve(APP, 'src/cast-control.js')).href)
+const { commandToWire, openControl } = await import(pathToFileURL(resolve(APP, 'src/cast-control.js')).href)
 
 const tmp = label => mkdtempSync(join(tmpdir(), `peartube-cast-${label}-`))
 const sha256 = bytes => createHash('sha256').update(bytes).digest('hex')
@@ -113,7 +113,7 @@ const ops = {
     const control = await openControl(conn)
     const errors = {}
     try {
-      await control.call('cmd', { action: 'stop' })
+      await control.call('command', commandToWire({ action: 'stop' }, ''))
       errors.cmd = null
     } catch (err) {
       errors.cmd = err.message
