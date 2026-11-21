@@ -292,14 +292,18 @@ impl Media {
             self.clear_window();
             return false;
         };
-        if blob.block_length == 0 {
+        // A playhead at the end has no unread block left, so the window lets go of its range and
+        // permits; the next title gets the whole budget. Clamping it back onto the last block kept
+        // one block of permits for a title that had nothing more to read.
+        if blob.block_length == 0 || playhead_byte >= blob.byte_length {
             self.clear_window();
             return false;
         }
-        // `bs = Math.ceil(blob.byteLength / blob.blockLength)`: the blob's mean block size.
+        // `bs = Math.ceil(blob.byteLength / blob.blockLength)`: the blob's mean block size, so
+        // `bs * blockLength >= byteLength` and `first` is always a block of the blob.
         let bs = blob.byte_length.div_ceil(blob.block_length).max(1);
         let last = blob.block_offset + blob.block_length;
-        let first = (blob.block_offset + playhead_byte / bs).min(last - 1);
+        let first = blob.block_offset + playhead_byte / bs;
         let ahead_blocks = ((rate * READ_AHEAD_SECONDS as f64) / bs as f64).ceil() as u64;
         let full_end = (first + ahead_blocks).min(last);
         let cached_ahead = core.count_local(first, full_end) * bs;
@@ -319,7 +323,9 @@ impl Media {
         let target = wanted.min(cache_cap).min((last - first).saturating_mul(bs));
         // The window's own permits are free for its next plan: it hands them back when it moves.
         // Counting them as taken made a window that held the whole pool see it empty on the next
-        // tick, shrink to one block, then grow back on the tick after.
+        // tick, shrink to one block, then grow back on the tick after. Under a budget the plan is
+        // whole blocks, so the range it registers never asks for more than its permits pay for
+        // (a window with no permits at all still gets its one block).
         let planned = match &budget {
             Some(budget) => {
                 let held = self
@@ -329,25 +335,20 @@ impl Media {
                     .as_ref()
                     .and_then(|window| window.permit.as_ref())
                     .map_or(0, |permit| permit.num_permits() as u64);
-                target.min(budget.available_permits() as u64 + held)
+                target.min(budget.available_permits() as u64 + held) / bs * bs
             }
             None => target,
         };
         let end = (first + planned.div_ceil(bs).max(1)).min(last);
         let step = ((end - first) / 8).max(4);
         {
-            let mut window = self.window.lock().expect("cast window");
-            if let Some(window) = window.as_mut()
+            // The range stays, and so do all its permits: it still asks for every block from its
+            // start, the ones the playhead has passed too, and a reader may seek back to them.
+            let window = self.window.lock().expect("cast window");
+            if let Some(window) = window.as_ref()
                 && first.abs_diff(window.start) < step
                 && end.abs_diff(window.end) < step
             {
-                // The range stays; permits for blocks the playhead has passed go back to the pool.
-                let usable = window.end.saturating_sub(first).saturating_mul(bs);
-                if let Some(permit) = window.permit.as_mut()
-                    && permit.num_permits() as u64 > usable
-                {
-                    drop(permit.split(permit.num_permits() - usable as usize));
-                }
                 return false;
             }
         }
@@ -1066,11 +1067,11 @@ mod tests {
             assert_eq!(media.window_range(), Some((0, 75)), "tick {tick}");
             assert_eq!(held_blocks(&media), 75, "tick {tick}");
         }
-        // Within the step the range stays, and the blocks the playhead passed go back to the pool.
+        // Within the step the range stays, and it keeps paying for every block it still asks for.
         assert!(!media.steer_window(64 << 30, 8.0e6, 4 * BS as u64));
         assert_eq!(media.window_range(), Some((0, 75)));
-        assert_eq!(held_blocks(&media), 71);
-        assert_eq!(peer.budget.available_permits(), 4 * BS);
+        assert_eq!(held_blocks(&media), 75);
+        assert_eq!(peer.budget.available_permits(), 0);
         // Moving on still slides the whole window, and no permits leak across the swaps.
         assert!(media.steer_window(64 << 30, 8.0e6, 50 * BS as u64));
         assert_eq!(media.window_range(), Some((50, 125)));
@@ -1099,6 +1100,68 @@ mod tests {
             assert_eq!(held_blocks(&old), 10, "tick {tick}");
             assert_eq!(new.window_range(), Some((0, 65)), "tick {tick}");
         }
+    }
+
+    /// Each window's permits pay for its whole registered range (or it is the one-block range a
+    /// window gets with no permits), and the ranges together ask for no more than the budget.
+    fn assert_funded(windows: &[&Media], budget_blocks: u64, tick: u64) {
+        let mut funded = 0;
+        for (index, media) in windows.iter().enumerate() {
+            let Some((start, end)) = media.window_range() else {
+                continue;
+            };
+            let held = held_blocks(media) as u64;
+            assert!(
+                end - start <= held || (held == 0 && end - start == 1),
+                "tick {tick}: window {index} asks for {start}..{end} with {held} blocks of permits"
+            );
+            funded += held;
+        }
+        assert!(funded <= budget_blocks, "tick {tick}: {funded} blocks");
+    }
+
+    /// A reader moves forward within its window while a new title starts, then seeks back. The
+    /// old window still asks for every block from its start, so it must still hold permits for
+    /// all of them: the two titles together never ask for more than the 75-block budget.
+    #[tokio::test]
+    async fn a_reader_seeking_back_never_asks_past_the_budget() {
+        let old_film = peers(0).await;
+        let new_film = peers(0).await;
+        let peer = budget_peer();
+        let old = budget_media(old_film.reader.clone(), peer.clone());
+        let new = budget_media(new_film.reader.clone(), peer.clone());
+        assert!(old.steer_window(64 << 30, 8.0e6, 0));
+        assert_eq!(old.window_range(), Some((0, 75)));
+        old.steer_window(64 << 30, 8.0e6, 4 * BS as u64);
+        new.steer_window(64 << 30, 8.0e6, 0);
+        assert_funded(&[&new, &old], 75, 0);
+        for tick in 1..=5u64 {
+            new.steer_window(64 << 30, 8.0e6, 0);
+            old.steer_window(64 << 30, 8.0e6, 0);
+            assert_eq!(old.window_range(), Some((0, 75)), "tick {tick}");
+            assert_funded(&[&new, &old], 75, tick);
+        }
+    }
+
+    /// A title played to its end (`positionMs == durationMs` puts the playhead at the file size)
+    /// has no unread block: its window lets go, a fresh steer there reserves nothing, and the
+    /// next title gets the whole budget.
+    #[tokio::test]
+    async fn a_title_at_its_end_holds_no_permits() {
+        let old_film = peers(0).await;
+        let new_film = peers(0).await;
+        let peer = budget_peer();
+        let old = budget_media(old_film.reader.clone(), peer.clone());
+        let new = budget_media(new_film.reader.clone(), peer.clone());
+        let eof = 400 * BS as u64;
+        assert!(old.steer_window(64 << 30, 8.0e6, eof - BS as u64));
+        assert_eq!(old.window_range(), Some((399, 400)));
+        assert!(!old.steer_window(64 << 30, 8.0e6, eof));
+        assert_eq!((old.window_range(), held_blocks(&old)), (None, 0));
+        assert!(!old.steer_window(64 << 30, 8.0e6, eof));
+        assert_eq!((old.window_range(), held_blocks(&old)), (None, 0));
+        new.steer_window(64 << 30, 8.0e6, 0);
+        assert_eq!((new.window_range(), held_blocks(&new)), (Some((0, 75)), 75));
     }
 
     #[tokio::test]
