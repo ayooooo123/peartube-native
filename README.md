@@ -154,10 +154,9 @@ the backend's runtime workers, so HTTP and replication keep polling.
 
 The standalone cast receiver keeps its store on disk in `peer_dir/corestore`
 without a write-ahead log (`storageWal: false`), as the app's receiver does; it
-persists across restarts. The node option `storageMemory: true` (RocksDB MemEnv)
-still exists but the receiver no longer uses it: on a Pi 4 the RAM store kept
-everything a cast received (4.1–4.5 GB on a 4K film), while the disk store held
-323–325 MB and played the same. `receiver.json` and `identity.json` stay beside
+persists across restarts. A RAM store (RocksDB's memory env, since removed) kept
+everything a cast received on a Pi 4 (4.1–4.5 GB on a 4K film), while the disk
+store held 323–325 MB and played the same. `receiver.json` and `identity.json` stay beside
 the store. The receiver's memory budget is `min(1.5 GB, MemTotal/4,
 MemAvailable/2)` from `/proc/meminfo`, with a conservative 256 MiB fallback when
 unavailable and a 64 MiB floor so zero available RAM cannot disable eviction.

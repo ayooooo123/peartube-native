@@ -23,30 +23,15 @@ pub struct Storage {
 
 impl Storage {
     /// `createStorage(ctx)`: `corestore/` under the node folder, with the cores it already holds.
-    pub fn open(
-        path: impl AsRef<Path>,
-        worklet: bool,
-        wal: bool,
-        memory: bool,
-    ) -> Result<Self, BlobsError> {
+    pub fn open(path: impl AsRef<Path>, worklet: bool, wal: bool) -> Result<Self, BlobsError> {
         let path = path.as_ref().to_path_buf();
-        let dir = path.join("corestore");
-        if memory {
-            match std::fs::remove_dir_all(&dir) {
-                Ok(()) => {}
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                Err(error) => return Err(error.into()),
-            }
-            for cache in ["cache-lru.json", "catalog-cache.json"] {
-                match std::fs::remove_file(path.join(cache)) {
-                    Ok(()) => {}
-                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                    Err(error) => return Err(error.into()),
-                }
-            }
-        }
-        let store =
-            Corestore::open_with_options(&dir, hypercore::storage::StoreOptions { wal, memory })?;
+        let store = Corestore::open_with_options(
+            &path.join("corestore"),
+            hypercore::storage::StoreOptions {
+                wal,
+                ..Default::default()
+            },
+        )?;
         let mobile_worklet = worklet && !cfg!(target_os = "macos");
         Ok(Self {
             path,
@@ -109,33 +94,5 @@ impl StoreSuspension for Corestore {
 
     fn close(&self) {
         self.store().close();
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn memory_restart_discards_cache_indexes_but_keeps_identity() {
-        for memory in [false, true] {
-            let dir = tempfile::tempdir().unwrap();
-            for file in [
-                "cache-lru.json",
-                "catalog-cache.json",
-                "identity.json",
-                "receiver.json",
-            ] {
-                std::fs::write(dir.path().join(file), b"preserve").unwrap();
-            }
-            let storage = Storage::open(dir.path(), true, true, memory).unwrap();
-            for file in ["cache-lru.json", "catalog-cache.json"] {
-                assert_eq!(dir.path().join(file).exists(), !memory);
-            }
-            for file in ["identity.json", "receiver.json"] {
-                assert_eq!(std::fs::read(dir.path().join(file)).unwrap(), b"preserve");
-            }
-            storage.close().await;
-        }
     }
 }
