@@ -201,3 +201,17 @@ pub type PlaceFuture = Pin<Box<dyn Future<Output = Result<Value, PlaceError>> + 
 /// album. While the host waits nothing is placed: a save that is cancelled, or that the host
 /// gives up on, leaves nothing behind.
 pub type PlaceAndScan = Arc<dyn Fn(Place, Cancelled) -> PlaceFuture + Send + Sync>;
+
+/// Whether a row of the import's answer is a file this save placed. By path inside the import
+/// folder (the app's `rel === folder/file`): another album's file of the same name is not this
+/// save's.
+pub fn placed_here(row: &Value, placed: &[String], folder: &str) -> bool {
+    let text = |key: &str| row.get(key).and_then(Value::as_str);
+    text("file").is_some_and(|file| {
+        placed.iter().any(|name| name == file)
+            && text("rel")
+                .and_then(|rel| rel.strip_prefix(folder))
+                .and_then(|rest| rest.strip_prefix('/'))
+                == Some(file)
+    })
+}

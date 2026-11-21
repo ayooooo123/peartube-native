@@ -26,8 +26,8 @@ use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 
 use super::staging::{
-    ALBUM_PIN, Cancelled, Place, PlaceAndScan, PlaceError, free_path, note_mirrored, safe_segment,
-    split_ext,
+    ALBUM_PIN, Cancelled, Place, PlaceAndScan, PlaceError, free_path, note_mirrored, placed_here,
+    safe_segment, split_ext,
 };
 use crate::acquire::RandomSource;
 use crate::app_settings::{js_string, js_string_or_empty, js_truthy};
@@ -1076,18 +1076,7 @@ impl Provider {
             status: error.status,
         })?;
         let placed = std::mem::take(&mut *placed.lock().expect("placed names"));
-        // By path inside the import folder: another album's file of the same name is not this
-        // save's.
-        let own = |row: &&Value| {
-            row.get("file").and_then(Value::as_str).is_some_and(|file| {
-                placed.iter().any(|name| name == file)
-                    && row
-                        .get("rel")
-                        .and_then(Value::as_str)
-                        .and_then(|rel| rel.rsplit_once('/'))
-                        == Some((folder_name.as_str(), file))
-            })
-        };
+        let own = |row: &&Value| placed_here(row, &placed, folder_name);
         let rows = |key: &str| -> &[Value] {
             scan.get(key)
                 .and_then(Value::as_array)

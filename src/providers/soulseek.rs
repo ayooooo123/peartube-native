@@ -38,7 +38,7 @@ use self::place::{LoneTrack, peer_folder_hint, place_single_track};
 use self::rank::{Candidate, ShareList, rank, share_list};
 use super::staging::{
     ALBUM_PIN, Cancelled, Place, PlaceAndScan, PlaceError, format_album_dir, free_path,
-    is_release_id, note_mirrored, safe_segment, split_ext,
+    is_release_id, note_mirrored, placed_here, safe_segment, split_ext,
 };
 use crate::acquire::RandomSource;
 use crate::app_settings::{js_string_or_empty, js_truthy};
@@ -1203,21 +1203,12 @@ impl Provider {
             .cloned()
             .unwrap_or_else(|| json!([]));
         // The sha256 of each file this album added, so a client can open the album the mirror
-        // created. By path inside the import folder: another album's file of the same name is not
-        // this mirror's.
+        // created.
         let sha256s: Vec<Value> = items
             .as_array()
             .into_iter()
             .flatten()
-            .filter(|item| {
-                item.get("file")
-                    .and_then(Value::as_str)
-                    .is_some_and(|file| {
-                        placed.iter().any(|name| name == file)
-                            && item.get("rel").and_then(Value::as_str)
-                                == Some(format!("{folder_name}/{file}").as_str())
-                    })
-            })
+            .filter(|item| placed_here(item, &placed, &folder_name))
             .map(|item| item.get("sha256").cloned().unwrap_or(Value::Null))
             .collect();
         let note = {
