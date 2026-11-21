@@ -1,6 +1,6 @@
 #!/bin/sh
-# Writes STACK.lock: the commit of each sibling crate that release-ffi.yml builds against.
-# Run it after a sibling change the next release must include; every commit must be pushed.
+# Writes STACK.lock: the commit of each sibling crate that ci.yml and release-ffi.yml build against.
+# Run it after a sibling change that CI or the next release must include; every commit must be pushed.
 # A sibling's own Cargo.lock does not count: peartube-native's lock resolves the build.
 #
 #   sh ffi/stack-lock.sh
