@@ -9,6 +9,8 @@
 //! album folders, what the owner removed, and the Soulseek provider on a scripted network. Its sessions are in
 //! `tests/js/acquire-mirror-library.json`, and its trace is compared as JSON text.
 
+#[path = "support/files.rs"]
+mod files;
 #[path = "support/soulseek_network.rs"]
 mod network;
 #[path = "support/trace.rs"]
@@ -1914,6 +1916,7 @@ impl MirrorHarness {
                     "watch-dir",
                     "feed-mirror",
                     "soulseek",
+                    "youtube",
                 ]
                 .contains(&name)
             })
@@ -2173,7 +2176,8 @@ mod library {
     };
     use serde_json::{Map, Value, json};
 
-    use super::network::{FakeBackend, Labels, Network, World, flac, tree};
+    use super::files::{Labels, tree};
+    use super::network::{FakeBackend, Network, World, flac};
     use super::{Factory, FakeNode, Feeds, NOW, RechunkFactory, js_trace};
 
     /// A file's modification time when a step names none, in seconds.
@@ -2505,7 +2509,10 @@ mod library {
                 host.list()
                     .into_iter()
                     .filter(|plugin| {
-                        matches!(plugin["name"].as_str(), Some("watch-dir" | "soulseek"))
+                        matches!(
+                            plugin["name"].as_str(),
+                            Some("watch-dir" | "soulseek" | "youtube")
+                        )
                     })
                     .collect()
             } else if step.get("tree").is_some() {

@@ -39,6 +39,7 @@ use crate::node::api::{Announce, Entry, SearchOptions, Source, SourceSpec, Statu
 use crate::protocol::{
     clean_text, encode_uri_component, ipv6_groups, is_media_file, js_trim, parse_uri, safe_equal,
 };
+use crate::providers::youtube::Picture;
 use crate::resolution::{MediaInfo, VideoSize, media_info, resolution_label};
 use crate::settings::Settings;
 
@@ -215,6 +216,12 @@ pub trait Mirror: Send + Sync {
         &'a self,
         gone: Vec<(String, String)>,
     ) -> BoxFuture<'a, Vec<(String, &'static str)>>;
+    /// `providerThumb(name, id)`: a source result's picture, as its content type and its bytes.
+    fn provider_thumb<'a>(
+        &'a self,
+        name: &'a str,
+        id: &'a str,
+    ) -> BoxFuture<'a, Result<Option<Picture>, HttpError>>;
 }
 
 /// What `/v1/providers/<name>/…` asks of a provider.
@@ -628,7 +635,6 @@ impl<N: Node> Api<N> {
             );
             return response;
         }
-
         let mut request = RequestContext {
             method: &method,
             url: &url,
@@ -636,6 +642,17 @@ impl<N: Node> Api<N> {
             remote,
             body: &mut body,
         };
+        // A source result's picture, through the relay: the owner's browser never asks the source's
+        // image host. 204 when there is none, so a missing picture is not a console error.
+        if method == Method::GET
+            && let Some((name, id)) = thumb_path(&path)
+        {
+            return self
+                .thumbnail(&request, name, id)
+                .await
+                .unwrap_or_else(owner_error);
+        }
+
         let restricted = is_write(&method) || is_owner_path(&path);
         let payload = match self.route(&mut request).await {
             Ok(Some(Value::Null)) | Ok(None) => {
@@ -645,6 +662,47 @@ impl<N: Node> Api<N> {
             Err(error) => (status(error.status()), json!({"error": error.message})),
         };
         json_response(payload.0, &payload.1, restricted)
+    }
+
+    async fn thumbnail(
+        &self,
+        req: &RequestContext<'_>,
+        name: &str,
+        id: &str,
+    ) -> Result<Response<Body>, HttpError> {
+        self.require_owner(req)?;
+        let picture = match &self.options.mirror {
+            Some(mirror) => mirror.provider_thumb(name, id).await?,
+            None => None,
+        };
+        let mut response = match picture {
+            Some(Picture {
+                content_type,
+                bytes,
+            }) => {
+                let len = bytes.len();
+                let mut res = full(bytes);
+                let headers = res.headers_mut();
+                headers.insert(
+                    header::CONTENT_TYPE,
+                    HeaderValue::from_str(&content_type)
+                        .map_err(|_| HttpError::new(400, "Invalid picture content type"))?,
+                );
+                headers.insert(header::CONTENT_LENGTH, HeaderValue::from(len));
+                headers.insert(
+                    header::CACHE_CONTROL,
+                    HeaderValue::from_static("private, max-age=86400"),
+                );
+                res
+            }
+            None => {
+                let mut res = Response::new(empty_body());
+                *res.status_mut() = StatusCode::NO_CONTENT;
+                res
+            }
+        };
+        corp(response.headers_mut());
+        Ok(response)
     }
 
     /// One `/v1` request: `None` is the app's `route` miss (a 404 `{"error":"not found"}`).
@@ -1808,6 +1866,29 @@ struct RequestContext<'a> {
     headers: &'a HeaderMap,
     remote: SocketAddr,
     body: &'a mut Option<Incoming>,
+}
+
+fn owner_error(error: HttpError) -> Response<Body> {
+    json_response(
+        status(error.status()),
+        &json!({"error": error.message}),
+        true,
+    )
+}
+
+/// `/^\/v1\/providers\/([a-z0-9-]+)\/thumb\/([\w-]{1,64})$/`: the provider's name and the result's
+/// id in the path of a picture.
+fn thumb_path(path: &str) -> Option<(&str, &str)> {
+    let (name, id) = path.strip_prefix("/v1/providers/")?.split_once("/thumb/")?;
+    let named = !name.is_empty()
+        && name
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-');
+    let identified = (1..=64).contains(&id.len())
+        && id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-');
+    (named && identified).then_some((name, id))
 }
 
 fn broadcast(sse: &Mutex<Vec<mpsc::Sender<Bytes>>>, event: &str) {

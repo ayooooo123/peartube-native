@@ -168,8 +168,9 @@ pub(crate) fn note_mirrored(dir: &Path, names: &[String]) -> std::io::Result<()>
 }
 
 /// A provider's finished files moving into the import folder (the app's `place`). The host runs
-/// it at most once, and only while no other import holds the folder.
-pub type Place = Box<dyn FnOnce() -> Result<(), String> + Send>;
+/// it at most once, and only while no other import holds the folder. What it refuses (a folder
+/// that holds other files, 409) reaches the provider as the host's answer.
+pub type Place = Box<dyn FnOnce() -> Result<(), PlaceError> + Send>;
 
 /// Whether the save the files belong to was cancelled, or its provider stopped.
 pub type Cancelled = Arc<dyn Fn() -> bool + Send + Sync>;

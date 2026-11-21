@@ -6,21 +6,27 @@
 //! Here the same sessions drive the Rust provider under tokio's paused clock; the two traces are compared as
 //! JSON text, so the order of the keys counts too.
 
+#[path = "support/files.rs"]
+mod files;
 #[path = "support/soulseek_network.rs"]
 mod network;
+#[path = "support/provider_host.rs"]
+mod provider_host;
 #[path = "support/trace.rs"]
 mod trace;
 
-use std::collections::{HashMap, HashSet};
-use std::path::{Path, PathBuf};
+use std::collections::HashMap;
+use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use network::{FakeBackend, Labels, Network, World, sha256_hex, sorted_names, tree};
+use files::{Labels, tree};
+use network::{FakeBackend, Network, World};
 use peartube_native::providers::soulseek::client::Backend;
 use peartube_native::providers::soulseek::{Options, Provider, SoulseekError};
-use peartube_native::providers::staging::{Cancelled, Place, PlaceAndScan, PlaceError};
+use peartube_native::providers::staging::PlaceAndScan;
+use provider_host::FakeHost;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -60,93 +66,6 @@ struct SessionOptions {
     no_connect_ms: Option<u64>,
 }
 
-/// What the mirror host does for a provider (`placeAndScan`), with the other import scripted:
-/// `held_until` is when another import lets go of the folder, and `limit` is how long the host
-/// waits before it gives up. Nothing is placed while it waits. Then the provider's `place` runs,
-/// and the scan answers one item for each media file it has not reported before. The host's own
-/// wait is compared in the library oracle; this one only gives the provider every answer a host
-/// can give.
-struct FakeHost {
-    world: Arc<World>,
-    root: PathBuf,
-    seen: Mutex<HashSet<String>>,
-    now_ms: Arc<dyn Fn() -> u64 + Send + Sync>,
-    held_until: AtomicU64,
-    /// `u64::MAX` when the host never gives up.
-    limit: AtomicU64,
-}
-
-impl FakeHost {
-    async fn place_and_scan(
-        self: Arc<Self>,
-        place: Place,
-        cancelled: Cancelled,
-    ) -> Result<Value, PlaceError> {
-        let limit = self.limit.load(Ordering::SeqCst);
-        let end = (self.now_ms)().saturating_add(limit);
-        while (self.now_ms)() < self.held_until.load(Ordering::SeqCst) {
-            if cancelled() {
-                return Err(PlaceError::cancelled());
-            }
-            if (self.now_ms)() >= end {
-                return Err(PlaceError {
-                    message: format!(
-                        "Another import has held the folder for {} s. Nothing was saved; try again when it finishes.",
-                        limit.div_ceil(1000)
-                    ),
-                    status: Some(503),
-                });
-            }
-            self.world.tick().await;
-        }
-        if cancelled() {
-            return Err(PlaceError::cancelled());
-        }
-        place().map_err(|message| PlaceError {
-            message,
-            status: None,
-        })?;
-        Ok(self.scan().await)
-    }
-
-    async fn scan(&self) -> Value {
-        let folder = self
-            .root
-            .file_name()
-            .unwrap()
-            .to_string_lossy()
-            .into_owned();
-        self.world.log(json!({ "scan": folder }));
-        self.world.tick().await;
-        let mut items = Vec::new();
-        let mut scanned = 0;
-        for folder in sorted_names(&self.root) {
-            let dir = self.root.join(&folder);
-            if folder.starts_with('.') || !dir.is_dir() {
-                continue;
-            }
-            for name in sorted_names(&dir) {
-                if name.starts_with('.') || name.ends_with(".json") {
-                    continue;
-                }
-                scanned += 1;
-                let rel = format!("{folder}/{name}");
-                if !self.seen.lock().unwrap().insert(rel.clone()) {
-                    continue;
-                }
-                let bytes = std::fs::read(dir.join(&name)).unwrap();
-                items.push(json!({
-                    "file": name,
-                    "rel": rel,
-                    "size": bytes.len(),
-                    "sha256": sha256_hex(&bytes),
-                }));
-            }
-        }
-        json!({ "scanned": scanned, "ingested": items.len(), "items": items })
-    }
-}
-
 /// Lets every task run as far as it can before the clock moves again.
 async fn flush() {
     for _ in 0..50 {
@@ -182,14 +101,15 @@ async fn run_session(network: &Arc<Network>, session: &Session) -> Value {
     let start = tokio::time::Instant::now();
     let now_ms: Arc<dyn Fn() -> u64 + Send + Sync> =
         Arc::new(move || NOW + start.elapsed().as_millis() as u64);
-    let host = Arc::new(FakeHost {
-        world: world.clone(),
-        root: staging.clone(),
-        seen: Mutex::new(HashSet::new()),
-        now_ms: now_ms.clone(),
-        held_until: AtomicU64::new(0),
-        limit: AtomicU64::new(u64::MAX),
-    });
+    let host = FakeHost::new(
+        Arc::new({
+            let world = world.clone();
+            move |call| world.log(call)
+        }),
+        staging.clone(),
+        Duration::from_millis(network.tick),
+        now_ms.clone(),
+    );
     let backend: Option<Arc<dyn Backend>> = match session.backend.as_deref() {
         Some("none") => None,
         _ => Some(Arc::new(FakeBackend(world.clone()))),
@@ -226,13 +146,8 @@ async fn run_session(network: &Arc<Network>, session: &Session) -> Value {
         })
     });
     let provider = Provider::new(options);
-    let place_and_scan: Option<PlaceAndScan> = (session.scan != Some(false)).then(|| {
-        let host = host.clone();
-        let asked: PlaceAndScan = Arc::new(move |place, cancelled| {
-            Box::pin(host.clone().place_and_scan(place, cancelled))
-        });
-        asked
-    });
+    let place_and_scan: Option<PlaceAndScan> =
+        (session.scan != Some(false)).then(|| host.place_and_scan());
 
     let mut out: Vec<Value> = Vec::new();
     let mut put = |step: usize, value: Value| {
@@ -315,10 +230,10 @@ async fn run_session(network: &Arc<Network>, session: &Session) -> Value {
             flush().await;
             put(i, Value::Null);
         } else if let Some(ms) = step.get("hold").and_then(Value::as_u64) {
-            host.held_until.store(now_ms() + ms, Ordering::SeqCst);
+            host.hold(ms);
             put(i, Value::Null);
         } else if let Some(ms) = step.get("limit").and_then(Value::as_u64) {
-            host.limit.store(ms, Ordering::SeqCst);
+            host.limit(ms);
             put(i, Value::Null);
         } else if step.get("tree").is_some() {
             put(i, tree(&root));

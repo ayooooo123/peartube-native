@@ -1625,6 +1625,7 @@ impl PageDownloader for UbitPages {
                     ubit,
                     controller: opts.controller,
                     on_progress: opts.on_progress,
+                    audio: false,
                 },
             )
             .await

@@ -112,8 +112,9 @@ function libraryNode () {
   }
 }
 
-// A mirror host with one provider, `soulseek`, one mirror under way, and files for the first album track and the
-// film (deleted) and for the second track (kept).
+// A mirror host with one provider, `soulseek`, one mirror under way, files for the first album track and the
+// film (deleted) and for the second track (kept), and one picture, of the `youtube` result THUMB.
+const THUMB = 'dQw4w9WgXcQ'
 const providerJob = status => ({ jobId: JOBS[0], plugin: 'soulseek', status })
 const provider = (call, name, payload) => {
   if (name !== 'soulseek') throw Object.assign(new Error(`Unknown provider: ${name}`), { status: 404 })
@@ -130,7 +131,11 @@ const libraryMirror = {
   forgetImported: async gone => new Map(gone.flatMap(({ id, sha256 }) => {
     const file = { s1: 'deleted', f1: 'deleted', s2: 'kept' }[sha256]
     return file ? [[`${id}/${sha256}`, file]] : []
-  }))
+  })),
+  async providerThumb (name, id) {
+    if (id === 'broken') throw Object.assign(new Error('Picture unavailable'), { status: 503 })
+    return name === 'youtube' && id === THUMB ? { type: 'image/jpeg', bytes: Buffer.from([0xff, 0xd8, 0, 0xfe]) } : null
+  }
 }
 
 const cast = {
@@ -247,6 +252,7 @@ const scenarios = {
     json('GET', '/v1/identity'),
     json('GET', '/v1/search?id=x'),
     json('POST', '/v1/providers/soulseek/search', {}),
+    json('GET', `/v1/providers/youtube/thumb/${THUMB}`),
     raw('OPTIONS', '/v1/status')
   ],
   library: [
@@ -275,7 +281,21 @@ const scenarios = {
     json('POST', '/v1/providers/soulseek/other', {}),
     json('POST', '/v1/providers//search', {}),
     json('GET', '/v1/providers/soulseek/search'),
-    raw('POST', '/v1/providers/soulseek/search', '{oops', { 'content-type': 'application/json' })
+    raw('POST', '/v1/providers/soulseek/search', '{oops', { 'content-type': 'application/json' }),
+    json('GET', `/v1/providers/youtube/thumb/${THUMB}`),
+    json('GET', '/v1/providers/youtube/thumb/missing'),
+    json('GET', '/v1/providers/youtube/thumb/broken'),
+    json('GET', `/v1/providers/soulseek/thumb/${THUMB}`),
+    json('GET', `/v1/providers/youtube/thumb/${THUMB}`, undefined, { origin: 'http://evil.test' }),
+    json('GET', `/v1/providers/youtube/thumb/${'a'.repeat(64)}`),
+    json('GET', `/v1/providers/youtube/thumb/${'a'.repeat(65)}`),
+    json('GET', '/v1/providers/youtube/thumb/a.b'),
+    json('GET', '/v1/providers/youtube/thumb/'),
+    json('GET', `/v1/providers/You/thumb/${THUMB}`),
+    json('GET', `/v1/providers//thumb/${THUMB}`),
+    json('GET', `/v1/providers/youtube/thumb/${THUMB}/more`),
+    json('GET', `/v1/providers/youtube/thumb/${THUMB}?size=big`),
+    json('POST', `/v1/providers/youtube/thumb/${THUMB}`, {})
   ],
   bare: [
     json('GET', '/v1/status'),
@@ -287,6 +307,7 @@ const scenarios = {
     json('DELETE', '/v1/jobs/' + JOBS[2]),
     json('GET', '/v1/jobs/' + JOBS[1]),
     json('POST', '/v1/providers/soulseek/search', {}),
+    json('GET', `/v1/providers/youtube/thumb/${THUMB}`),
     json('POST', '/v1/entries/remove', { key: 'abc' }),
     json('POST', '/v1/acquire', { id: 'i' }),
     json('GET', '/v1/plugins'),
@@ -320,6 +341,8 @@ function send (port, req) {
       res.on('end', () => {
         const headers = {}
         for (const name of KEEP) if (res.headers[name] !== undefined) headers[name] = res.headers[name]
+        const image = headers['content-type']?.startsWith('image/')
+        if (image) headers['content-length'] = res.headers['content-length']
         resolve({
           method: req.method,
           path: req.path,
@@ -327,7 +350,7 @@ function send (port, req) {
           requestBody: req.body === undefined ? null : req.body,
           status: res.statusCode,
           headers,
-          body: Buffer.concat(chunks).toString('utf8')
+          body: Buffer.concat(chunks).toString(image ? 'hex' : 'utf8')
         })
       })
     })

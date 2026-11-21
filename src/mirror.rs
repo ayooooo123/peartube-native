@@ -34,6 +34,7 @@ use crate::protocol::{is_hex64, is_id};
 use crate::providers::soulseek::client::Backend;
 use crate::providers::soulseek::{self, Provider, SoulseekError};
 use crate::providers::staging::PlaceAndScan;
+use crate::providers::youtube;
 
 /// What a mirror plugin run may ask its host for, as `ctxFor(name)` in the app.
 pub struct Ctx<N: Node> {
@@ -300,6 +301,14 @@ pub trait MirrorProvider<N: Node>: Send + Sync {
     fn list_jobs(&self) -> Vec<Value>;
     fn get_job(&self, job_id: &str) -> Option<Value>;
     fn cancel_job(&self, job_id: &str) -> Option<Value>;
+    /// A result's picture, served by the relay (`thumbnail(id)`). A provider without pictures has
+    /// none.
+    fn thumbnail<'a>(
+        &'a self,
+        _id: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Option<youtube::Picture>> + Send + 'a>> {
+        Box::pin(async { None })
+    }
 }
 
 /// One directory entry, as `statSync` reports it.
@@ -479,6 +488,48 @@ impl FeedFetch for ArtFeed {
     }
 }
 
+/// The host's `fetchBytes`: the guarded fetch with the reply's bytes, 8 s and 512 KiB at most, for
+/// the pictures of a provider's results.
+pub struct ArtPictures {
+    pub allow_private_urls: bool,
+}
+
+impl Default for ArtPictures {
+    fn default() -> Self {
+        Self {
+            allow_private_urls: crate::ssrf::private_urls_allowed(),
+        }
+    }
+}
+
+impl youtube::Fetch for ArtPictures {
+    fn fetch(
+        &self,
+        url: &str,
+    ) -> Pin<Box<dyn Future<Output = Result<youtube::Fetched, String>> + Send>> {
+        let url = url.to_owned();
+        let allow_private = self.allow_private_urls;
+        Box::pin(async move {
+            let reply = art::send_bytes(
+                &url,
+                art::SendOptions {
+                    timeout: Duration::from_millis(8000),
+                    max_bytes: Some(512 * 1024),
+                    allow_private,
+                    ..art::SendOptions::default()
+                },
+            )
+            .await
+            .map_err(|error| error.message().to_owned())?;
+            Ok(youtube::Fetched {
+                status: reply.status,
+                content_type: reply.header("content-type").map(str::to_owned),
+                body: reply.body,
+            })
+        })
+    }
+}
+
 /// `fetchJson`: a 2xx JSON reply, or an error naming the feed by host and path (never its query or credentials).
 pub async fn fetch_json(
     feed: &dyn FeedFetch,
@@ -550,6 +601,26 @@ impl Default for SoulseekSettings {
     }
 }
 
+/// The YouTube provider's ways out: the relay's `ubit` calls (`youtube: { info, download }`) and
+/// the host's guarded fetch for result pictures. Without a backend the plugin reports
+/// `unavailable`.
+#[derive(Clone)]
+pub struct YoutubeSettings {
+    pub backend: Option<Arc<dyn youtube::Backend>>,
+    pub fetch: Arc<dyn youtube::Fetch>,
+    pub random: Arc<dyn RandomSource>,
+}
+
+impl Default for YoutubeSettings {
+    fn default() -> Self {
+        Self {
+            backend: None,
+            fetch: Arc::new(ArtPictures::default()),
+            random: Arc::new(OsRandom),
+        }
+    }
+}
+
 /// `createMirrorHost`'s options.
 pub struct MirrorOptions {
     pub storage: String,
@@ -558,6 +629,7 @@ pub struct MirrorOptions {
     pub watch_dir: Option<String>,
     pub feeds: Vec<String>,
     pub soulseek: SoulseekSettings,
+    pub youtube: YoutubeSettings,
     pub plugins_dir: Option<String>,
     pub poll_interval_ms: u64,
     /// How long a provider's finished save waits for another import to finish before it gives up
@@ -579,6 +651,7 @@ impl Default for MirrorOptions {
             watch_dir: None,
             feeds: Vec::new(),
             soulseek: SoulseekSettings::default(),
+            youtube: YoutubeSettings::default(),
             plugins_dir: None,
             poll_interval_ms: 60_000,
             import_wait_ms: 120_000,
@@ -1185,6 +1258,104 @@ where
     }
 }
 
+/// The `youtube` plugin: the provider behind the host's plugin and provider calls. Its saves land
+/// where the Soulseek provider's mirrors land, placed and imported in the same way.
+struct YoutubePlugin {
+    provider: youtube::Provider,
+    watch: Arc<WatchState>,
+    /// Where saves land.
+    staging_root: String,
+}
+
+fn youtube_error(error: youtube::YoutubeError) -> MirrorError {
+    MirrorError {
+        message: error.message,
+        status: error.status,
+    }
+}
+
+impl<N: Node + 'static> MirrorPlugin<N> for YoutubePlugin
+where
+    N::Error: From<AcquireError>,
+{
+    fn name(&self) -> &str {
+        youtube::NAME
+    }
+
+    fn description(&self) -> &str {
+        youtube::DESCRIPTION
+    }
+
+    fn run<'a>(
+        &'a self,
+        payload: Value,
+        ctx: &'a Ctx<N>,
+    ) -> Pin<Box<dyn Future<Output = Result<Value, MirrorError>> + Send + 'a>> {
+        Box::pin(async move {
+            let host = place_and_scan(&self.watch, ctx, &self.staging_root);
+            self.provider
+                .run(&payload, Some(host))
+                .await
+                .map_err(youtube_error)
+        })
+    }
+
+    fn stop<'a>(&'a self) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
+        Box::pin(self.provider.stop())
+    }
+
+    fn info(&self) -> Value {
+        self.provider.info()
+    }
+
+    fn provider(&self) -> Option<&dyn MirrorProvider<N>> {
+        Some(self)
+    }
+}
+
+impl<N: Node + 'static> MirrorProvider<N> for YoutubePlugin
+where
+    N::Error: From<AcquireError>,
+{
+    fn search<'a>(&'a self, payload: Value, _ctx: &'a Ctx<N>) -> ProviderFuture<'a> {
+        Box::pin(async move { self.provider.search(&payload).await.map_err(youtube_error) })
+    }
+
+    /// The app's plugin has no `browse`: the host answers as for a provider it does not know.
+    fn browse<'a>(&'a self, _payload: Value, _ctx: &'a Ctx<N>) -> ProviderFuture<'a> {
+        Box::pin(async { Err(unknown_provider(youtube::NAME)) })
+    }
+
+    fn mirror<'a>(&'a self, payload: Value, ctx: &'a Ctx<N>) -> ProviderFuture<'a> {
+        Box::pin(async move {
+            let host = place_and_scan(&self.watch, ctx, &self.staging_root);
+            self.provider
+                .mirror(&payload, Some(host))
+                .await
+                .map_err(youtube_error)
+        })
+    }
+
+    fn list_jobs(&self) -> Vec<Value> {
+        self.provider.list_jobs()
+    }
+
+    fn get_job(&self, job_id: &str) -> Option<Value> {
+        self.provider.get_job(job_id)
+    }
+
+    fn cancel_job(&self, job_id: &str) -> Option<Value> {
+        self.provider.cancel_job(job_id)
+    }
+
+    fn thumbnail<'a>(
+        &'a self,
+        id: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Option<youtube::Picture>> + Send + 'a>> {
+        Box::pin(self.provider.thumbnail(id))
+    }
+}
+
 /// What `configure` may change while the host runs; `None` leaves a value as it is.
 #[derive(Debug, Clone, Default)]
 pub struct MirrorConfig {
@@ -1263,14 +1434,14 @@ where
                 "sweptAs": if staged { "staging:" } else { "watch-dir" },
             })
         );
+        let staging_label = match (staged, &opts.watch_dir) {
+            (false, _) => "import folder",
+            (true, Some(_)) => "storage (import folder is read-only)",
+            (true, None) => "storage",
+        };
         let soulseek = Provider::new(soulseek::Options {
             staging_root: Some(staging_root.clone()),
-            staging_label: match (staged, &opts.watch_dir) {
-                (false, _) => "import folder",
-                (true, Some(_)) => "storage (import folder is read-only)",
-                (true, None) => "storage",
-            }
-            .to_owned(),
+            staging_label: staging_label.to_owned(),
             user: opts.soulseek.user.clone(),
             pass: opts.soulseek.pass.clone(),
             server: opts.soulseek.server.clone(),
@@ -1282,6 +1453,18 @@ where
                 opts.storage.clone(),
                 opts.soulseek.backend.clone(),
                 opts.soulseek.random.clone(),
+                opts.now_ms.clone(),
+            )
+        });
+        let youtube = youtube::Provider::new(youtube::Options {
+            staging_root: Some(staging_root.clone()),
+            staging_label: staging_label.to_owned(),
+            fetch: Some(opts.youtube.fetch.clone()),
+            onchange: opts.onchange.clone(),
+            ..youtube::Options::new(
+                opts.storage.clone(),
+                opts.youtube.backend.clone(),
+                opts.youtube.random.clone(),
                 opts.now_ms.clone(),
             )
         });
@@ -1343,6 +1526,11 @@ where
         }
         host.register(Arc::new(SoulseekPlugin {
             provider: soulseek,
+            watch: host.watch_state.clone(),
+            staging_root: staging_root.clone(),
+        }));
+        host.register(Arc::new(YoutubePlugin {
+            provider: youtube,
             watch: host.watch_state.clone(),
             staging_root,
         }));
@@ -1635,6 +1823,12 @@ where
             Some(provider) => provider.mirror(payload, &self.ctx).await,
             None => Err(unknown_provider(name)),
         }
+    }
+
+    /// `providerThumb(name, id)`: a result's picture from the provider `name`, when it has one.
+    pub async fn provider_thumb(&self, name: &str, id: &str) -> Option<youtube::Picture> {
+        let plugin = self.plugin(name)?;
+        plugin.provider()?.thumbnail(id).await
     }
 
     /// `listProviderJobs()`: every provider's mirrors, for `/v1/jobs`.

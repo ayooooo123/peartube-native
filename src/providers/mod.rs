@@ -3,3 +3,4 @@
 
 pub mod soulseek;
 pub mod staging;
+pub mod youtube;

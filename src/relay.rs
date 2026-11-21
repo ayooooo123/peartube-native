@@ -23,7 +23,8 @@ use crate::cast::traits::CastPeer;
 use crate::cast::{CastController, ControllerOptions};
 use crate::http::{self, Api, ApiServer, BlobAddr, HttpError, Options};
 use crate::mirror::{
-    ArtFeed, LocalMirrorFiles, MirrorConfig, MirrorHost, MirrorOptions, SoulseekSettings,
+    ArtFeed, ArtPictures, LocalMirrorFiles, MirrorConfig, MirrorHost, MirrorOptions,
+    SoulseekSettings, YoutubeSettings,
 };
 use crate::node::Node;
 use crate::node::core::{CoreNode, NodeStreams, create_node};
@@ -31,7 +32,7 @@ use crate::private_overlay::dht::DhtOptions;
 use crate::private_overlay::peeroxide::open_dht;
 use crate::private_overlay::{GuardOptions, PrivateGuard, create_private_guard, to_hex};
 use crate::protocol::API_PORT;
-use crate::providers::soulseek;
+use crate::providers::{soulseek, youtube};
 use crate::replicate::{ReplicateConfig, Replicator};
 use crate::settings::Settings;
 use crate::traffic::TrafficGate;
@@ -575,6 +576,13 @@ impl Relay {
             self.0.storage.clone(),
             global_search,
         );
+        let allow_private_urls = matches!(
+            self.0
+                .env
+                .get("PEARTUBE_ALLOW_PRIVATE_URLS")
+                .map(String::as_str),
+            Some("1" | "true")
+        );
         let mirror = Arc::new(
             MirrorHost::start(
                 node.clone(),
@@ -582,15 +590,7 @@ impl Relay {
                 Arc::new(LocalMirrorFiles),
                 Arc::new(NodeStreams),
                 Arc::new(NodeStreams),
-                Arc::new(ArtFeed {
-                    allow_private_urls: matches!(
-                        self.0
-                            .env
-                            .get("PEARTUBE_ALLOW_PRIVATE_URLS")
-                            .map(String::as_str),
-                        Some("1" | "true")
-                    ),
-                }),
+                Arc::new(ArtFeed { allow_private_urls }),
                 vec![seeder, media_check.clone()],
                 MirrorOptions {
                     storage: self.0.storage.display().to_string(),
@@ -618,6 +618,14 @@ impl Relay {
                             .unwrap_or(soulseek::DEFAULT_SHARE_MAX_FILES),
                         backend: soulseek::client::network(),
                         ..SoulseekSettings::default()
+                    },
+                    youtube: YoutubeSettings {
+                        backend: Some(Arc::new(youtube::Ubit {
+                            config_dir: self.ubit_config(),
+                            ubit: ubit_bin(&self.0.env),
+                        })),
+                        fetch: Arc::new(ArtPictures { allow_private_urls }),
+                        ..YoutubeSettings::default()
                     },
                     plugins_dir: None,
                     start_runs: if hiverelay_enabled {
@@ -1279,6 +1287,19 @@ impl http::Mirror for MirrorBridge {
                 Some(mirror) => mirror.forget_imported(&gone).await,
                 None => Vec::new(),
             }
+        })
+    }
+
+    fn provider_thumb<'a>(
+        &'a self,
+        name: &'a str,
+        id: &'a str,
+    ) -> BoxFuture<'a, Result<Option<youtube::Picture>, HttpError>> {
+        Box::pin(async move {
+            Ok(match self.current() {
+                Some(mirror) => mirror.provider_thumb(name, id).await,
+                None => None,
+            })
         })
     }
 }

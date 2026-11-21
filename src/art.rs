@@ -100,14 +100,14 @@ impl Default for SendOptions {
 /// A buffered reply. `url` is the href after redirects; `headers` are lowercased, repeated names joined with ", "
 /// the way Node hands them over.
 #[derive(Debug, Clone)]
-pub struct HttpResponse {
+pub struct HttpResponse<B = String> {
     pub status: u16,
     pub headers: Vec<(String, String)>,
     pub url: String,
-    pub body: String,
+    pub body: B,
 }
 
-impl HttpResponse {
+impl<B> HttpResponse<B> {
     pub fn header(&self, name: &str) -> Option<&str> {
         self.headers
             .iter()
@@ -121,6 +121,18 @@ impl HttpResponse {
 /// The timeout covers the whole exchange, while the app's `req.setTimeout` only covered socket inactivity; a slow
 /// trickle of bytes therefore times out here where the app would keep waiting.
 pub async fn send(url: &str, opts: SendOptions) -> Result<HttpResponse, HttpError> {
+    let reply = send_bytes(url, opts).await?;
+    Ok(HttpResponse {
+        status: reply.status,
+        headers: reply.headers,
+        url: reply.url,
+        body: String::from_utf8(reply.body)
+            .unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned()),
+    })
+}
+
+/// `send` with `binary`: the same exchange, with the reply's body as its bytes.
+pub async fn send_bytes(url: &str, opts: SendOptions) -> Result<HttpResponse<Vec<u8>>, HttpError> {
     let mut current = Url::parse(url).map_err(|_| HttpError::new("Not a valid link"))?;
     let mut redirects = opts.redirects;
     loop {
@@ -130,25 +142,21 @@ pub async fn send(url: &str, opts: SendOptions) -> Result<HttpResponse, HttpErro
         let response = tokio::time::timeout(opts.timeout, hop(&current, &opts))
             .await
             .map_err(|_| HttpError::new("Timed out"))??;
-        let location = response.header("location").map(str::to_owned);
         if (300..400).contains(&response.status)
             && redirects < 5
-            && let Some(location) = location
+            && let Some(location) = response.header("location")
         {
             redirects += 1;
             current = current
-                .join(&location)
+                .join(location)
                 .map_err(|_| HttpError::new("Invalid URL"))?;
             continue;
         }
-        return Ok(HttpResponse {
-            url: current.as_str().to_owned(),
-            ..response
-        });
+        return Ok(response);
     }
 }
 
-async fn hop(url: &Url, opts: &SendOptions) -> Result<HttpResponse, HttpError> {
+async fn hop(url: &Url, opts: &SendOptions) -> Result<HttpResponse<Vec<u8>>, HttpError> {
     let mut headers = HeaderMap::new();
     headers.insert(USER_AGENT, HeaderValue::from_static("PearTube"));
     for (name, value) in &opts.headers {
@@ -209,7 +217,7 @@ async fn hop(url: &Url, opts: &SendOptions) -> Result<HttpResponse, HttpError> {
         status,
         headers: collected,
         url: url.as_str().to_owned(),
-        body: String::from_utf8_lossy(&body).into_owned(),
+        body,
     })
 }
 

@@ -771,6 +771,29 @@ impl Mirror for FakeMirror {
                 .collect()
         })
     }
+
+    fn provider_thumb<'a>(
+        &'a self,
+        name: &'a str,
+        id: &'a str,
+    ) -> futures_util::future::BoxFuture<
+        'a,
+        Result<Option<peartube_native::providers::youtube::Picture>, HttpError>,
+    > {
+        Box::pin(async move {
+            if id == "broken" {
+                return Err(HttpError::new(503, "Picture unavailable"));
+            }
+            Ok(
+                (self.library && name == "youtube" && id == "dQw4w9WgXcQ").then(|| {
+                    peartube_native::providers::youtube::Picture {
+                        content_type: "image/jpeg".to_owned(),
+                        bytes: Bytes::from_static(b"\xff\xd8\0\xfe"),
+                    }
+                }),
+            )
+        })
+    }
 }
 
 struct FakeCast;
@@ -881,6 +904,11 @@ async fn call(addr: SocketAddr, recorded: &Recorded) -> (u16, BTreeMap<String, S
         Client::builder(TokioExecutor::new()).build_http();
     let response = client.request(request).await.expect("response");
     let status = response.status().as_u16();
+    let image = response
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|t| t.starts_with("image/"));
     let mut seen = BTreeMap::new();
     for (name, value) in response.headers() {
         let name = name.as_str();
@@ -899,7 +927,8 @@ async fn call(addr: SocketAddr, recorded: &Recorded) -> (u16, BTreeMap<String, S
                 | "cross-origin-resource-policy"
                 | "cross-origin-opener-policy"
                 | "cross-origin-embedder-policy"
-        ) {
+        ) || (image && name == "content-length")
+        {
             seen.insert(
                 name.to_owned(),
                 value.to_str().unwrap_or_default().to_owned(),
@@ -912,7 +941,11 @@ async fn call(addr: SocketAddr, recorded: &Recorded) -> (u16, BTreeMap<String, S
         .await
         .expect("body")
         .to_bytes();
-    let body = String::from_utf8_lossy(&body).into_owned();
+    let body = if image {
+        peartube_native::private_overlay::to_hex(&body)
+    } else {
+        String::from_utf8_lossy(&body).into_owned()
+    };
     (status, seen, body)
 }
 

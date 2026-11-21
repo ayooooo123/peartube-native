@@ -42,7 +42,7 @@ async function serve (routes = []) {
           return
         }
         res.writeHead(route.status || 200, route.headers || {})
-        res.end(req.method === 'HEAD' ? undefined : route.body || '')
+        res.end(req.method === 'HEAD' ? undefined : route.bodyHex ? Buffer.from(route.bodyHex, 'hex') : route.body || '')
       } catch {}
     }
     if (route?.delayMs) setTimeout(reply, route.delayMs)
@@ -239,7 +239,31 @@ const sendCases = [
     error: 'Timed out'
   },
   { name: 'rejects a non-http scheme', call: { url: 'ftp://example.com/x', opts: {} }, error: 'Only http(s) links can be added' },
-  { name: 'rejects a bad link', call: { url: 'not a url', opts: {} }, error: 'Not a valid link' }
+  { name: 'rejects a bad link', call: { url: 'not a url', opts: {} }, error: 'Not a valid link' },
+  // The first bytes of a JPEG are not UTF-8: as text each bad byte reads as U+FFFD, and `binary` keeps them.
+  {
+    name: 'bytes that are not text come as text',
+    route: { path: '/bytes', status: 200, headers: { 'content-type': 'image/jpeg' }, bodyHex: 'ffd8ffe000104a46494600c3a9ff' },
+    call: { url: '{BASE}/bytes', opts: {} }
+  },
+  {
+    name: 'binary keeps the bytes',
+    route: { path: '/bytes', status: 200, headers: { 'content-type': 'image/jpeg' }, bodyHex: 'ffd8ffe000104a46494600c3a9ff' },
+    call: { url: '{BASE}/bytes', opts: { binary: true } }
+  },
+  {
+    name: 'binary keeps the bytes across a redirect',
+    routes: [
+      { path: '/to', status: 302, headers: { location: '/bytes' } },
+      { path: '/bytes', status: 200, headers: { 'content-type': 'image/jpeg' }, bodyHex: 'ffd8ffe000104a46494600c3a9ff' }
+    ],
+    call: { url: '{BASE}/to', opts: { binary: true } }
+  },
+  {
+    name: 'binary keeps an empty body',
+    route: { path: '/none', status: 204, headers: {} },
+    call: { url: '{BASE}/none', opts: { binary: true } }
+  }
 ]
 for (const test of sendCases) {
   const server = await serve(test.routes || (test.route ? [test.route] : []))
@@ -252,13 +276,14 @@ for (const test of sendCases) {
     method: opts.method || 'GET',
     userAgent: test.userAgent || 'PearTube',
     maxBytes: opts.maxBytes ?? null,
+    binary: opts.binary === true,
     timeoutMs: opts.timeoutMs ?? null,
     requests: server.requests
   }
   if (test.error) entry.error = { message: test.error, status: null, code: null }
   else {
     const { status, headers, url, body } = result.out
-    entry.out = { status, urlPath: new URL(url).pathname + new URL(url).search, contentType: headers['content-type'] ?? null, body }
+    entry.out = { status, urlPath: new URL(url).pathname + new URL(url).search, contentType: headers['content-type'] ?? null, body: typeof body === 'string' ? body : { hex: Buffer.from(body).toString('hex') } }
   }
   if (test.expect) {
     const exp = test.expect
@@ -454,7 +479,8 @@ const downloadCases = [
   { name: 'a stall is Source stalled', plan: { stdout: ['{"event":"progress","downloaded":1}\n'], hangAfterStdout: 1 }, stallTimeout: 120, error: { message: 'Source stalled', status: null, code: null } },
   { name: 'cancel before the start', plan: null, cancelled: 'before', error: { message: 'Cancelled', status: null, code: null } },
   { name: 'cancel while running', plan: { stdout: ['{"event":"progress","downloaded":1}\n'], hangAfterStdout: 1 }, cancelled: 'progress', error: { message: 'Cancelled', status: null, code: null } },
-  { name: 'a config dir reaches the subprocess', plan: { stdout: ['{"event":"done","path":"/out/c.mkv","size":1}\n'], exit: 0 }, configDir: '/tmp/ubit-config', out: { path: '/out/c.mkv', size: 1 } }
+  { name: 'a config dir reaches the subprocess', plan: { stdout: ['{"event":"done","path":"/out/c.mkv","size":1}\n'], exit: 0 }, configDir: '/tmp/ubit-config', out: { path: '/out/c.mkv', size: 1 } },
+  { name: 'audio only is asked for with -a', plan: { stdout: ['{"event":"done","path":"/out/d.m4a","size":9}\n'], exit: 0 }, audio: true, out: { path: '/out/d.m4a', size: 9 } }
 ]
 for (const test of downloadCases) {
   const outDir = mkdtempSync(join(tmpdir(), 'peartube-out-'))
@@ -471,6 +497,7 @@ for (const test of downloadCases) {
     }
     const got = await captured(() => downloadPage(url, outDir, {
       configDir: test.configDir || '',
+      audio: test.audio === true,
       stallTimeout: test.stallTimeout ?? 30_000,
       controller: test.cancelled ? controller : null,
       onProgress
@@ -485,6 +512,7 @@ for (const test of downloadCases) {
     configDir: test.configDir || '',
     stallTimeout: test.stallTimeout ?? 30_000,
     cancelled: test.cancelled ?? null,
+    audio: test.audio === true,
     plan: test.plan,
     progress,
     ...result

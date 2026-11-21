@@ -37,8 +37,8 @@ use self::client::{Backend, Client, ClientSetup, Phase, Progress, ProgressFn};
 use self::place::{LoneTrack, peer_folder_hint, place_single_track};
 use self::rank::{Candidate, ShareList, rank, share_list};
 use super::staging::{
-    ALBUM_PIN, Cancelled, Place, PlaceAndScan, format_album_dir, free_path, is_release_id,
-    note_mirrored, safe_segment, split_ext,
+    ALBUM_PIN, Cancelled, Place, PlaceAndScan, PlaceError, format_album_dir, free_path,
+    is_release_id, note_mirrored, safe_segment, split_ext,
 };
 use crate::acquire::RandomSource;
 use crate::app_settings::{js_string_or_empty, js_truthy};
@@ -1123,7 +1123,10 @@ impl Provider {
             let (caller_id, downloaded) = (request.caller_id.clone(), downloaded.clone());
             let work_dir = work_dir.to_owned();
             move || {
-                let io = |error: std::io::Error| error.to_string();
+                let io = |error: std::io::Error| PlaceError {
+                    message: error.to_string(),
+                    status: None,
+                };
                 std::fs::create_dir_all(&album_dir).map_err(io)?;
                 // The pin goes in before the files. A lone track pins a new folder to its album; a
                 // folder that already has a pin keeps it.
@@ -1183,18 +1186,16 @@ impl Provider {
                     let (provider, job) = (self.clone(), job.clone());
                     move || provider.stopped(&job)
                 });
-                host(place, stopped).await.map_err(|error| SoulseekError {
-                    message: error.message,
-                    status: error.status,
-                    reason: None,
-                })?
+                host(place, stopped).await
             }
             // A bare provider has no host to import for it: the files are only placed.
-            None => {
-                place().map_err(SoulseekError::plain)?;
-                json!({ "scanned": 0, "ingested": 0, "items": [] })
-            }
-        };
+            None => place().map(|()| json!({ "scanned": 0, "ingested": 0, "items": [] })),
+        }
+        .map_err(|error| SoulseekError {
+            message: error.message,
+            status: error.status,
+            reason: None,
+        })?;
         let placed = placed.lock().expect("placed names").clone();
         let items = scanned
             .get("items")

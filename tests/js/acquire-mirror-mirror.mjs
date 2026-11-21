@@ -156,7 +156,7 @@ async function settleRechunk (node) {
   throw new Error('startup count never ran')
 }
 
-const PORTED = ['http-acquire', 'channel-backfill', 'blob-rechunk', 'watch-dir', 'feed-mirror', 'soulseek']
+const PORTED = ['http-acquire', 'channel-backfill', 'blob-rechunk', 'watch-dir', 'feed-mirror', 'soulseek', 'youtube']
 
 async function harness (seedJobs = [], watchDir = null) {
   fsStub.reset()

@@ -6,11 +6,12 @@
 // Time moves in steps of the scenario's `tick`, and every scripted event falls on a step, so a timer fires at the
 // same instant here and under tokio's paused clock.
 import { mock } from 'node:test'
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { basename, dirname, join, resolve } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import { TICK, fakeAddon, network as scenario, sha, tree } from './soulseek-network.mjs'
+import { fakeHost } from './provider-host.mjs'
+import { TICK, fakeAddon, network as scenario, tree } from './soulseek-network.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const APP = process.env.PEARTUBE_APP || resolve(here, '../../../peartube')
@@ -20,51 +21,6 @@ const NOW = 1_700_000_000_000
 // Lets every promise chain and the plugin's own `await`s run before the clock moves again.
 const flush = async () => { for (let i = 0; i < 40; i++) await new Promise(resolve => setImmediate(resolve)) }
 const tick = async () => { mock.timers.tick(TICK); await flush() }
-const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
-
-// What the mirror host does for a provider (`placeAndScan` in the app's mirror.js), with the other import scripted:
-// `hold(ms)` lets another import hold the folder that long from now, and `limit(ms)` is how long the host waits
-// before it gives up. Nothing is placed while it waits. Then the provider's `place` runs, and the scan answers one
-// item for each media file it has not reported before. The host's own wait is compared in the library oracle;
-// this one only gives the provider every answer a host can give.
-function fakeHost (log, dir) {
-  const seen = new Set()
-  let heldUntil = 0
-  let limit = Infinity
-  async function scan () {
-    log.push({ scan: basename(dir) })
-    await sleep(TICK)
-    const items = []
-    let scanned = 0
-    for (const folder of readdirSync(dir).sort()) {
-      if (folder.startsWith('.') || !statSync(join(dir, folder)).isDirectory()) continue
-      for (const name of readdirSync(join(dir, folder)).sort()) {
-        if (name.startsWith('.') || name.endsWith('.json')) continue
-        scanned++
-        if (seen.has(`${folder}/${name}`)) continue
-        seen.add(`${folder}/${name}`)
-        const bytes = readFileSync(join(dir, folder, name))
-        items.push({ file: name, rel: `${folder}/${name}`, size: bytes.length, sha256: sha(bytes) })
-      }
-    }
-    return { scanned, ingested: items.length, items }
-  }
-  return {
-    hold (ms) { heldUntil = Date.now() + ms },
-    limit (ms) { limit = ms },
-    async placeAndScan (place, _ctx, { cancelled = () => false } = {}) {
-      const end = Date.now() + limit
-      while (Date.now() < heldUntil) {
-        if (cancelled()) throw new Error('Cancelled')
-        if (Date.now() >= end) throw Object.assign(new Error(`Another import has held the folder for ${Math.ceil(limit / 1000)} s. Nothing was saved; try again when it finishes.`), { status: 503 })
-        await sleep(TICK)
-      }
-      if (cancelled()) throw new Error('Cancelled')
-      place()
-      return scan()
-    }
-  }
-}
 
 async function runSession (session) {
   // Every session has its own clock: the timers a session leaves behind go with it.
@@ -73,7 +29,7 @@ async function runSession (session) {
   const storage = join(root, 'storage')
   mkdirSync(storage)
   const log = []
-  const host = fakeHost(log, session.importFolder ? join(root, 'import') : join(storage, 'staging'))
+  const host = fakeHost(log, session.importFolder ? join(root, 'import') : join(storage, 'staging'), TICK)
   let changes = 0
   const start = Date.now()
   const plug = createSoulseekPlugin({

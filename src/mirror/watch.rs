@@ -736,10 +736,7 @@ impl WatchState {
         if stopped() {
             return Err(PlaceError::cancelled());
         }
-        place().map_err(|message| PlaceError {
-            message,
-            status: None,
-        })?;
+        place()?;
         Ok(if self.files.exists(dir) {
             self.scan_inner(dir, ctx, prefix).await
         } else {

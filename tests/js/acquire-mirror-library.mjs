@@ -236,7 +236,7 @@ async function runSession (session) {
         .map(row => ({ id: row.id, sha256: row.sha256 }))
       put(i, [...await host.forgetImported(gone)])
     } else if (step.list) {
-      put(i, host.list().filter(plugin => plugin.name === 'watch-dir' || plugin.name === 'soulseek'))
+      put(i, host.list().filter(plugin => ['watch-dir', 'soulseek', 'youtube'].includes(plugin.name)))
     } else if (step.tree) {
       put(i, { import: existsSync(importDir) ? tree(importDir) : null, staging: existsSync(stagingDir) ? tree(stagingDir) : null })
     } else if (step.ledger) {
