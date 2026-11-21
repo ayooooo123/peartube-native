@@ -35,6 +35,7 @@ fi
 # Let the stream run on for a while, then stop: the first minute is the subject.
 sleep "${DIAG_TAIL:-45}"
 kill $T 2>/dev/null
+pkill -f cache-ceiling.mjs 2>/dev/null
 echo "===== test output"
 grep -v '^cache-freeze: watch' "$OUT/test.log" | cut -c1-240 | head -120
 echo "===== watch"

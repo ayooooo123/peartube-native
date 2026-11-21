@@ -48,10 +48,16 @@ jobs:
         working-directory: peartube
       - run: npm ci --no-audit --no-fund
         working-directory: peartube-native/tests/js
-      - run: sudo apt-get install -y -qq gdb
       - name: Timing, no debugger
         working-directory: peartube-native
         run: DIAG_GDB=0 DIAG_TAIL=60 DIAG_OUT=/tmp/diag-a sh ../diag-src/diag/run.sh ../diag-src/diag
-      - name: Timing, with stack samples
+      - name: Timing, no debugger, second run
         working-directory: peartube-native
-        run: DIAG_TAIL=20 DIAG_OUT=/tmp/diag-b sh ../diag-src/diag/run.sh ../diag-src/diag sudo
+        run: DIAG_GDB=0 DIAG_TAIL=60 DIAG_OUT=/tmp/diag-c sh ../diag-src/diag/run.sh ../diag-src/diag
+      - name: Timing, with stack samples
+        continue-on-error: true
+        working-directory: peartube-native
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq gdb
+          DIAG_TAIL=20 DIAG_OUT=/tmp/diag-b sh ../diag-src/diag/run.sh ../diag-src/diag sudo
