@@ -1226,6 +1226,7 @@ where
                 byte_length: 0,
                 extra: Map::new(),
             },
+            music: None,
             epoch: Some(meta.epoch),
             wrapped_key: Some(meta.wrapped_key),
             extra: Map::new(),
@@ -2559,6 +2560,13 @@ where
                 byte_length: session.byte_length(),
                 extra: Map::new(),
             },
+            // `music` in the meta is free text from whoever asked for the put: what it says, clamped,
+            // or `null` when it says nothing.
+            music: meta
+                .extra
+                .get("music")
+                .filter(|music| crate::app_settings::js_truthy(music))
+                .map(|music| json!(crate::protocol::clean_music(Some(music)))),
             epoch: None,
             wrapped_key: None,
             extra: Map::new(),

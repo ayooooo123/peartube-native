@@ -62,7 +62,7 @@
         "byteLength": 1100000
       },
       "epoch": 1,
-      "wrappedKey": "a34d51d171686b7621e40cba42e8e84d3b867b9299296e2e1cd506c664405adb58dda707f5d355188029c5436165ae901f0dfd106ec5b8b9f7f51db1c3321f3307c99129a30eeca3"
+      "wrappedKey": "8b652495944866b904689c345f220717418d5384ddb01077680d3bbce5759012d8084e14fb874c2a76c2eb4fe188bb396ae8b99cd7a6efb99bf7ffbbc67aa1b3d2b218418d19e7a2"
     },
     "unwrapped": "4444444444444444444444444444444444444444444444444444444444444444",
     "core": {
@@ -81,7 +81,34 @@
       ]
     },
     "ops": [
-      "{\"type\":\"announce\",\"id\":\"youtube:fixtureenc\",\"title\":\"Encrypted Ingest\",\"size\":1100000,\"sha256\":\"ee22b6b66bb9d5c10e931027b8fbb4d816a2fc6c27af4c7a5149ee975549d7dd\",\"blobs\":\"304c4f9855857c3e151d189bb09a499fad7a34f495afd574034db19ed4b04c1c\",\"blob\":{\"blockOffset\":0,\"byteOffset\":0,\"blockLength\":3,\"byteLength\":1100000},\"epoch\":1,\"wrappedKey\":\"a34d51d171686b7621e40cba42e8e84d3b867b9299296e2e1cd506c664405adb58dda707f5d355188029c5436165ae901f0dfd106ec5b8b9f7f51db1c3321f3307c99129a30eeca3\"}"
+      "{\"type\":\"announce\",\"id\":\"youtube:fixtureenc\",\"title\":\"Encrypted Ingest\",\"size\":1100000,\"sha256\":\"ee22b6b66bb9d5c10e931027b8fbb4d816a2fc6c27af4c7a5149ee975549d7dd\",\"blobs\":\"304c4f9855857c3e151d189bb09a499fad7a34f495afd574034db19ed4b04c1c\",\"blob\":{\"blockOffset\":0,\"byteOffset\":0,\"blockLength\":3,\"byteLength\":1100000},\"epoch\":1,\"wrappedKey\":\"8b652495944866b904689c345f220717418d5384ddb01077680d3bbce5759012d8084e14fb874c2a76c2eb4fe188bb396ae8b99cd7a6efb99bf7ffbbc67aa1b3d2b218418d19e7a2\"}"
+    ]
+  },
+  "music": {
+    "given": [
+      {
+        "title": " Blue Train ",
+        "artist": "John Coltrane",
+        "disc": 1
+      },
+      {
+        "title": "TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT",
+        "artist": ""
+      },
+      {
+        "artist": 7
+      },
+      {},
+      "a string",
+      0
+    ],
+    "announces": [
+      "{\"type\":\"announce\",\"id\":\"clip:music0\",\"title\":\"Music 0\",\"size\":1000,\"sha256\":\"008549d94fa71e7a0a483d84380d05a923a4b18e79ba1f8a8ddac923956d32ef\",\"blobs\":\"cedc6332b56402c077a284912469eeb6bc4ce5d40e3c675919058014ed4bafc8\",\"blob\":{\"blockOffset\":0,\"byteOffset\":0,\"blockLength\":1,\"byteLength\":1000},\"music\":{\"title\":\" Blue Train \",\"artist\":\"John Coltrane\"}}",
+      "{\"type\":\"announce\",\"id\":\"clip:music1\",\"title\":\"Music 1\",\"size\":1001,\"sha256\":\"323c20e85d14ce26fc4157054b50b9d3d63c2d5a015ac12e3f0003f5eaee0257\",\"blobs\":\"55e54b02c6f11ef59f7b593d16ffd55224c9b244b950358ac9fd6398ed8637b8\",\"blob\":{\"blockOffset\":0,\"byteOffset\":0,\"blockLength\":1,\"byteLength\":1001},\"music\":{\"title\":\"TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT\"}}",
+      "{\"type\":\"announce\",\"id\":\"clip:music2\",\"title\":\"Music 2\",\"size\":1002,\"sha256\":\"08992e40977388f261580d13ce285cb6ff3eec253722555c0f89d2a9a1820b8b\",\"blobs\":\"e9345de2d5d3199cf214c78cdd9140a3e9c3c238c3c7ef4778d54e5a22d73ce4\",\"blob\":{\"blockOffset\":0,\"byteOffset\":0,\"blockLength\":1,\"byteLength\":1002},\"music\":null}",
+      "{\"type\":\"announce\",\"id\":\"clip:music3\",\"title\":\"Music 3\",\"size\":1003,\"sha256\":\"3113eedecc3b16e6386a67e94b58b0dca3515524ddee6a97caf99c9408f1612f\",\"blobs\":\"a65fc2deb99c2502af2a8f849b658df40624289426ce4802b973e9f443dfce8a\",\"blob\":{\"blockOffset\":0,\"byteOffset\":0,\"blockLength\":1,\"byteLength\":1003},\"music\":null}",
+      "{\"type\":\"announce\",\"id\":\"clip:music4\",\"title\":\"Music 4\",\"size\":1004,\"sha256\":\"3ba91ad7afc22efe95a9874fb55f5d3facdc647171e48d4aa8a4855faadfe35d\",\"blobs\":\"d70938688c60e0b1a9c9a0c956868a95c6372b1447452b2a227ac0b044b7633b\",\"blob\":{\"blockOffset\":0,\"byteOffset\":0,\"blockLength\":1,\"byteLength\":1004},\"music\":null}",
+      "{\"type\":\"announce\",\"id\":\"clip:music5\",\"title\":\"Music 5\",\"size\":1005,\"sha256\":\"3234828451ec202c8702d4152d9d8ef1d9e744d2f1ed50719eb6acca09927479\",\"blobs\":\"35277ba0a494f51294ae48ac5eec1c9beb8bc06edf3cd87609f25aa9e4b3e2e7\",\"blob\":{\"blockOffset\":0,\"byteOffset\":0,\"blockLength\":1,\"byteLength\":1005}}"
     ]
   },
   "cacheTrim": {

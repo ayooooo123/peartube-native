@@ -98,14 +98,26 @@ export "CXXFLAGS_$(env_name "$triple")=-fno-rtti"
 cargo rustc --manifest-path "$repo/Cargo.toml" --target-dir "$repo/target" -p peartube-native-ffi \
   --lib --crate-type cdylib --profile "$profile" --target "$triple"
 
+# The asset's whole ABI is six pt_ functions. Reads nm's defined, exported symbols and fails on
+# any other count or name: a dependency that exports C symbols of its own (the Soulseek client
+# does, for its addon) would have them exported from this library too.
+only_pt_exports() {
+  awk -v asset="$asset" '
+    { count++; if ($NF !~ /^_?pt_/) other = other " " $NF }
+    END {
+      if (count == 6 && other == "") exit 0
+      print asset ": exports are not the six pt_ symbols alone (" count " symbols;" other ")" > "/dev/stderr"
+      exit 1
+    }'
+}
+
 # A released asset is frozen: fail the build rather than publish a wrong one.
 case "$target" in
   android-arm64|android-arm64-dev)
     "$strip" --strip-unneeded -o "$out/$asset" "$built"
     "$bin/llvm-readelf" -l "$out/$asset" | grep -Eq '^  LOAD .*0x4000$' ||
       { echo "$asset: LOAD segments are not 16 KiB aligned" >&2; exit 1; }
-    [ "$("$bin/llvm-nm" -D --defined-only "$out/$asset" | grep -c ' T pt_')" -eq 6 ] ||
-      { echo "$asset: the six pt_ symbols are not all exported" >&2; exit 1; }
+    "$bin/llvm-nm" -D --defined-only "$out/$asset" | only_pt_exports
     ;;
   darwin-arm64)
     # Local symbols are a third of the linked file and nothing reads them: the six pt_ exports stay.
@@ -114,8 +126,7 @@ case "$target" in
     codesign --force --sign - "$out/$asset"
     [ "$(otool -D "$out/$asset" | sed -n 2p)" = "@rpath/libpeartube_native_ffi.dylib" ] ||
       { echo "$asset: install name is not @rpath/libpeartube_native_ffi.dylib" >&2; exit 1; }
-    [ "$(nm -gU "$out/$asset" | grep -c ' _pt_')" -eq 6 ] ||
-      { echo "$asset: the six pt_ symbols are not all exported" >&2; exit 1; }
+    nm -gU "$out/$asset" | only_pt_exports
     ;;
 esac
 

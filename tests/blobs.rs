@@ -604,6 +604,49 @@ async fn encrypted_ingest_matches_the_app() {
     h.blobs.stop_server().await;
 }
 
+/// `put` writes a track's own name and artist into its announce as the app does: clamped, with
+/// nothing else kept, `null` when what the caller gave says nothing, and absent when it gave nothing.
+#[tokio::test]
+async fn music_in_an_announce_matches_the_app() {
+    let fixtures = fixtures();
+    let primary = primary_from(&fixtures);
+    let writer = unhex32(fixtures["localKey"].as_str().expect("localKey"));
+    let given = fixtures["music"]["given"].as_array().expect("given");
+    let expected = strings(&fixtures["music"]["announces"]);
+    assert_eq!(given.len(), expected.len());
+
+    let h = harness(primary, writer, 1_000_000).await;
+    for (n, (music, expected)) in given.iter().zip(&expected).enumerate() {
+        let mut meta = put_meta(
+            &format!("clip:music{n}"),
+            &format!("Music {n}"),
+            &format!("video:fixture-music-{n}"),
+        );
+        meta.extra.insert("music".into(), music.clone());
+        let announce = h
+            .blobs
+            .put(meta, BufferSource::new(data(1000 + n)))
+            .await
+            .expect("put");
+        let announce = serde_json::to_value(&announce).expect("announce json");
+        let expected: Value = serde_json::from_str(expected).expect("recorded announce");
+        assert_eq!(announce, expected, "music given as {music}");
+        // `music` sits where the app writes it: after the blob.
+        let fields = |op: &Value| {
+            op.as_object()
+                .expect("op")
+                .keys()
+                .cloned()
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            fields(&announce),
+            fields(&expected),
+            "music given as {music}"
+        );
+    }
+}
+
 #[tokio::test]
 async fn resumed_ingest_finishes_the_core() {
     let fixtures = fixtures();
@@ -1691,6 +1734,7 @@ async fn rechunk_moves_a_legacy_slot_span_into_its_own_core() {
             byte_length: id.byte_length,
             extra: Map::new(),
         },
+        music: None,
         epoch: None,
         wrapped_key: None,
         extra: Map::new(),
@@ -1781,6 +1825,7 @@ async fn rechunk_dedupes_identical_payloads() {
                 byte_length: id.byte_length,
                 extra: Map::new(),
             },
+            music: None,
             epoch: None,
             wrapped_key: None,
             extra: Map::new(),
@@ -1827,6 +1872,7 @@ async fn sync_local_channel_backfills_a_legacy_bee() {
             byte_length: 10,
             extra: Map::new(),
         },
+        music: None,
         epoch: None,
         wrapped_key: None,
         extra: Map::new(),
@@ -1866,6 +1912,7 @@ async fn warm_joins_the_swarm_and_registers_ranges() {
             byte_length: 4 * BLOCK as u64,
             extra: Map::new(),
         },
+        music: None,
         epoch: None,
         wrapped_key: None,
         extra: Map::new(),

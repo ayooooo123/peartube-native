@@ -18,10 +18,11 @@ use hyper_util::client::legacy::Client;
 use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::rt::TokioExecutor;
 use peartube_native::http::{
-    Acquirer, Api, ArtLookup, BlobAddr, CastBridge, HttpError, Mirror, Options,
+    Acquirer, Api, ArtLookup, BlobAddr, CastBridge, HttpError, Mirror, Options, ProviderCall,
 };
 use peartube_native::node::api::*;
 use peartube_native::node::{Node, PutSource};
+use peartube_native::protocol::Music;
 use serde::Deserialize;
 use serde_json::{Map, Number, Value, json};
 use tokio::sync::watch;
@@ -63,11 +64,17 @@ fn reference() -> Reference {
 // ---------------------------------------------------------------- the stub node
 
 #[derive(Debug)]
-struct FakeError;
+struct FakeError(String);
+
+impl FakeError {
+    fn new() -> Self {
+        Self("fake node error".to_owned())
+    }
+}
 
 impl std::fmt::Display for FakeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("fake node error")
+        f.write_str(&self.0)
     }
 }
 
@@ -83,7 +90,7 @@ impl PutSource for FakeSource {
         _offset: u64,
         _meta: &mut PutMeta,
     ) -> Result<std::pin::Pin<Box<dyn tokio::io::AsyncRead + Send>>, FakeError> {
-        Err(FakeError)
+        Err(FakeError::new())
     }
 
     fn on_data(&mut self, _bytes: u64) {}
@@ -96,6 +103,8 @@ static FAKE_SWARM: FakeSwarm = FakeSwarm;
 
 struct Fake {
     stream: String,
+    /// The entries a scenario removes from, when it has its own.
+    library: Option<std::sync::Mutex<Vec<Entry>>>,
 }
 
 /// The node's native swarm handle, which the API server never touches.
@@ -134,6 +143,53 @@ impl Fake {
     fn new(stream: &str) -> Self {
         Self {
             stream: stream.to_owned(),
+            library: None,
+        }
+    }
+
+    /// A library the owner removes from: this channel's album and films, and another channel's
+    /// film. `stuck` and `unseen-stuck` cannot be removed.
+    fn library(stream: &str) -> Self {
+        let album = format!("mb:{}", "0".repeat(32));
+        let own = |key: &str, id: &str, sha256: &str| Entry {
+            key: key.to_owned(),
+            id: id.to_owned(),
+            sha256: sha256.to_owned(),
+            source: "chan".to_owned(),
+            ..movie(stream)
+        };
+        let track = |n: u64| Entry {
+            title: "Album".to_owned(),
+            series_key: album.clone(),
+            base_title: "Album".to_owned(),
+            year: None,
+            season: Some(1),
+            episode: Some(n),
+            music: (n != 3).then(|| Music {
+                title: Some(format!("Track {n}")),
+                artist: Some("Artist".to_owned()),
+            }),
+            ..own(
+                &format!("t{n}"),
+                &format!("{album}:s01e0{n}"),
+                &format!("s{n}"),
+            )
+        };
+        let theirs = Entry {
+            source: "other".to_owned(),
+            ..own("theirs", "imdb:tt0000003", "f3")
+        };
+        let rows = vec![
+            track(1),
+            track(2),
+            track(3),
+            own("own-film", "imdb:tt0000001", "f1"),
+            own("stuck", "imdb:tt0000002", "f2"),
+            theirs,
+        ];
+        Self {
+            stream: stream.to_owned(),
+            library: Some(std::sync::Mutex::new(rows)),
         }
     }
 }
@@ -220,6 +276,7 @@ fn movie(stream: &str) -> Entry {
         locked: false,
         source: "source-key-1".to_owned(),
         source_kind: "channel".to_owned(),
+        music: None,
         season: None,
         episode: None,
         series_key: "film".to_owned(),
@@ -287,6 +344,7 @@ fn published(payload: &Value) -> Published {
                 byte_length: 3,
                 extra: Map::new(),
             },
+            music: None,
             epoch: None,
             wrapped_key: None,
             extra: Map::new(),
@@ -357,7 +415,7 @@ impl Node for Fake {
         Ok(None)
     }
     async fn blob_core(&self, _key: &str) -> Result<(), FakeError> {
-        Err(FakeError)
+        Err(FakeError::new())
     }
     async fn seedable_cores(&self, _include_cached: bool) -> Result<Vec<SeedableCore>, FakeError> {
         Ok(Vec::new())
@@ -386,6 +444,9 @@ impl Node for Fake {
         id: Option<&str>,
         _options: SearchOptions,
     ) -> Result<Vec<Entry>, FakeError> {
+        if let Some(rows) = &self.library {
+            return Ok(rows.lock().unwrap().clone());
+        }
         Ok(match id {
             None => vec![movie(&self.stream), episode(&self.stream)],
             Some("imdb:tt1234567") => vec![movie(&self.stream)],
@@ -394,7 +455,7 @@ impl Node for Fake {
         })
     }
     async fn put(&self, _meta: PutMeta, _source: FakeSource) -> Result<Announce, FakeError> {
-        Err(FakeError)
+        Err(FakeError::new())
     }
     async fn drop_store(&self, _name: &str) -> Result<(), FakeError> {
         Ok(())
@@ -403,7 +464,7 @@ impl Node for Fake {
         Ok(())
     }
     async fn publish(&self, _meta: PutMeta, _source: FakeSource) -> Result<Published, FakeError> {
-        Err(FakeError)
+        Err(FakeError::new())
     }
     async fn publish_channel(
         &self,
@@ -412,7 +473,13 @@ impl Node for Fake {
     ) -> Result<Published, FakeError> {
         Ok(published(&value))
     }
-    async fn remove(&self, _key: &str) -> Result<(), FakeError> {
+    async fn remove(&self, key: &str) -> Result<(), FakeError> {
+        if let Some(rows) = &self.library {
+            if matches!(key, "stuck" | "unseen-stuck") {
+                return Err(FakeError(format!("Cannot remove {key}")));
+            }
+            rows.lock().unwrap().retain(|row| row.key != key);
+        }
         Ok(())
     }
     async fn publish_source(&self, source_key: &str, title: &str) -> Result<Value, FakeError> {
@@ -587,7 +654,12 @@ impl Node for Fake {
 
 // ---------------------------------------------------------------- the app's other hooks
 
-struct FakeAcquirer;
+/// `known_only`: any job but the one it knows is a provider's or nobody's.
+struct FakeAcquirer {
+    known_only: bool,
+}
+
+const KNOWN_JOB: &str = "0123456789abcdef0123456789abcdef0123";
 
 impl Acquirer for FakeAcquirer {
     fn add<'a>(
@@ -608,7 +680,7 @@ impl Acquirer for FakeAcquirer {
     }
 
     fn get(&self, id: &str) -> Value {
-        if id == "0123456789abcdef0123456789abcdef0123" {
+        if id == KNOWN_JOB {
             json!({ "jobId": id, "state": "queued" })
         } else {
             Value::Null
@@ -616,11 +688,24 @@ impl Acquirer for FakeAcquirer {
     }
 
     fn cancel(&self, id: &str) -> Value {
+        if self.known_only && id != KNOWN_JOB {
+            return Value::Null;
+        }
         json!({ "jobId": id, "state": "cancelled" })
     }
 }
 
-struct FakeMirror;
+/// `library`: a mirror host with one provider, `soulseek`, one mirror under way, and files for
+/// the first album track and the film (deleted) and for the second track (kept).
+struct FakeMirror {
+    library: bool,
+}
+
+const PROVIDER_JOB: &str = "11111111-1111-1111-1111-111111111111";
+
+fn provider_job(status: &str) -> Value {
+    json!({ "jobId": PROVIDER_JOB, "plugin": "soulseek", "status": status })
+}
 
 impl Mirror for FakeMirror {
     fn list(&self) -> Value {
@@ -633,6 +718,58 @@ impl Mirror for FakeMirror {
         payload: Value,
     ) -> futures_util::future::BoxFuture<'a, Result<Value, HttpError>> {
         Box::pin(async move { Ok(json!({ "plugin": plugin, "payload": payload })) })
+    }
+
+    fn provider<'a>(
+        &'a self,
+        call: ProviderCall,
+        name: &'a str,
+        payload: Value,
+    ) -> futures_util::future::BoxFuture<'a, Result<Value, HttpError>> {
+        Box::pin(async move {
+            if name != "soulseek" {
+                return Err(HttpError::new(404, format!("Unknown provider: {name}")));
+            }
+            let call = match call {
+                ProviderCall::Search => "search",
+                ProviderCall::Browse => "browse",
+                ProviderCall::Mirror => "mirror",
+            };
+            Ok(json!({ "call": call, "name": name, "payload": payload }))
+        })
+    }
+
+    fn provider_jobs(&self) -> Vec<Value> {
+        match self.library {
+            true => vec![provider_job("transferring")],
+            false => Vec::new(),
+        }
+    }
+
+    fn provider_job(&self, id: &str) -> Option<Value> {
+        (self.library && id == PROVIDER_JOB).then(|| provider_job("transferring"))
+    }
+
+    fn cancel_provider_job(&self, id: &str) -> Option<Value> {
+        (self.library && id == PROVIDER_JOB).then(|| provider_job("removed"))
+    }
+
+    fn forget_imported<'a>(
+        &'a self,
+        gone: Vec<(String, String)>,
+    ) -> futures_util::future::BoxFuture<'a, Vec<(String, &'static str)>> {
+        Box::pin(async move {
+            gone.iter()
+                .filter_map(|(id, sha256)| {
+                    let file = match sha256.as_str() {
+                        "s1" | "f1" => "deleted",
+                        "s2" => "kept",
+                        _ => return None,
+                    };
+                    Some((format!("{id}/{sha256}"), file))
+                })
+                .collect()
+        })
     }
 }
 
@@ -710,8 +847,8 @@ fn full_options(token: Option<&str>) -> Options {
     options.extra_status = Some(Arc::new(
         || json!({ "lan": null, "apiUrl": "http://relay.local:8174" }),
     ));
-    options.acquirer = Some(Arc::new(FakeAcquirer));
-    options.mirror = Some(Arc::new(FakeMirror));
+    options.acquirer = Some(Arc::new(FakeAcquirer { known_only: false }));
+    options.mirror = Some(Arc::new(FakeMirror { library: false }));
     options.cast = Some(Arc::new(FakeCast));
     options.on_sources_changed = Some(Arc::new(|_sources| {}));
     options
@@ -864,10 +1001,23 @@ async fn token_scenario_matches_the_app() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn library_scenario_matches_the_app() {
+    let mut options = full_options(None);
+    options.acquirer = Some(Arc::new(FakeAcquirer { known_only: true }));
+    options.mirror = Some(Arc::new(FakeMirror { library: true }));
+    replay("library", options, Some(Arc::new(Fake::library(STREAM)))).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn bare_scenario_matches_the_app() {
     let options = Options {
         fallback_status: Some(json!({ "tracker": "trk" })),
-        fallback_jobs: Some(Arc::new(|| json!([{ "jobId": "fallback" }]))),
+        fallback_jobs: Some(Arc::new(|| {
+            json!([
+                { "jobId": "fallback" },
+                { "jobId": "33333333-3333-3333-3333-333333333333", "state": "queued" },
+            ])
+        })),
         ..Options::default()
     };
     replay("bare", options, None).await;

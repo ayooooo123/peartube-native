@@ -36,7 +36,9 @@ const sources = [
   { file: 'identity-reference.json', script: 'fixtures/gen/identity.mjs' },
   { file: 'js-reference.json', script: 'fixtures/gen/gen.mjs' },
   { file: 'resolution-reference.json', script: 'fixtures/gen/resolution.mjs' },
-  { file: 'settings-reference.json', script: 'fixtures/gen/settings.mjs' }
+  { file: 'settings-reference.json', script: 'fixtures/gen/settings.mjs' },
+  { file: 'soulseek-reference.json', script: 'fixtures/gen/soulseek.mjs' },
+  { file: 'tags-reference.json', script: 'fixtures/gen/tags.mjs' }
 ]
 
 const head = spawnSync('git', ['-C', APP, 'rev-parse', 'HEAD'], { encoding: 'utf8' })

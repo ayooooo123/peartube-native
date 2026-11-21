@@ -50,20 +50,35 @@ export function rmSync (path) {
   appendLog(['rm', path])
 }
 
+export function unlinkSync (path) {
+  if (!state.files.delete(path)) {
+    const error = new Error("ENOENT: no such file or directory, unlink '" + path + "'")
+    error.code = 'ENOENT'
+    throw error
+  }
+}
+
+export function rmdirSync (path) {
+  state.dirs.delete(path)
+}
+
 export function existsSync (path) {
   return state.files.has(path) || state.dirs.has(path)
 }
 
-export function readdirSync (dir) {
+export function readdirSync (dir, options = {}) {
   const prefix = dir.endsWith('/') ? dir : dir + '/'
   const names = new Set()
-  for (const key of state.files.keys()) {
-    if (key.startsWith(prefix)) names.add(key.slice(prefix.length).split('/')[0])
+  const folders = new Set()
+  for (const key of [...state.files.keys(), ...state.dirs]) {
+    if (!key.startsWith(prefix)) continue
+    const [name, ...below] = key.slice(prefix.length).split('/')
+    names.add(name)
+    if (below.length || state.dirs.has(key)) folders.add(name)
   }
-  for (const folder of state.dirs) {
-    if (folder.startsWith(prefix)) names.add(folder.slice(prefix.length).split('/')[0])
-  }
-  return [...names].filter(Boolean)
+  const list = [...names].filter(Boolean)
+  if (!options.withFileTypes) return list
+  return list.map(name => ({ name, isDirectory: () => folders.has(name) }))
 }
 
 export function mkdirSync (path) {
@@ -97,6 +112,22 @@ export function createReadStream (path) {
     yield Buffer.from(text)
   })()
 }
+
+// Reading a file's first bytes for its tags: a descriptor is the path.
+export function openSync (path) {
+  readFileSync(path)
+  return path
+}
+
+export function fstatSync (path) {
+  return statSync(path)
+}
+
+export function readSync (path, buffer, offset, length, position) {
+  return Buffer.from(state.files.get(path)).copy(buffer, offset, position, position + length)
+}
+
+export function closeSync () {}
 
 export function statfsSync () {
   return { bavail: 1000, bsize: 4096 }

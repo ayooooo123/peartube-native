@@ -1,7 +1,7 @@
 {
   "meta": {
     "source": "fixtures/gen/gen.mjs from the PEARTUBE_APP checkout",
-    "commit": "15298dd1629f9441bbbbe1339c63f864755c7ba0",
+    "commit": "2a3f14eeb5f7da6bf37477e65adc808e28c3f2ab",
     "node": "v24.18.0",
     "hypercore": "github:ayooooo123/hypercore#ca652cae7aca0430a1e9d86c1acd4f783243a265",
     "hypercoreCrypto": "^3.7.0",
@@ -1073,55 +1073,55 @@
     {
       "videoKey": "5eafc7ae898c4542bdb20e661367ae18ba282e904350658a92e8b320affd0ec1",
       "epochKey": "8810524237cb7b224bb08c9ec5756dd75e0ad3672d85265818c1522cec43d21e",
-      "wrapped": "8b5494dc000f563b96b521af89d063478f9874a67e6a6ce304ecb83b4ab636aa95722011db39731ef129e4efc2c204baa7e5236b40be96a385933057864f317286cb211da152443b",
+      "wrapped": "7a79ad95b58c46331bc96f9bd9fdc47a24a72d003fa4666f3ac493c1a11a502187c5da1c9a2a0188ea0eefe2068832193c201586c9ff11463ac59315c30cf3c7acc991c061995b99",
       "unwrap": "5eafc7ae898c4542bdb20e661367ae18ba282e904350658a92e8b320affd0ec1"
     },
     {
       "videoKey": "ba34a12b1d152ae563cfd8a24670fd40e1107b706f98160c3e9b8248590a8a65",
       "epochKey": "c1d3760fb2296891ffeb2484fcffdee9ef0b7cd6ac801b4a1f4be21793f05b83",
-      "wrapped": "0b7252ac99e134cc9894f25d6d5775625b28f7093c06ed296a855c0921119894c45cdddd2b03998d28394018dbb23608cd357435b1f31f354447345d7fabf48cfda8182c6ea3a33e",
+      "wrapped": "e26483b0af1e1eb54b289a0613d5e123fee5d3c2b77fe5e40ce76b797e42086128fdd9e25d31ad4f5af3c98c6e68a40009b984d1ed7f76937c3920621a2b983d53fe07c88051ead5",
       "unwrap": "ba34a12b1d152ae563cfd8a24670fd40e1107b706f98160c3e9b8248590a8a65"
     },
     {
       "videoKey": "b1450907d0487cd9df114d4cdc1d68b1caf769cfda7fe03855a18311be61ba20",
       "epochKey": "ed80545268123c55c6fdfa8b02b020a88d4a9c6ade11dd31cf2a2b151f5e74c9",
-      "wrapped": "2734593bbb01fa758b34156e79c8d0ae05f5d1528e500081a80baf94e561436d984e4c663bba2cfa6d89840d875303a2a61fecf99e045be5a63655b84bbd4ecd48e1ce6c7a51ef8f",
+      "wrapped": "ea652c353423d27a21fd779725c625b2881ab6690f0c9b0d389141f60c1d55c095a3469dfdc3193dd04efc5d2abe285664e59bc2c37e377a80f681ced0b23fab6cc7fbbf92d1c8de",
       "unwrap": "b1450907d0487cd9df114d4cdc1d68b1caf769cfda7fe03855a18311be61ba20"
     },
     {
       "videoKey": "7d43473e1d934954cb0b2c92ee1e7ddf",
       "epochKey": "9d92905ac166724b3f7f16b635a021fb533bb977efcc58baac878d778b0c5546",
-      "wrapped": "0663ed87fc945d47fe3ae6d318addf9455d3ac2d136484d5f2655138cc7378471266e4d591f0fb4a18bc700832cdf522c2d0aabf042b4e33",
+      "wrapped": "c94d1830e1bb07736e92d126704191f66ea39f04cfa89accc5d852804ee4845d9c49fc7b84ea618f6cecb35b7e51e1aad77c9f055a263dbb",
       "unwrap": null
     },
     {
       "videoKey": "7f512c1e2532f8057027169d3102109a6754b22f047b094b",
       "epochKey": "8d471307eb39a88386724223d10f33866113900f3268ca4deda85f6833d446a3",
-      "wrapped": "1cd21d945db7f31bd01928fd73ddc96f3c8df8f410c8c91b58ec56ef2296a6b9cd4350fa76baff5992b606851703172be3edfec1b67b3ab9b1d63dcb0563d85c",
+      "wrapped": "301e4f48a92cecaf87f4dd74c6052de3ba29871e89770d6428b27d1104e9becabb84145c630143028f39f33eac2996540d649d41d9b02c60c06d903c63e0f3c3",
       "unwrap": null
     },
     {
       "videoKey": "e0",
       "epochKey": "80129e0486da4f6f3df1281e258d47acc451d24765972d263c19c6b9c3152e96",
-      "wrapped": "d9829faffd1ed1925053a9b78ed1c6ad05bcdecceba86f07ecaa0f05878318586b3164aea3b75d7f16",
+      "wrapped": "ada7441597b640857a99af08a8e9f224ad4721a512c38fbb93fe4adde72ec95b3f964c0d6c51c2484f",
       "unwrap": null
     },
     {
       "videoKey": "4d21c96ef035cfbb4569cbef13cd1cd72effaeeeadc2860213ae2ef5a7133dd1",
       "epochKey": "79171fa394068289d7ab74354a4ce9fcf9aadb43afedddb8944faa098e312c9d",
-      "wrapped": "cf54d4043d7d567e8437af37f012f8262e2d1a461996b931a6a3d159f781848b741ecffd874f2005c9c00dc42368f1dad47124b6425ea876fb42f600b90df72dc8900d3fbe19983f",
+      "wrapped": "2fbfccf3798306569f989d4982f9f91a691132822ab5ca7ff5d5b9e66e33faf80ae31ece2fe988ded7ec9b11cb4674d587ce31bd7108c8ac4cdeac1a9da6ba7d7209e79f493d2a09",
       "unwrap": "4d21c96ef035cfbb4569cbef13cd1cd72effaeeeadc2860213ae2ef5a7133dd1"
     },
     {
       "videoKey": "6cc45cca23f6aeffb2dfe573c76fb0ce8f318a5e97a38ddb01e5704cf51e4f16",
       "epochKey": "4748b8b9e0e9fbb8c5142ba6487e46e967cd7d1d4edfcca609123b7f58de9f91",
-      "wrapped": "67ff0f5438eec7bec5be937b55ee5ddbcc0fab33d9d389935015c6d1f9c17a4cdd42d540812a992f340d1c41189c6337719ca2a5139f8056af9994edbd44d933658d86bbaeded93d",
+      "wrapped": "f4eecf104c5d35e8eb16bc72253505b04e9d2530d8ae20b08b7f188afc7af3b11942f03a490fd29fa2c3de4f46918a55248ad8f6e905bc12a832ed5d85e90ae796536821aafbb965",
       "unwrap": "6cc45cca23f6aeffb2dfe573c76fb0ce8f318a5e97a38ddb01e5704cf51e4f16"
     },
     {
       "videoKey": "5eafc7ae898c4542bdb20e661367ae18ba282e904350658a92e8b320affd0ec1",
       "epochKey": "8810524237cb7b224bb08c9ec5756dd75e0ad3672d85265818c1522cec43d21e",
-      "wrapped": "a36b40be96a385933057864f317286cb211da152443b",
+      "wrapped": "a586c9ff11463ac59315c30cf3c7acc991c061995b99",
       "unwrap": null
     }
   ],
@@ -2867,6 +2867,140 @@
       "input": " x ",
       "fallback": "",
       "value": "x"
+    }
+  ],
+  "cleanMusic": [
+    {
+      "input": null,
+      "value": null
+    },
+    {
+      "input": {},
+      "value": null
+    },
+    {
+      "input": [],
+      "value": null
+    },
+    {
+      "input": [
+        "Naima"
+      ],
+      "value": null
+    },
+    {
+      "input": "text",
+      "value": null
+    },
+    {
+      "input": 42,
+      "value": null
+    },
+    {
+      "input": true,
+      "value": null
+    },
+    {
+      "input": {
+        "title": "Naima"
+      },
+      "value": {
+        "title": "Naima"
+      }
+    },
+    {
+      "input": {
+        "artist": "John Coltrane"
+      },
+      "value": {
+        "artist": "John Coltrane"
+      }
+    },
+    {
+      "input": {
+        "artist": "John Coltrane",
+        "title": "Naima",
+        "album": "ignored",
+        "track": 6
+      },
+      "value": {
+        "title": "Naima",
+        "artist": "John Coltrane"
+      }
+    },
+    {
+      "input": {
+        "title": "",
+        "artist": ""
+      },
+      "value": null
+    },
+    {
+      "input": {
+        "title": "",
+        "artist": "only an artist"
+      },
+      "value": {
+        "artist": "only an artist"
+      }
+    },
+    {
+      "input": {
+        "title": 5,
+        "artist": null
+      },
+      "value": null
+    },
+    {
+      "input": {
+        "title": [
+          "a"
+        ],
+        "artist": {
+          "name": "x"
+        }
+      },
+      "value": null
+    },
+    {
+      "input": {
+        "title": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "artist": "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀"
+      },
+      "value": {
+        "title": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "artist": "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀"
+      }
+    },
+    {
+      "input": {
+        "title": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa😀",
+        "artist": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb😀c"
+      },
+      "value": {
+        "title": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa�",
+        "artist": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb😀"
+      }
+    },
+    {
+      "input": {
+        "title": " spaced ",
+        "artist": "\u0000"
+      },
+      "value": {
+        "title": " spaced ",
+        "artist": "\u0000"
+      }
+    },
+    {
+      "input": {
+        "title": "x",
+        "artist": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "value": {
+        "title": "x",
+        "artist": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      }
     }
   ],
   "formatAccessUri": [

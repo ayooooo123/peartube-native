@@ -37,7 +37,7 @@ use crate::art::{self, CINEMETA_URL};
 use crate::node::Node;
 use crate::node::api::{Announce, Entry, SearchOptions, Source, SourceSpec, Status};
 use crate::protocol::{
-    clean_text, encode_uri_component, ipv6_groups, is_media_file, parse_uri, safe_equal,
+    clean_text, encode_uri_component, ipv6_groups, is_media_file, js_trim, parse_uri, safe_equal,
 };
 use crate::resolution::{MediaInfo, VideoSize, media_info, resolution_label};
 use crate::settings::Settings;
@@ -176,7 +176,8 @@ pub trait Acquirer: Send + Sync {
     fn cancel(&self, id: &str) -> Value;
 }
 
-/// `state.mirror`: the plugin host behind `/v1/plugins` and `/v1/mirror`.
+/// `state.mirror`: the plugin host behind `/v1/plugins`, `/v1/mirror` and `/v1/providers`, whose
+/// providers' mirrors are listed with the acquirer's jobs under `/v1/jobs`.
 pub trait Mirror: Send + Sync {
     fn list(&self) -> Value;
     fn run<'a>(
@@ -184,6 +185,33 @@ pub trait Mirror: Send + Sync {
         plugin: &'a str,
         payload: Value,
     ) -> BoxFuture<'a, Result<Value, HttpError>>;
+    /// `searchProvider`, `browseProvider` or `mirrorProvider`, of the provider `name`.
+    fn provider<'a>(
+        &'a self,
+        call: ProviderCall,
+        name: &'a str,
+        payload: Value,
+    ) -> BoxFuture<'a, Result<Value, HttpError>>;
+    /// `listProviderJobs()`.
+    fn provider_jobs(&self) -> Vec<Value>;
+    /// `getProviderJob(id)`.
+    fn provider_job(&self, id: &str) -> Option<Value>;
+    /// `cancelProviderJob(id)`.
+    fn cancel_provider_job(&self, id: &str) -> Option<Value>;
+    /// `forgetImported(gone)`: after announces were removed, what became of the file each
+    /// `(id, sha256)` was imported from, as `id/sha256` with `deleted` or `kept`.
+    fn forget_imported<'a>(
+        &'a self,
+        gone: Vec<(String, String)>,
+    ) -> BoxFuture<'a, Vec<(String, &'static str)>>;
+}
+
+/// What `/v1/providers/<name>/…` asks of a provider.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProviderCall {
+    Search,
+    Browse,
+    Mirror,
 }
 
 /// The cast stack the API server forwards `/v1/cast/*` to. The cast controller owns every one of
@@ -899,18 +927,7 @@ impl<N: Node> Api<N> {
                 .clone()
                 .ok_or_else(|| HttpError::new(503, "Node still starting"))?;
             let body = self.read_body(req.body).await?;
-            let key = body
-                .get("key")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .trim()
-                .to_owned();
-            if key.is_empty() {
-                return Err(HttpError::new(400, "key is required"));
-            }
-            node.remove(&key).await.map_err(node_error)?;
-            broadcast(&self.sse, "update");
-            return Ok(Some(json!({ "removed": true, "key": key })));
+            return self.remove_entries(&node, &body).await.map(Some);
         }
         if *method == Method::GET && path == "/v1/sources" {
             let Some(node) = &node else {
@@ -1073,7 +1090,7 @@ impl<N: Node> Api<N> {
             return acquirer.add(request).await.map(Some);
         }
         if *method == Method::GET && path == "/v1/jobs" {
-            let jobs = match &self.options.acquirer {
+            let mut jobs = match &self.options.acquirer {
                 Some(acquirer) => acquirer.list(),
                 None => self
                     .options
@@ -1082,20 +1099,37 @@ impl<N: Node> Api<N> {
                     .map(|jobs| jobs())
                     .unwrap_or_else(|| Value::Array(Vec::new())),
             };
+            if let (Some(mirror), Value::Array(jobs)) = (&self.options.mirror, &mut jobs) {
+                jobs.extend(mirror.provider_jobs());
+            }
             return Ok(Some(json!({ "jobs": jobs })));
         }
         if let Some(id) = job_id(path)
             && matches!(*method, Method::GET | Method::DELETE)
         {
-            let Some(acquirer) = &self.options.acquirer else {
-                return Ok(None);
+            let get = *method == Method::GET;
+            let job = match &self.options.acquirer {
+                Some(acquirer) if get => acquirer.get(&id),
+                Some(acquirer) => acquirer.cancel(&id),
+                None if get => self
+                    .options
+                    .fallback_jobs
+                    .as_ref()
+                    .and_then(|jobs| {
+                        let named = |job: &&Value| job["jobId"].as_str() == Some(&id);
+                        jobs().as_array()?.iter().find(named).cloned()
+                    })
+                    .unwrap_or(Value::Null),
+                None => Value::Null,
             };
-            let job = if *method == Method::GET {
-                acquirer.get(&id)
-            } else {
-                acquirer.cancel(&id)
-            };
-            return Ok(Some(job));
+            if js_truthy(&job) {
+                return Ok(Some(job));
+            }
+            // A job that is not the acquirer's is a provider's mirror.
+            return Ok(self.options.mirror.as_ref().and_then(|mirror| match get {
+                true => mirror.provider_job(&id),
+                false => mirror.cancel_provider_job(&id),
+            }));
         }
         if *method == Method::GET && path == "/v1/plugins" {
             let plugins = self
@@ -1127,6 +1161,17 @@ impl<N: Node> Api<N> {
                 .and_then(|plugin| plugin.as_str().map(str::to_owned))
                 .unwrap_or_else(|| "http-acquire".to_owned());
             return mirror.run(&plugin, Value::Object(payload)).await.map(Some);
+        }
+        if *method == Method::POST
+            && let Some((name, call)) = provider_call(path)
+        {
+            let mirror =
+                self.options.mirror.as_ref().ok_or_else(|| {
+                    HttpError::new(404, "Mirror host unavailable on read-only peer")
+                })?;
+            let name = percent_decode(name);
+            let payload = self.read_body(req.body).await?;
+            return mirror.provider(call, &name, payload).await.map(Some);
         }
 
         if let Some(cast) = self.cast()
@@ -1275,6 +1320,126 @@ impl<N: Node> Api<N> {
             return Ok(Some(json!({ "streams": streams })));
         }
         Ok(None)
+    }
+
+    /// `removeEntries`: one entry by `key`, every track of an album by `seriesKey`, or a list of
+    /// `ids` or of whole announce `keys`, in one request. Each file matched loses every announce
+    /// this relay's channel holds for it; the node then reclaims the file's blocks unless another
+    /// announce still points at them. A file this relay mirrored into its import folder or staging
+    /// is deleted, with its ledger row, so no later scan imports it again (`file: "deleted"`); one
+    /// the owner put in the import folder stays (`file: "kept"`). An entry from another channel is
+    /// that channel's to remove: it is listed in `notRemoved`, never touched.
+    async fn remove_entries(&self, node: &N, body: &Value) -> Result<Value, HttpError> {
+        let clean = |value: Option<&Value>| {
+            js_trim(value.and_then(Value::as_str).unwrap_or_default()).to_owned()
+        };
+        let list = |value: Option<&Value>| -> Vec<String> {
+            let items = value.and_then(Value::as_array).map(Vec::as_slice);
+            items
+                .unwrap_or_default()
+                .iter()
+                .map(|item| clean(Some(item)))
+                .filter(|item| !item.is_empty())
+                .take(2000)
+                .collect()
+        };
+        let key = clean(body.get("key"));
+        let series_key = clean(body.get("seriesKey")).to_lowercase();
+        let (ids, keys) = (list(body.get("ids")), list(body.get("keys")));
+        if key.is_empty() && series_key.is_empty() && ids.is_empty() && keys.is_empty() {
+            return Err(HttpError::new(
+                400,
+                "key, seriesKey, ids or keys is required",
+            ));
+        }
+        let own = node.status().await.channel;
+        let rows = node
+            .search(None, SearchOptions::default())
+            .await
+            .map_err(node_error)?;
+        let picked: Vec<&Entry> = rows
+            .iter()
+            .filter(|row| {
+                row.key == key
+                    || (!series_key.is_empty() && row.series_key == series_key)
+                    || ids.contains(&row.id)
+                    || keys.contains(&row.key)
+            })
+            .collect();
+        // A key the listing does not show (a duplicate announce, or one written before it) is
+        // still removed as asked.
+        if !key.is_empty() && picked.is_empty() {
+            node.remove(&key).await.map_err(node_error)?;
+            broadcast(&self.sse, "update");
+            return Ok(json!({ "removed": [{ "key": key }], "notRemoved": [], "filesDeleted": 0 }));
+        }
+        let reason = |error: N::Error| {
+            Some(error.to_string())
+                .filter(|message| !message.is_empty())
+                .unwrap_or_else(|| "Remove failed".to_owned())
+        };
+        let mut not_removed: Vec<Value> = picked
+            .iter()
+            .filter(|row| row.source != own)
+            .map(|row| json!({ "key": row.key, "id": row.id, "reason": "Published by another channel" }))
+            .collect();
+        // One row for every announce removed, so the count the caller reports is the count done.
+        // The reference tries again while a file it picked is still listed; each file is settled
+        // by its first try, removed or not, so one pass over the picked rows is all of it.
+        let mut removed: Vec<Map<String, Value>> = Vec::new();
+        let mut gone: Vec<(String, String)> = Vec::new();
+        for row in picked.iter().filter(|row| row.source == own) {
+            match node.remove(&row.key).await {
+                Ok(()) => {
+                    let named = row.music.as_ref().and_then(|music| music.title.as_ref());
+                    let title = named
+                        .filter(|title| !title.is_empty())
+                        .unwrap_or(&row.title);
+                    removed.push(object(json!({
+                        "key": row.key, "id": row.id, "sha256": row.sha256, "title": title,
+                    })));
+                    gone.push((row.id.clone(), row.sha256.clone()));
+                }
+                Err(error) => not_removed.push(json!({
+                    "key": row.key, "id": row.id, "reason": reason(error),
+                })),
+            }
+        }
+        // A key the listing collapses away (a sibling announce for the same file, which the
+        // catalog shows as one record) is still removed when the caller names it.
+        for unseen in keys
+            .iter()
+            .filter(|key| !picked.iter().any(|row| row.key == **key))
+        {
+            match node.remove(unseen).await {
+                Ok(()) => {
+                    removed.push(object(json!({
+                        "key": unseen, "id": null, "sha256": null, "title": null,
+                    })));
+                    // Its file is unknown: the app asks about `null/null`, which names none.
+                    gone.push(("null".to_owned(), "null".to_owned()));
+                }
+                Err(error) => not_removed.push(json!({
+                    "key": unseen, "id": null, "reason": reason(error),
+                })),
+            }
+        }
+        let fate = match &self.options.mirror {
+            Some(mirror) => mirror.forget_imported(gone.clone()).await,
+            None => Vec::new(),
+        };
+        let mut files_deleted = 0;
+        for (row, (id, sha256)) in removed.iter_mut().zip(&gone) {
+            let file_key = format!("{id}/{sha256}");
+            let file = fate
+                .iter()
+                .find(|(key, _)| *key == file_key)
+                .map(|(_, file)| *file);
+            files_deleted += usize::from(file == Some("deleted"));
+            row.insert("file".to_owned(), json!(file));
+        }
+        broadcast(&self.sse, "update");
+        Ok(json!({ "removed": removed, "notRemoved": not_removed, "filesDeleted": files_deleted }))
     }
 
     /// The bytes of one request body, as the app parses it.
@@ -1932,13 +2097,25 @@ fn job_id(path: &str) -> Option<String> {
     (tail.len() == 36
         && tail
             .bytes()
-            .all(|byte| byte.is_ascii_hexdigit() || byte == b'-'))
+            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f' | b'-')))
     .then(|| tail.to_owned())
 }
 
 fn plugin_name(path: &str) -> Option<String> {
     let tail = path.strip_prefix("/v1/plugins/")?.strip_suffix("/run")?;
     (!tail.is_empty() && !tail.contains('/')).then(|| tail.to_owned())
+}
+
+/// `/v1/providers/<name>/(search|browse|mirror)`, as the name still encoded and the call.
+fn provider_call(path: &str) -> Option<(&str, ProviderCall)> {
+    let (name, call) = path.strip_prefix("/v1/providers/")?.split_once('/')?;
+    let call = match call {
+        "search" => ProviderCall::Search,
+        "browse" => ProviderCall::Browse,
+        "mirror" => ProviderCall::Mirror,
+        _ => return None,
+    };
+    (!name.is_empty()).then_some((name, call))
 }
 
 /// `/v1/(poster|backdrop)/(tt` + five to ten digits + `)`.

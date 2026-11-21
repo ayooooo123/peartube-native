@@ -2,8 +2,8 @@
 // an in-memory filesystem and scripted feed replies. Prints one JSON trace that tests/acquire_mirror.rs must
 // reproduce.
 //
-// `p2p-replicate` and `hiverelay-seed` are registered by the app but not ported, so `list()` is filtered to the
-// five shared plugins before comparing.
+// `p2p-replicate`, `hiverelay-seed` and `media-check` are registered by the app but live in other modules of the
+// port, so `list()` is filtered to the six shared plugins before comparing.
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -45,6 +45,8 @@ const acquireRewrites = {
 const mirrorRewrites = {
   "'node:fs'": stub('acquire-mirror-stubs.mjs'),
   "'./protocol.js'": app_url('src/protocol.js'),
+  "'./tags.js'": app_url('src/tags.js'),
+  "'./providers/soulseek.js'": app_url('src/providers/soulseek.js'),
   "'./hiverelay.js'": stub('acquire-mirror-plants.mjs'),
   "'./traffic.js'": stub('acquire-mirror-plants.mjs'),
   "'./art.js'": stub('acquire-mirror-plants.mjs')
@@ -148,7 +150,7 @@ async function settleRechunk (node) {
   throw new Error('startup count never ran')
 }
 
-const PORTED = ['http-acquire', 'channel-backfill', 'blob-rechunk', 'watch-dir', 'feed-mirror']
+const PORTED = ['http-acquire', 'channel-backfill', 'blob-rechunk', 'watch-dir', 'feed-mirror', 'soulseek']
 
 async function harness (seedJobs = [], watchDir = null) {
   fsStub.reset()

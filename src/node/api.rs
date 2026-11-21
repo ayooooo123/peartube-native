@@ -14,6 +14,14 @@ where
     Option::<T>::deserialize(deserializer).map(Some)
 }
 
+/// A field that may hold any JSON, `null` included: only a missing key is `None`.
+fn present<'de, D>(deserializer: D) -> Result<Option<Value>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Value::deserialize(deserializer).map(Some)
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Route {
@@ -117,6 +125,14 @@ pub struct Announce {
     pub sha256: String,
     pub blobs: String,
     pub blob: Blob,
+    /// What a music announce says about itself beyond its title, as its writer left it: any JSON a
+    /// peer wrote, `null` included. [`crate::protocol::clean_music`] reads it.
+    #[serde(
+        default,
+        deserialize_with = "present",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub music: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub epoch: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -140,6 +156,9 @@ pub struct Entry {
     pub locked: bool,
     pub source: String,
     pub source_kind: String,
+    /// A music track's own name and artist; `title` is its album.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub music: Option<crate::protocol::Music>,
     pub season: Option<u64>,
     pub episode: Option<u64>,
     pub series_key: String,
@@ -340,6 +359,8 @@ pub struct Published {
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "action", rename_all = "lowercase")]
+// One value for each opened link, never kept: a boxed entry would only add an allocation.
+#[allow(clippy::large_enum_variant)]
 pub enum OpenUri {
     Source {
         source: Source,

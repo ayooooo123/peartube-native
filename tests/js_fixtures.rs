@@ -6,9 +6,9 @@ use peartube_native::mnemonic::{
     derive_identity, format_access_uri, unwrap_video_key, verify_claim, wrap_video_key,
 };
 use peartube_native::protocol::{
-    BlobSize, ReceiverUriInput, WatchEntry, clean_name, clean_text, decode_op, describe_entry,
-    format_receiver_uri, format_watch_uri, is_media_file, is_system_view_key, is_uniform_512,
-    parse_uri,
+    BlobSize, ReceiverUriInput, WatchEntry, clean_music, clean_name, clean_text, decode_op,
+    describe_entry, format_receiver_uri, format_watch_uri, is_media_file, is_system_view_key,
+    is_uniform_512, parse_uri,
 };
 use serde_json::Value;
 
@@ -270,6 +270,17 @@ fn text_matches() {
         let input = case["input"].as_str();
         let fallback = case["fallback"].as_str().unwrap_or("");
         assert_eq!(clean_name(input, fallback), case["value"].as_str().unwrap());
+    }
+    // The serialized text is compared, so `title` comes before `artist` as in the app.
+    let music = arr(&fixtures(), "cleanMusic");
+    assert!(music.len() >= 18);
+    for case in music {
+        assert_eq!(
+            serde_json::to_string(&clean_music(Some(&case["input"]))).unwrap(),
+            case["value"].to_string(),
+            "{}",
+            case["input"]
+        );
     }
 }
 

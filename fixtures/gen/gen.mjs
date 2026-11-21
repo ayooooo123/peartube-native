@@ -375,6 +375,28 @@ for (const [input, fallback] of [
   cleanName.push({ input, fallback, value: protocol.cleanName(input, fallback) })
 }
 
+// What a music announce may say about itself: only `title` and `artist`, each a string that is not empty.
+const cleanMusic = [
+  null,
+  {},
+  [],
+  ['Naima'],
+  'text',
+  42,
+  true,
+  { title: 'Naima' },
+  { artist: 'John Coltrane' },
+  { artist: 'John Coltrane', title: 'Naima', album: 'ignored', track: 6 },
+  { title: '', artist: '' },
+  { title: '', artist: 'only an artist' },
+  { title: 5, artist: null },
+  { title: ['a'], artist: { name: 'x' } },
+  { title: 'a'.repeat(301), artist: '😀'.repeat(200) },
+  { title: `${'a'.repeat(299)}😀`, artist: `${'b'.repeat(298)}😀c` },
+  { title: ' spaced ', artist: '\u0000' },
+  { title: 'x', artist: 'a'.repeat(300) }
+].map(input => ({ input, value: protocol.cleanMusic(input) }))
+
 const formatAccessUri = [
   { channel: KUP, epoch: 1, epochKey: K2.toUpperCase() },
   { channel: K, epoch: 0, epochKey: K2 },
@@ -442,6 +464,7 @@ const fixtures = {
   decodeOp,
   cleanText,
   cleanName,
+  cleanMusic,
   formatAccessUri,
   describeEntry,
   isUniform512,

@@ -27,6 +27,12 @@ pub struct AudioTrack {
     pub channels: Option<u64>,
     pub language: Option<String>,
     pub name: Option<String>,
+    /// Sample rate in Hz, for the audio files that state one (FLAC, MPEG audio).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rate: Option<u64>,
+    /// Bits per sample, for a lossless file that states it (FLAC).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub depth: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -362,6 +368,7 @@ fn field(b: &[u8], id: u64) -> Option<&[u8]> {
     children(b).filter(|(i, _)| *i == id).map(|(_, v)| v).last()
 }
 
+#[derive(Default)]
 struct ParsedContainer {
     duration: Option<JsNumber>,
     video: Vec<VideoTrack>,
@@ -519,6 +526,8 @@ fn matroska_tracks(tracks: &[u8]) -> ParsedContainer {
                     channels: Some(if ch > 0 { ch } else { 1 }),
                     language,
                     name,
+                    rate: None,
+                    depth: None,
                 });
             }
             0x11 if subtitles.len() < 64 => {
@@ -713,6 +722,8 @@ fn mp4_track(trak: &[u8], out: &mut ParsedContainer) {
                 channels: u16_be(entry_data, 16).and_then(|v| dim(i64::from(v))),
                 language,
                 name: None,
+                rate: None,
+                depth: None,
             });
         }
     } else if matches!(handler.as_str(), "sbtl" | "subt" | "text" | "clcp")
@@ -802,6 +813,8 @@ fn avi(head: &[u8]) -> ParsedContainer {
                     channels: u16_le(sf, 2).and_then(|v| dim(i64::from(v))),
                     language: None,
                     name: None,
+                    rate: None,
+                    depth: None,
                 });
             }
         }
@@ -809,6 +822,136 @@ fn avi(head: &[u8]) -> ParsedContainer {
             .saturating_add(8)
             .saturating_add(len)
             .saturating_add(len & 1);
+    }
+    out
+}
+
+/// FLAC: "fLaC", then metadata blocks. STREAMINFO (type 0) carries sample rate, channel count, bits
+/// per sample and the total sample count in a packed 34-byte field, which is the whole truth about
+/// a lossless file's quality: its rate is the rate, and there is no bitrate to guess at. Duration
+/// is samples over rate.
+fn flac(head: &[u8]) -> ParsedContainer {
+    let mut out = ParsedContainer::default();
+    let mut p = 4usize;
+    for _ in 0..64 {
+        let Some(block) = head.get(p..p + 4) else {
+            break;
+        };
+        let len = usize::from(block[1]) << 16 | usize::from(block[2]) << 8 | usize::from(block[3]);
+        if block[0] & 0x7f == 0
+            && len >= 18
+            && let Some(b) = head.get(p + 4..p + 22)
+        {
+            // 20 bits rate, 3 bits channels-1, 5 bits depth-1, 36 bits samples.
+            let rate = u64::from(b[10]) << 12 | u64::from(b[11]) << 4 | u64::from(b[12] >> 4);
+            let channels = u64::from((b[12] >> 1) & 0x07) + 1;
+            let depth = (u64::from(b[12] & 0x01) << 4 | u64::from(b[13] >> 4)) + 1;
+            let samples = u64::from(b[13] & 0x0f) << 32
+                | u64::from(b[14]) << 24
+                | u64::from(b[15]) << 16
+                | u64::from(b[16]) << 8
+                | u64::from(b[17]);
+            if rate > 0 {
+                out.duration = Some(JsNumber(samples as f64 / rate as f64));
+            }
+            out.audio.push(AudioTrack {
+                codec: Some("FLAC".to_owned()),
+                channels: Some(channels),
+                language: None,
+                name: None,
+                rate: Some(rate),
+                depth: Some(depth),
+            });
+            return out;
+        }
+        p += 4 + len;
+        if block[0] & 0x80 != 0 {
+            break;
+        }
+    }
+    out
+}
+
+/// MPEG audio: the first frame header names the layer, rate and channels, and a Xing/Info header
+/// (right after the side information of the first frame, where an encoder writes it) carries the
+/// frame count, which is the duration. No bitrate is reported: the first frame's is not the file's
+/// in a VBR file, and the UI works it out from size and duration instead. Version bits: 3 MPEG-1,
+/// 2 MPEG-2, 0 MPEG-2.5. Layer bits: 3 Layer I, 2 Layer II, 1 Layer III.
+fn mp3(head: &[u8]) -> ParsedContainer {
+    let mut out = ParsedContainer::default();
+    // Skip a leading ID3v2 tag, whose synchsafe size is what makes a naive search read tag bytes
+    // as frames.
+    let mut p = 0usize;
+    if head.len() > 10 && head.starts_with(b"ID3") {
+        p = 10
+            + head[6..10]
+                .iter()
+                .fold(0, |size, byte| size << 7 | usize::from(byte & 0x7f));
+    }
+    for _ in 0..8192 {
+        let Some(frame) = head.get(p..p + 4) else {
+            break;
+        };
+        let version = (frame[1] >> 3) & 0x03;
+        let layer = (frame[1] >> 1) & 0x03;
+        let bitrate = frame[2] >> 4;
+        let rate = usize::from((frame[2] >> 2) & 0x03);
+        let synced = frame[0] == 0xff && frame[1] & 0xe0 == 0xe0;
+        if !synced || version == 1 || layer == 0 || bitrate == 0 || bitrate == 15 || rate == 3 {
+            p += 1;
+            continue;
+        }
+        let mpeg1 = version == 3;
+        let rate: u64 = match version {
+            3 => [44100, 48000, 32000],
+            2 => [22050, 24000, 16000],
+            _ => [11025, 12000, 8000],
+        }[rate];
+        let mono = frame[3] >> 6 == 3;
+        // Layer III side information is 17/32 bytes (mono/stereo) in MPEG-1 and 9/17 in MPEG-2
+        // and 2.5.
+        let x = p
+            + 4
+            + match (mpeg1, mono) {
+                (true, true) => 17,
+                (true, false) => 32,
+                (false, true) => 9,
+                (false, false) => 17,
+            };
+        let frames = head
+            .get(x..x + 12)
+            .filter(|tag| layer == 1 && (tag.starts_with(b"Xing") || tag.starts_with(b"Info")))
+            .filter(|tag| tag[7] & 0x01 != 0)
+            .map(|tag| u32::from_be_bytes([tag[8], tag[9], tag[10], tag[11]]))
+            .filter(|frames| *frames > 0);
+        let samples_per_frame = if layer == 3 {
+            384.0
+        } else if layer == 2 || mpeg1 {
+            1152.0
+        } else {
+            576.0
+        };
+        if let Some(frames) = frames {
+            out.duration = Some(JsNumber(
+                f64::from(frames) * samples_per_frame / rate as f64,
+            ));
+        }
+        out.audio.push(AudioTrack {
+            codec: Some(
+                match layer {
+                    3 => "MP1",
+                    2 => "MP2",
+                    _ => "MP3",
+                }
+                .to_owned(),
+            ),
+            channels: Some(if mono { 1 } else { 2 }),
+            language: None,
+            name: None,
+            rate: Some(rate),
+            depth: None,
+        });
+        return out;
     }
     out
 }
@@ -830,6 +973,10 @@ where
         mp4(&mut read, &head).await?
     } else if container == "avi" && latin1_text(&head, 24, 28) == "avih" {
         Some(avi(&head))
+    } else if container == "flac" {
+        Some(flac(&head))
+    } else if container == "mp3" {
+        Some(mp3(&head))
     } else {
         None
     };

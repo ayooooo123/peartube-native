@@ -21,8 +21,15 @@ relay UI, the API and video (`/v1/blob`; the node's blob server stays on loopbac
 (the `channel` setting) is the channel it serves; a pre-channel `settings.json` has its `tracker`
 moved to `channel` and its `streamHost`/`streamPort` dropped at start. HTTPS runs on
 `PEARTUBE_HTTPS_PORT` when `tls.crt`/`tls.key` exist. The acquirer comes with the
-`http-acquire`, `channel-backfill`, `blob-rechunk`, `watch-dir`, `feed-mirror`,
-`p2p-replicate` and `hiverelay-seed` plugins. `p2p-replicate` and `hiverelay-seed`
+`http-acquire`, `channel-backfill`, `blob-rechunk`, `watch-dir`, `feed-mirror`, `soulseek`,
+`p2p-replicate` and `hiverelay-seed` plugins. `watch-dir` sweeps the import folder
+(`PEARTUBE_WATCH_DIR`) and `<storage>/staging`: a media file is announced once, and a folder
+of music files becomes one album, each track announced as `<release>:sNNeMM` with its own
+name in `music`. `soulseek` is the app's Soulseek provider (the `slsk*` settings):
+`/v1/providers/soulseek/search`, `browse` and `mirror` find albums on Soulseek peers and
+download them into the folder `watch-dir` sweeps, and `/v1/jobs` lists those mirrors with
+the acquirer's jobs. Where the app loads the `peartube-soulseek-bare` addon, the relay links
+the crate that addon wraps, `peartube-soulseek`. `p2p-replicate` and `hiverelay-seed`
 share one `traffic` gate (`peartube/bulk-busy`, `hiverelayUploadMbps`). `hiverelay-seed`
 recruits existing HiveRelays for this relay's own cores: `POST /seed-core` on the
 `hiverelays` list (`=TOKEN` per relay, `hiverelayApiKey` as its default), and the
@@ -49,7 +56,9 @@ Paths on the right are in the PearTube app unless otherwise stated.
 | --- | --- |
 | `app`, `lifecycle`, `backend`, `ipc` | `worklet/worker.js`: typed worker methods and events, JSON framing, serialized lifecycle and backend thread |
 | `http` | `src/http.js`: loopback API, media and event endpoints |
-| `acquire`, `mirror` | `src/acquire.js`, `src/mirror.js`: acquisition jobs and mirror plugins |
+| `acquire`, `mirror`, `mirror::watch` | `src/acquire.js`, `src/mirror.js`: acquisition jobs, mirror plugins, and the import folder (`watch-dir`: one announce for each media file, one album for each folder of music files) |
+| `providers::soulseek` | `src/providers/soulseek.js`: the Soulseek provider (search ranking, browse, album and lone-track placement, mirror jobs). `providers::soulseek::client` is the `peartube-soulseek` client it drives |
+| `tags` | `src/tags.js`: music tags (FLAC and Ogg comments, ID3v2.3/2.4) and the album key two rips of one album share |
 | `cast` | `src/cast.js`, `src/cast-control.js`: controller, receiver, the cast channel on the peer connection, pairing and media serving |
 | `lan` | `src/lan.js`: mDNS and isolated LAN DHT; worker host Bonjour events and interface selection |
 | `hiverelay`, `hiverelay::seeder`, `traffic`, `private_overlay` | `src/hiverelay.js`, `src/traffic.js`, `src/private-overlay.js`: relay protocol and the `hiverelay-seed` seeder, traffic gate and private routing (the standalone guard is `bin/private-relay.js`) |
@@ -104,10 +113,12 @@ identified below rather than presented as live network parity.
 
 - `tests/js_fixtures.rs`: protocol and mnemonic reference vectors, including JS opening Rust-wrapped keys.
 - `tests/identity_fixtures.rs`, `tests/settings_fixtures.rs`: JS identity and settings results, file bytes and modes; JS reads Rust-written files.
-- `tests/resolution_fixtures.rs`: JS media resolution fixture results.
+- `tests/resolution_fixtures.rs`: JS media resolution fixture results, FLAC and MPEG audio included.
+- `tests/tags_fixtures.rs`: JS tag-reader results for FLAC, Ogg and ID3 files, each also cut short at every length, and album keys. `tests/soulseek_fixtures.rs`: JS Soulseek placement, ranking and browse results.
 - `tests/art_identify.rs`: JS artwork and identification results against scripted HTTP and fake `ubit`.
-- `tests/http.rs`: JS API responses, status and headers against a scripted node.
-- `tests/acquire_mirror.rs`: JS acquisition and mirror call and JSON traces against scripted dependencies.
+- `tests/http.rs`: JS API responses, status and headers against a scripted node, including a library the owner removes from and a provider's jobs and calls.
+- `tests/acquire_mirror.rs`: JS acquisition and mirror call and JSON traces against scripted dependencies. Its library sessions (`tests/js/acquire-mirror-library.json`) run both mirror hosts on real files instead: album folders and their pins, `<storage>/staging`, a read-only import folder, what the owner removed, and the Soulseek provider on a scripted network, compared as JSON text.
+- `tests/soulseek_provider.rs`: the app's own `createSoulseekPlugin` beside the Rust provider on one scripted Soulseek client and clock, with real files: every call, job view and folder listing compared as JSON text.
 - `tests/apply.rs`: JS apply operations, host calls and view bytes on a real Hyperbee.
 - `tests/blobs.rs`: JS blob operations, core keys, announce fields, encrypted and plain block bytes, cache decisions, and ingested SHA-256 checkpoint/resume in both directions with `sodium-native` (`tests/js/sha256-state.mjs`).
 - `tests/cast.rs`: JS cast fixtures, the `peartube-cast/v1` control channel over in-memory Protomux connections (pairing rules, state pushes, session control, a non-paired peer refused), and live JS↔Rust interop on a local testnet in both directions. `tests/cast_default.rs` casts between two default backends over the LAN, from pairing through exact bytes on the receiver's player port.
@@ -317,6 +328,8 @@ tested and rejected for lack of repeatable wins. No ACK, pacing or wire changes.
 - LAN mDNS and the isolated DHT are implemented, but the real-interface interoperability matrix remains environment-blocked on this Mac. A standalone raw UDP probe also receives no LAN multicast; an ALF “permitted” query alone does not establish delivery. See [LAN notes](docs/port-notes-lan.md).
 - Corestore storage tuning uses engine defaults; free disk space is unknown. Status reports live blob-peer in-flight requests and UDX RTT/retransmitted packets; see [node notes](docs/node-api.md).
 - Rust cannot represent already-lone JS surrogates; exponent-form receiver ports can format differently. Artwork HTTP timeout covers the whole exchange, unlike the JS socket inactivity timeout. See [identify/art notes](docs/port-notes-identify-art.md).
+- Soulseek: the provider links `peartube-soulseek` where the app loads its addon. That is the `soulseek` cargo feature, on by default and off in the apps' engine (`ffi/`): the client crate exports its own C ABI for the addon, and a library that links it exports those symbols too. A build without the feature, or a host that gives the provider no client (`SoulseekSettings::backend` is `None`), reports `unavailable`, as the app does on a platform with no prebuild. The folder shared with peers stays the client's own choice from the environment (`PEARTUBE_SLSK_SHARE_DIR`, else `PEARTUBE_WATCH_DIR`, else `<PEARTUBE_STORAGE>/staging`).
+- `POST /v1/entries/remove` makes one pass over the entries it picked. The app's loop allows four, but each file is settled by its first try, so its later passes find nothing to do.
 
 ## License
 

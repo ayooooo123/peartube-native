@@ -116,7 +116,7 @@ impl Serialize for JsNumber {
 }
 
 /// `Number(value)` for the JSON shapes the app meets; `undefined` is NaN.
-fn js_num(value: Option<&Value>) -> f64 {
+pub(crate) fn js_num(value: Option<&Value>) -> f64 {
     match value {
         None => f64::NAN,
         Some(Value::Number(number)) => number.as_f64().unwrap_or(f64::NAN),

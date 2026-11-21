@@ -342,6 +342,9 @@ impl Catalog {
                 locked,
                 source: item.source.clone(),
                 source_kind: item.source_kind.clone(),
+                // `music` arrives from any peer, so it is clamped again on the way out, never
+                // trusted from the log; an announce written by a build without it has none.
+                music: crate::protocol::clean_music(announce.music.as_ref()),
                 season: info.season.map(u64::from),
                 episode: info.episode.map(u64::from),
                 series_key: info.series_key.clone(),
@@ -583,6 +586,7 @@ impl Catalog {
                         byte_length: parsed_entry.blob.byte_length,
                         extra: serde_json::Map::new(),
                     },
+                    music: None,
                     epoch: None,
                     wrapped_key: None,
                     extra: serde_json::Map::new(),
@@ -642,6 +646,7 @@ impl Catalog {
                         locked: false,
                         source,
                         source_kind: "watch".to_owned(),
+                        music: None,
                         season: info.season.map(u64::from),
                         episode: info.episode.map(u64::from),
                         series_key: info.series_key.clone(),

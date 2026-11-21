@@ -63,6 +63,8 @@ enum Kind {
     Number,
     Host,
     Key,
+    Text,
+    HostPort,
     Secret,
     Url,
     Keys,
@@ -78,6 +80,8 @@ impl Kind {
             Self::Number => "number",
             Self::Host => "host",
             Self::Key => "key",
+            Self::Text => "text",
+            Self::HostPort => "hostport",
             Self::Secret => "secret",
             Self::Url => "url",
             Self::Keys => "keys",
@@ -334,6 +338,53 @@ const SPEC: &[Spec] = &[
     )
     .live()
     .empty(),
+    spec(
+        "slskUser",
+        "PEARTUBE_SLSK_USER",
+        Kind::Text,
+        Default::Str(""),
+    )
+    .live(),
+    spec(
+        "slskPass",
+        "PEARTUBE_SLSK_PASS",
+        Kind::Secret,
+        Default::Str(""),
+    )
+    .live(),
+    spec(
+        "slskServer",
+        "PEARTUBE_SLSK_SERVER",
+        Kind::HostPort,
+        Default::Str("vps.slsknet.org:2271"),
+    )
+    .live(),
+    // Peers connect back to this TCP port to send files; a bound socket cannot move, so a change
+    // reopens the node.
+    spec(
+        "slskListenPort",
+        "PEARTUBE_SLSK_LISTEN_PORT",
+        Kind::Port,
+        Default::Num(50300.0),
+    ),
+    // Share the album folders with Soulseek peers (off by default, so a private library is never
+    // published silently). The client reads these when it is made, so a change reopens the node.
+    // The folder shared stays env-only (PEARTUBE_SLSK_SHARE_DIR), like the import folder: the API
+    // must not be able to publish another folder on disk.
+    spec(
+        "slskShare",
+        "PEARTUBE_SLSK_SHARE",
+        Kind::Bool,
+        Default::Bool(false),
+    )
+    .env_parse(env_flag),
+    spec(
+        "slskShareMaxFiles",
+        "PEARTUBE_SLSK_SHARE_MAX_FILES",
+        Kind::Number,
+        Default::Num(2000.0),
+    )
+    .range(1.0, 100_000.0),
 ];
 
 fn env_truthy(text: &str) -> Value {
@@ -827,6 +878,32 @@ fn validate(key: &str, spec: &Spec, value: &Value) -> Result<Value, SettingsErro
             }
             _ => Err(bad(key, "must be a 64-character hex key")),
         },
+        Kind::Text => match value {
+            Value::String(text) if text.encode_utf16().count() <= 256 => {
+                Ok(Value::String(js_trim(text).to_owned()))
+            }
+            _ => Err(bad(key, "must be text")),
+        },
+        Kind::HostPort => {
+            let Value::String(text) = value else {
+                return Err(bad(key, "must be host:port"));
+            };
+            let text = js_trim(text);
+            if text.is_empty() {
+                return Ok(spec.def.value());
+            }
+            // A host as `HOST` has it, then a port from 1 to 65535, written back without leading zeros.
+            text.rsplit_once(':')
+                .filter(|(host, port)| {
+                    is_host(host)
+                        && (1..=5).contains(&port.len())
+                        && port.bytes().all(|byte| byte.is_ascii_digit())
+                })
+                .and_then(|(host, port)| Some((host, port.parse::<u32>().ok()?)))
+                .filter(|(_, port)| (1..=65535).contains(port))
+                .map(|(host, port)| Value::String(format!("{host}:{port}")))
+                .ok_or_else(|| bad(key, "must be host:port"))
+        }
         Kind::Secret => match value {
             Value::String(text) if text.encode_utf16().count() <= 512 => Ok(value.clone()),
             _ => Err(bad(key, "must be text")),

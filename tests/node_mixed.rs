@@ -180,6 +180,7 @@ fn rust_node_lists_js_published_videos() {
             "imdb:tt0000001".into(),
             "Mixed Node Fixture".into(),
             bootstrap.to_string(),
+            json!({ "title": "Track One", "artist": "Mixed Artist", "year": 1957 }).to_string(),
         ],
     );
     let published = publisher.result();
@@ -234,6 +235,11 @@ fn rust_node_lists_js_published_videos() {
     assert_eq!(hit.size, published["size"].as_u64().unwrap());
     assert_eq!(hit.source_kind, "channel");
     assert_eq!(hit.source, channel);
+    assert_eq!(
+        json!(hit.music),
+        json!({ "title": "Track One", "artist": "Mixed Artist" }),
+        "the track's own name and artist, and nothing else the publisher said"
+    );
 
     // The whole listing (no id filter) matches the publishing JS node's own listing.
     let js_listing = published["entries"].clone();
@@ -269,6 +275,7 @@ fn rust_node_lists_js_published_videos() {
         assert_eq!(rust.size, js["size"].as_u64().unwrap_or_default());
         assert_eq!(rust.season, js["season"].as_u64());
         assert_eq!(rust.episode, js["episode"].as_u64());
+        assert_eq!(json!(rust.music), js["music"]);
     }
 
     // Milestone 3: the JS file's own start, middle and end are byte-identical through the URL.
@@ -368,18 +375,25 @@ fn js_follows_rust_published_video_and_node_resumes() {
     }
     let expected = sha256_hex(&bytes);
     let published = runtime
-        .block_on(node.publish(
-            peartube_native::node::api::PutMeta {
-                id: "imdb:tt0000002".into(),
-                title: "Rust Published Fixture".into(),
-                private_entry: None,
-                epoch: None,
-                store: None,
-                expected_size: Some(Some(bytes.len() as u64)),
-                extra: serde_json::Map::new(),
-            },
-            peartube_native::node::core::NodeSource::bytes(bytes.clone()),
-        ))
+        .block_on(
+            node.publish(
+                peartube_native::node::api::PutMeta {
+                    id: "imdb:tt0000002".into(),
+                    title: "Rust Published Fixture".into(),
+                    private_entry: None,
+                    epoch: None,
+                    store: None,
+                    expected_size: Some(Some(bytes.len() as u64)),
+                    extra: [(
+                        "music".to_owned(),
+                        json!({ "title": "Rust Track", "artist": "Rust Artist", "bpm": 120 }),
+                    )]
+                    .into_iter()
+                    .collect(),
+                },
+                peartube_native::node::core::NodeSource::bytes(bytes.clone()),
+            ),
+        )
         .expect("publish");
     assert_eq!(published.announce.sha256, expected);
     let channel = published.channel.clone();
@@ -406,6 +420,11 @@ fn js_follows_rust_published_video_and_node_resumes() {
         "Rust Published Fixture"
     );
     assert_eq!(js_entry["source"].as_str().unwrap(), channel);
+    assert_eq!(
+        js_entry["music"],
+        json!({ "title": "Rust Track", "artist": "Rust Artist" }),
+        "JS reads the track's name and artist the Rust node announced"
+    );
 
     // The listing this node serves for its own channel matches what the JS node sees.
     let listing = runtime.block_on(async {
@@ -420,6 +439,7 @@ fn js_follows_rust_published_video_and_node_resumes() {
     assert_eq!(listed.sha256, expected);
     assert_eq!(listed.size, bytes.len() as u64);
     assert!(listed.local, "the publisher owns the blob");
+    assert_eq!(json!(listed.music), js_entry["music"]);
 
     // Milestone 5: restart on the same storage. The publisher is this node, now closed, so the
     // listing has to come back from its own persisted view and store.

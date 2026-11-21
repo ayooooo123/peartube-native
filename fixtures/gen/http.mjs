@@ -81,6 +81,58 @@ const mirror = {
   run: async (plugin, payload) => ({ plugin, payload })
 }
 
+// A library the owner removes from: this channel's album and films, and another channel's film. `stuck` and
+// `unseen-stuck` cannot be removed.
+const ALBUM = 'mb:' + '0'.repeat(32)
+const JOBS = [1, 2, 3].map(n => [8, 4, 4, 4, 12].map(length => String(n).repeat(length)).join('-'))
+function libraryNode () {
+  const own = (key, id, sha256, extra = {}) => ({ ...MOVIE, key, id, sha256, source: 'chan', ...extra })
+  const track = n => own(`t${n}`, `${ALBUM}:s01e0${n}`, `s${n}`, {
+    title: 'Album',
+    seriesKey: ALBUM,
+    baseTitle: 'Album',
+    year: null,
+    season: 1,
+    episode: n,
+    ...(n === 3 ? {} : { music: { title: `Track ${n}`, artist: 'Artist' } })
+  })
+  let rows = [
+    track(1), track(2), track(3),
+    own('own-film', 'imdb:tt0000001', 'f1'),
+    own('stuck', 'imdb:tt0000002', 'f2'),
+    { ...MOVIE, key: 'theirs', id: 'imdb:tt0000003', sha256: 'f3', source: 'other' }
+  ]
+  return {
+    ...node,
+    search: async () => rows,
+    remove: async key => {
+      if (key === 'stuck' || key === 'unseen-stuck') throw new Error(`Cannot remove ${key}`)
+      rows = rows.filter(row => row.key !== key)
+    }
+  }
+}
+
+// A mirror host with one provider, `soulseek`, one mirror under way, and files for the first album track and the
+// film (deleted) and for the second track (kept).
+const providerJob = status => ({ jobId: JOBS[0], plugin: 'soulseek', status })
+const provider = (call, name, payload) => {
+  if (name !== 'soulseek') throw Object.assign(new Error(`Unknown provider: ${name}`), { status: 404 })
+  return { call, name, payload }
+}
+const libraryMirror = {
+  ...mirror,
+  searchProvider: async (name, payload) => provider('search', name, payload),
+  browseProvider: async (name, payload) => provider('browse', name, payload),
+  mirrorProvider: async (name, payload) => provider('mirror', name, payload),
+  listProviderJobs: () => [providerJob('transferring')],
+  getProviderJob: id => (id === JOBS[0] ? providerJob('transferring') : null),
+  cancelProviderJob: id => (id === JOBS[0] ? providerJob('removed') : null),
+  forgetImported: async gone => new Map(gone.flatMap(({ id, sha256 }) => {
+    const file = { s1: 'deleted', f1: 'deleted', s2: 'kept' }[sha256]
+    return file ? [[`${id}/${sha256}`, file]] : []
+  }))
+}
+
 const cast = {
   status: () => ({ receivers: [], session: null, receiverMode: null }),
   pairReceiver: async () => ({ deviceId: 'd1', name: 'TV' }),
@@ -106,10 +158,17 @@ const full = {
   onSourcesChanged: () => {}
 }
 const token = { ...full, apiToken: 'secret' }
+const library = {
+  ...full,
+  node: libraryNode(),
+  // This acquirer knows one job; any other is a provider's or nobody's.
+  acquirer: { ...acquirer, cancel: id => (acquirer.get(id) ? acquirer.cancel(id) : null) },
+  mirror: libraryMirror
+}
 const bare = {
   node: null,
   fallbackStatus: { tracker: 'trk' },
-  fallbackJobs: () => [{ jobId: 'fallback' }],
+  fallbackJobs: () => [{ jobId: 'fallback' }, { jobId: JOBS[2], state: 'queued' }],
   posterUrl: null,
   backdropUrl: null
 }
@@ -150,6 +209,7 @@ const scenarios = {
     json('GET', '/v1/jobs'),
     json('GET', '/v1/jobs/0123456789abcdef0123456789abcdef0123'),
     json('DELETE', '/v1/jobs/0123456789abcdef0123456789abcdef0123'),
+    json('GET', '/v1/jobs/' + JOBS[1]),
     json('GET', '/v1/plugins'),
     json('POST', '/v1/plugins/http-acquire/run', { url: 'http://x' }),
     json('POST', '/v1/mirror', {}),
@@ -186,7 +246,36 @@ const scenarios = {
     json('GET', '/v1/settings'),
     json('GET', '/v1/identity'),
     json('GET', '/v1/search?id=x'),
+    json('POST', '/v1/providers/soulseek/search', {}),
     raw('OPTIONS', '/v1/status')
+  ],
+  library: [
+    json('POST', '/v1/entries/remove', {}),
+    json('POST', '/v1/entries/remove', { key: 7, seriesKey: ' ', ids: 'x', keys: [' ', 3] }),
+    json('POST', '/v1/entries/remove', [1, 2]),
+    json('POST', '/v1/entries/remove', { key: ' ghost ' }),
+    json('POST', '/v1/entries/remove', { key: 'stuck' }),
+    json('POST', '/v1/entries/remove', { key: 'theirs' }),
+    json('POST', '/v1/entries/remove', { ids: [' imdb:tt0000001 ', 9, '', 'imdb:tt0000003'] }),
+    json('POST', '/v1/entries/remove', { keys: ['t3', 'unseen', 'unseen-stuck', 'theirs'] }),
+    json('POST', '/v1/entries/remove', { seriesKey: ` ${ALBUM.toUpperCase()} ` }),
+    json('POST', '/v1/entries/remove', { seriesKey: ALBUM }),
+    json('GET', '/v1/jobs'),
+    json('GET', '/v1/jobs/' + JOBS[0]),
+    json('DELETE', '/v1/jobs/' + JOBS[0]),
+    json('GET', '/v1/jobs/' + JOBS[1]),
+    json('DELETE', '/v1/jobs/' + JOBS[1]),
+    json('DELETE', '/v1/jobs/0123456789abcdef0123456789abcdef0123'),
+    json('GET', '/v1/jobs/' + JOBS[0].replace('1', 'A')),
+    json('POST', '/v1/providers/soulseek/search', { query: 'x' }),
+    json('POST', '/v1/providers/soulseek/browse', { username: 'bob' }),
+    json('POST', '/v1/providers/soulseek/mirror', { username: 'bob', files: [] }),
+    json('POST', '/v1/providers/nope/search', {}),
+    json('POST', '/v1/providers/a%20b/browse', {}),
+    json('POST', '/v1/providers/soulseek/other', {}),
+    json('POST', '/v1/providers//search', {}),
+    json('GET', '/v1/providers/soulseek/search'),
+    raw('POST', '/v1/providers/soulseek/search', '{oops', { 'content-type': 'application/json' })
   ],
   bare: [
     json('GET', '/v1/status'),
@@ -194,6 +283,10 @@ const scenarios = {
     json('GET', '/v1/entries'),
     json('GET', '/v1/sources'),
     json('GET', '/v1/jobs'),
+    json('GET', '/v1/jobs/' + JOBS[2]),
+    json('DELETE', '/v1/jobs/' + JOBS[2]),
+    json('GET', '/v1/jobs/' + JOBS[1]),
+    json('POST', '/v1/providers/soulseek/search', {}),
     json('POST', '/v1/entries/remove', { key: 'abc' }),
     json('POST', '/v1/acquire', { id: 'i' }),
     json('GET', '/v1/plugins'),
@@ -211,7 +304,7 @@ const scenarios = {
   ]
 }
 
-const states = { node: full, token, bare, cast: full }
+const states = { node: full, token, library, bare, cast: full }
 const KEEP = [
   'content-type', 'location', 'cache-control', 'vary', 'etag', 'content-disposition',
   'access-control-allow-origin', 'access-control-allow-methods', 'access-control-allow-headers',

@@ -1,6 +1,11 @@
 //! The relay process (`bin/relay.js`'s port): a relay started without a tracker founds its own
 //! channel and keeps it across restarts, with its API up on the configured address.
 
+// Only the FLAC builder is used here.
+#[allow(dead_code)]
+#[path = "support/soulseek_network.rs"]
+mod network;
+
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream};
@@ -12,7 +17,7 @@ use peartube_native::cast::traits::CastPeer;
 use peartube_native::cast::{Receiver, ReceiverOptions};
 use peartube_native::node::core::{CoreNode, create_node};
 use peartube_native::relay::Relay;
-use serde_json::Value;
+use serde_json::{Value, json};
 
 fn get_json(addr: SocketAddr, path: &str) -> Value {
     request_json(addr, "GET", path, "")
@@ -129,6 +134,177 @@ async fn a_live_setting_applies_without_a_reopen() {
     assert_eq!(
         relay.status().await.expect("still open")["writer"],
         ready["writer"]
+    );
+    relay.shutdown().await;
+}
+
+/// The relay's library from its API: an album folder in the import folder is listed as tracks
+/// that carry their own names, the owner removes them and only the files a mirror put there go
+/// with them, and the Soulseek provider follows its live settings.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_album_is_imported_listed_and_removed_and_soulseek_follows_its_settings() {
+    let dir = tempfile::tempdir().unwrap();
+    let import = dir.path().join("import");
+    let tags = |track: &str, title: &str| -> Vec<(String, String)> {
+        [
+            ("ALBUM", "Blue Train"),
+            ("ARTIST", "John Coltrane"),
+            ("TITLE", title),
+            ("TRACKNUMBER", track),
+            (
+                "MUSICBRAINZ_ALBUMID",
+                "01234567-89ab-cdef-0123-456789abcdef",
+            ),
+        ]
+        .map(|(key, value)| (key.to_owned(), value.to_owned()))
+        .to_vec()
+    };
+    // The owner's album, and a folder as a mirror leaves it: pinned to its release.
+    let (owned, mirrored) = (import.join("Blue Train"), import.join("Mirrored"));
+    std::fs::create_dir_all(&owned).unwrap();
+    std::fs::create_dir_all(&mirrored).unwrap();
+    let first = owned.join("01 - Blue Train.flac");
+    std::fs::write(&first, network::flac(&tags("1", "Blue Train"), 4000)).unwrap();
+    std::fs::write(
+        owned.join("02 - Moment.flac"),
+        network::flac(&tags("2", "Moment's Notice"), 4100),
+    )
+    .unwrap();
+    std::fs::write(mirrored.join("05 Naima.flac"), "not a tagged file").unwrap();
+    std::fs::write(
+        mirrored.join(".peartube-album.json"),
+        r#"{"release":"discogs:r249504","title":"Giant Steps"}"#,
+    )
+    .unwrap();
+
+    let mut env = env(&dir.path().join("storage"));
+    env.insert("PEARTUBE_WATCH_DIR".into(), import.display().to_string());
+    let relay = Relay::listen(env).await.expect("relay listens");
+    relay.start().await.expect("node opens");
+    let addr = relay.addresses()[0];
+    let call = |method: &'static str, path: &'static str, body: Value| async move {
+        tokio::task::spawn_blocking(move || {
+            let body = if method == "GET" {
+                String::new()
+            } else {
+                body.to_string()
+            };
+            try_request_json(addr, method, path, &body)
+        })
+        .await
+        .unwrap()
+    };
+    let plugin = |plugins: &Value, name: &str| -> Value {
+        let listed = plugins["plugins"].as_array().expect("plugins");
+        let found = listed.iter().find(|plugin| plugin["name"] == name);
+        found.unwrap_or_else(|| panic!("no {name} plugin")).clone()
+    };
+
+    // The start imported both folders.
+    let (_, plugins) = call("GET", "/v1/plugins", Value::Null).await;
+    assert_eq!(plugin(&plugins, "watch-dir")["trackedFiles"], 3);
+    let soulseek = plugin(&plugins, "soulseek");
+    assert_eq!(soulseek["status"], "not configured");
+    assert_eq!(soulseek["staging"], "import folder");
+    let (_, listing) = call("GET", "/v1/entries", Value::Null).await;
+    let release = "mb:0123456789abcdef0123456789abcdef";
+    let rows = listing["results"].as_array().expect("results").clone();
+    let row = |id: &str| -> Value {
+        let found = rows.iter().find(|row| row["id"] == id);
+        found
+            .unwrap_or_else(|| panic!("no entry {id} in {listing}"))
+            .clone()
+    };
+    let (one, two) = (
+        row(&format!("{release}:s01e01")),
+        row(&format!("{release}:s01e02")),
+    );
+    assert_eq!(one["title"], "John Coltrane · Blue Train");
+    assert_eq!(
+        one["music"],
+        json!({ "title": "Blue Train", "artist": "John Coltrane" })
+    );
+    assert_eq!(two["music"]["title"], "Moment's Notice");
+    assert_eq!((&one["season"], &one["episode"]), (&json!(1), &json!(1)));
+    assert_eq!(one["seriesKey"], two["seriesKey"], "one album");
+    let pinned = row("discogs:r249504:s01e05");
+    assert_eq!(pinned["title"], "Giant Steps");
+    assert_eq!(pinned["music"], json!({ "title": "Naima" }));
+
+    // The provider is the relay's, and its sign-in is a live setting.
+    let search = json!({ "query": "coltrane" });
+    let (status, refused) = call("POST", "/v1/providers/soulseek/search", search).await;
+    assert_eq!(
+        (status, &refused["error"]),
+        (400, &json!("Soulseek is not configured"))
+    );
+    let (status, unknown) = call("POST", "/v1/providers/nope/browse", json!({})).await;
+    assert_eq!(
+        (status, &unknown["error"]),
+        (404, &json!("Unknown provider: nope"))
+    );
+    let sign_in = json!({ "slskUser": "alice", "slskPass": "hunter2secret" });
+    let (status, saved) = call("PUT", "/v1/settings", sign_in).await;
+    assert_eq!(status, 200, "{saved}");
+    assert_eq!(saved["restartNeeded"], json!([]), "{saved}");
+    assert!(
+        !saved.to_string().contains("hunter2secret"),
+        "the password stays in the file"
+    );
+    let (_, plugins) = call("GET", "/v1/plugins", Value::Null).await;
+    let soulseek = plugin(&plugins, "soulseek");
+    assert_eq!(soulseek["status"], "configured");
+    assert_eq!(
+        (&soulseek["configured"], &soulseek["available"]),
+        (&json!(true), &json!(true))
+    );
+    assert_eq!(
+        call("GET", "/v1/jobs", Value::Null).await.1,
+        json!({ "jobs": [] })
+    );
+
+    // The owner removes the album and the mirrored track. The owner's files stay; the mirror's go.
+    let (status, gone) = call(
+        "POST",
+        "/v1/entries/remove",
+        json!({ "seriesKey": one["seriesKey"], "ids": ["discogs:r249504:s01e05"] }),
+    )
+    .await;
+    assert_eq!(status, 200, "{gone}");
+    assert_eq!(gone["notRemoved"], json!([]));
+    // Each removed track by its own name, with what became of its file.
+    let mut fate: Vec<(String, String)> = gone["removed"]
+        .as_array()
+        .expect("removed")
+        .iter()
+        .map(|row| {
+            let text = |key: &str| row[key].as_str().unwrap_or_default().to_owned();
+            (text("title"), text("file"))
+        })
+        .collect();
+    fate.sort();
+    let expected = [
+        ("Blue Train", "kept"),
+        ("Moment's Notice", "kept"),
+        ("Naima", "deleted"),
+    ];
+    assert_eq!(
+        fate,
+        expected.map(|(title, file)| (title.to_owned(), file.to_owned()))
+    );
+    assert_eq!(gone["filesDeleted"], 1);
+    assert!(first.exists(), "the owner's file stays");
+    assert!(
+        !mirrored.exists(),
+        "the mirrored folder goes with its last file"
+    );
+    let (_, listing) = call("GET", "/v1/entries", Value::Null).await;
+    assert_eq!(listing["results"], json!([]));
+    // The files that stayed are not imported again.
+    let (_, swept) = call("POST", "/v1/plugins/watch-dir/run", json!({})).await;
+    assert_eq!(
+        (&swept["scanned"], &swept["ingested"]),
+        (&json!(2), &json!(0))
     );
     relay.shutdown().await;
 }

@@ -52,7 +52,7 @@
             "content-type": "application/json",
             "cross-origin-resource-policy": "cross-origin"
           },
-          "body": "{\"removed\":true,\"key\":\"abc\"}"
+          "body": "{\"removed\":[{\"key\":\"abc\"}],\"notRemoved\":[],\"filesDeleted\":0}"
         },
         {
           "method": "POST",
@@ -66,7 +66,7 @@
             "content-type": "application/json",
             "cross-origin-resource-policy": "cross-origin"
           },
-          "body": "{\"error\":\"key is required\"}"
+          "body": "{\"error\":\"key, seriesKey, ids or keys is required\"}"
         },
         {
           "method": "POST",
@@ -334,6 +334,24 @@
             "cross-origin-resource-policy": "cross-origin"
           },
           "body": "{\"jobId\":\"0123456789abcdef0123456789abcdef0123\",\"state\":\"cancelled\"}"
+        },
+        {
+          "method": "GET",
+          "path": "/v1/jobs/22222222-2222-2222-2222-222222222222",
+          "requestHeaders": {
+            "host": "relay.local:8174"
+          },
+          "requestBody": null,
+          "status": 404,
+          "headers": {
+            "content-type": "application/json",
+            "access-control-allow-origin": "*",
+            "access-control-allow-methods": "GET, HEAD, OPTIONS",
+            "access-control-allow-headers": "content-type, authorization, range",
+            "access-control-expose-headers": "content-length, content-range, accept-ranges, content-disposition",
+            "cross-origin-resource-policy": "cross-origin"
+          },
+          "body": "{\"error\":\"not found\"}"
         },
         {
           "method": "GET",
@@ -834,7 +852,7 @@
             "content-type": "application/json",
             "cross-origin-resource-policy": "cross-origin"
           },
-          "body": "{\"removed\":true,\"key\":\"abc\"}"
+          "body": "{\"removed\":[{\"key\":\"abc\"}],\"notRemoved\":[],\"filesDeleted\":0}"
         },
         {
           "method": "GET",
@@ -883,6 +901,20 @@
           "body": "{\"results\":[]}"
         },
         {
+          "method": "POST",
+          "path": "/v1/providers/soulseek/search",
+          "requestHeaders": {
+            "host": "relay.local:8174"
+          },
+          "requestBody": "{}",
+          "status": 401,
+          "headers": {
+            "content-type": "application/json",
+            "cross-origin-resource-policy": "cross-origin"
+          },
+          "body": "{\"error\":\"Unauthorized\"}"
+        },
+        {
           "method": "OPTIONS",
           "path": "/v1/status",
           "requestHeaders": {
@@ -898,6 +930,396 @@
             "cross-origin-resource-policy": "cross-origin"
           },
           "body": ""
+        }
+      ]
+    },
+    {
+      "name": "library",
+      "responses": [
+        {
+          "method": "POST",
+          "path": "/v1/entries/remove",
+          "requestHeaders": {
+            "host": "relay.local:8174"
+          },
+          "requestBody": "{}",
+          "status": 400,
+          "headers": {
+            "content-type": "application/json",
+            "cross-origin-resource-policy": "cross-origin"
+          },
+          "body": "{\"error\":\"key, seriesKey, ids or keys is required\"}"
+        },
+        {
+          "method": "POST",
+          "path": "/v1/entries/remove",
+          "requestHeaders": {
+            "host": "relay.local:8174"
+          },
+          "requestBody": "{\"key\":7,\"seriesKey\":\" \",\"ids\":\"x\",\"keys\":[\" \",3]}",
+          "status": 400,
+          "headers": {
+            "content-type": "application/json",
+            "cross-origin-resource-policy": "cross-origin"
+          },
+          "body": "{\"error\":\"key, seriesKey, ids or keys is required\"}"
+        },
+        {
+          "method": "POST",
+          "path": "/v1/entries/remove",
+          "requestHeaders": {
+            "host": "relay.local:8174"
+          },
+          "requestBody": "[1,2]",
+          "status": 400,
+          "headers": {
+            "content-type": "application/json",
+            "cross-origin-resource-policy": "cross-origin"
+          },
+          "body": "{\"error\":\"key, seriesKey, ids or keys is required\"}"
+        },
+        {
+          "method": "POST",
+          "path": "/v1/entries/remove",
+          "requestHeaders": {
+            "host": "relay.local:8174"
+          },
+          "requestBody": "{\"key\":\" ghost \"}",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json",
+            "cross-origin-resource-policy": "cross-origin"
+          },
+          "body": "{\"removed\":[{\"key\":\"ghost\"}],\"notRemoved\":[],\"filesDeleted\":0}"
+        },
+        {
+          "method": "POST",
+          "path": "/v1/entries/remove",
+          "requestHeaders": {
+            "host": "relay.local:8174"
+          },
+          "requestBody": "{\"key\":\"stuck\"}",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json",
+            "cross-origin-resource-policy": "cross-origin"
+          },
+          "body": "{\"removed\":[],\"notRemoved\":[{\"key\":\"stuck\",\"id\":\"imdb:tt0000002\",\"reason\":\"Cannot remove stuck\"}],\"filesDeleted\":0}"
+        },
+        {
+          "method": "POST",
+          "path": "/v1/entries/remove",
+          "requestHeaders": {
+            "host": "relay.local:8174"
+          },
+          "requestBody": "{\"key\":\"theirs\"}",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json",
+            "cross-origin-resource-policy": "cross-origin"
+          },
+          "body": "{\"removed\":[],\"notRemoved\":[{\"key\":\"theirs\",\"id\":\"imdb:tt0000003\",\"reason\":\"Published by another channel\"}],\"filesDeleted\":0}"
+        },
+        {
+          "method": "POST",
+          "path": "/v1/entries/remove",
+          "requestHeaders": {
+            "host": "relay.local:8174"
+          },
+          "requestBody": "{\"ids\":[\" imdb:tt0000001 \",9,\"\",\"imdb:tt0000003\"]}",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json",
+            "cross-origin-resource-policy": "cross-origin"
+          },
+          "body": "{\"removed\":[{\"key\":\"own-film\",\"id\":\"imdb:tt0000001\",\"sha256\":\"f1\",\"title\":\"Film\",\"file\":\"deleted\"}],\"notRemoved\":[{\"key\":\"theirs\",\"id\":\"imdb:tt0000003\",\"reason\":\"Published by another channel\"}],\"filesDeleted\":1}"
+        },
+        {
+          "method": "POST",
+          "path": "/v1/entries/remove",
+          "requestHeaders": {
+            "host": "relay.local:8174"
+          },
+          "requestBody": "{\"keys\":[\"t3\",\"unseen\",\"unseen-stuck\",\"theirs\"]}",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json",
+            "cross-origin-resource-policy": "cross-origin"
+          },
+          "body": "{\"removed\":[{\"key\":\"t3\",\"id\":\"mb:00000000000000000000000000000000:s01e03\",\"sha256\":\"s3\",\"title\":\"Album\",\"file\":null},{\"key\":\"unseen\",\"id\":null,\"sha256\":null,\"title\":null,\"file\":null}],\"notRemoved\":[{\"key\":\"theirs\",\"id\":\"imdb:tt0000003\",\"reason\":\"Published by another channel\"},{\"key\":\"unseen-stuck\",\"id\":null,\"reason\":\"Cannot remove unseen-stuck\"}],\"filesDeleted\":0}"
+        },
+        {
+          "method": "POST",
+          "path": "/v1/entries/remove",
+          "requestHeaders": {
+            "host": "relay.local:8174"
+          },
+          "requestBody": "{\"seriesKey\":\" MB:00000000000000000000000000000000 \"}",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json",
+            "cross-origin-resource-policy": "cross-origin"
+          },
+          "body": "{\"removed\":[{\"key\":\"t1\",\"id\":\"mb:00000000000000000000000000000000:s01e01\",\"sha256\":\"s1\",\"title\":\"Track 1\",\"file\":\"deleted\"},{\"key\":\"t2\",\"id\":\"mb:00000000000000000000000000000000:s01e02\",\"sha256\":\"s2\",\"title\":\"Track 2\",\"file\":\"kept\"}],\"notRemoved\":[],\"filesDeleted\":1}"
+        },
+        {
+          "method": "POST",
+          "path": "/v1/entries/remove",
+          "requestHeaders": {
+            "host": "relay.local:8174"
+          },
+          "requestBody": "{\"seriesKey\":\"mb:00000000000000000000000000000000\"}",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json",
+            "cross-origin-resource-policy": "cross-origin"
+          },
+          "body": "{\"removed\":[],\"notRemoved\":[],\"filesDeleted\":0}"
+        },
+        {
+          "method": "GET",
+          "path": "/v1/jobs",
+          "requestHeaders": {
+            "host": "relay.local:8174"
+          },
+          "requestBody": null,
+          "status": 200,
+          "headers": {
+            "content-type": "application/json",
+            "access-control-allow-origin": "*",
+            "access-control-allow-methods": "GET, HEAD, OPTIONS",
+            "access-control-allow-headers": "content-type, authorization, range",
+            "access-control-expose-headers": "content-length, content-range, accept-ranges, content-disposition",
+            "cross-origin-resource-policy": "cross-origin"
+          },
+          "body": "{\"jobs\":[{\"jobId\":\"job-1\",\"state\":\"queued\"},{\"jobId\":\"11111111-1111-1111-1111-111111111111\",\"plugin\":\"soulseek\",\"status\":\"transferring\"}]}"
+        },
+        {
+          "method": "GET",
+          "path": "/v1/jobs/11111111-1111-1111-1111-111111111111",
+          "requestHeaders": {
+            "host": "relay.local:8174"
+          },
+          "requestBody": null,
+          "status": 200,
+          "headers": {
+            "content-type": "application/json",
+            "access-control-allow-origin": "*",
+            "access-control-allow-methods": "GET, HEAD, OPTIONS",
+            "access-control-allow-headers": "content-type, authorization, range",
+            "access-control-expose-headers": "content-length, content-range, accept-ranges, content-disposition",
+            "cross-origin-resource-policy": "cross-origin"
+          },
+          "body": "{\"jobId\":\"11111111-1111-1111-1111-111111111111\",\"plugin\":\"soulseek\",\"status\":\"transferring\"}"
+        },
+        {
+          "method": "DELETE",
+          "path": "/v1/jobs/11111111-1111-1111-1111-111111111111",
+          "requestHeaders": {
+            "host": "relay.local:8174"
+          },
+          "requestBody": null,
+          "status": 200,
+          "headers": {
+            "content-type": "application/json",
+            "cross-origin-resource-policy": "cross-origin"
+          },
+          "body": "{\"jobId\":\"11111111-1111-1111-1111-111111111111\",\"plugin\":\"soulseek\",\"status\":\"removed\"}"
+        },
+        {
+          "method": "GET",
+          "path": "/v1/jobs/22222222-2222-2222-2222-222222222222",
+          "requestHeaders": {
+            "host": "relay.local:8174"
+          },
+          "requestBody": null,
+          "status": 404,
+          "headers": {
+            "content-type": "application/json",
+            "access-control-allow-origin": "*",
+            "access-control-allow-methods": "GET, HEAD, OPTIONS",
+            "access-control-allow-headers": "content-type, authorization, range",
+            "access-control-expose-headers": "content-length, content-range, accept-ranges, content-disposition",
+            "cross-origin-resource-policy": "cross-origin"
+          },
+          "body": "{\"error\":\"not found\"}"
+        },
+        {
+          "method": "DELETE",
+          "path": "/v1/jobs/22222222-2222-2222-2222-222222222222",
+          "requestHeaders": {
+            "host": "relay.local:8174"
+          },
+          "requestBody": null,
+          "status": 404,
+          "headers": {
+            "content-type": "application/json",
+            "cross-origin-resource-policy": "cross-origin"
+          },
+          "body": "{\"error\":\"not found\"}"
+        },
+        {
+          "method": "DELETE",
+          "path": "/v1/jobs/0123456789abcdef0123456789abcdef0123",
+          "requestHeaders": {
+            "host": "relay.local:8174"
+          },
+          "requestBody": null,
+          "status": 200,
+          "headers": {
+            "content-type": "application/json",
+            "cross-origin-resource-policy": "cross-origin"
+          },
+          "body": "{\"jobId\":\"0123456789abcdef0123456789abcdef0123\",\"state\":\"cancelled\"}"
+        },
+        {
+          "method": "GET",
+          "path": "/v1/jobs/A1111111-1111-1111-1111-111111111111",
+          "requestHeaders": {
+            "host": "relay.local:8174"
+          },
+          "requestBody": null,
+          "status": 404,
+          "headers": {
+            "content-type": "application/json",
+            "access-control-allow-origin": "*",
+            "access-control-allow-methods": "GET, HEAD, OPTIONS",
+            "access-control-allow-headers": "content-type, authorization, range",
+            "access-control-expose-headers": "content-length, content-range, accept-ranges, content-disposition",
+            "cross-origin-resource-policy": "cross-origin"
+          },
+          "body": "{\"error\":\"not found\"}"
+        },
+        {
+          "method": "POST",
+          "path": "/v1/providers/soulseek/search",
+          "requestHeaders": {
+            "host": "relay.local:8174"
+          },
+          "requestBody": "{\"query\":\"x\"}",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json",
+            "cross-origin-resource-policy": "cross-origin"
+          },
+          "body": "{\"call\":\"search\",\"name\":\"soulseek\",\"payload\":{\"query\":\"x\"}}"
+        },
+        {
+          "method": "POST",
+          "path": "/v1/providers/soulseek/browse",
+          "requestHeaders": {
+            "host": "relay.local:8174"
+          },
+          "requestBody": "{\"username\":\"bob\"}",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json",
+            "cross-origin-resource-policy": "cross-origin"
+          },
+          "body": "{\"call\":\"browse\",\"name\":\"soulseek\",\"payload\":{\"username\":\"bob\"}}"
+        },
+        {
+          "method": "POST",
+          "path": "/v1/providers/soulseek/mirror",
+          "requestHeaders": {
+            "host": "relay.local:8174"
+          },
+          "requestBody": "{\"username\":\"bob\",\"files\":[]}",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json",
+            "cross-origin-resource-policy": "cross-origin"
+          },
+          "body": "{\"call\":\"mirror\",\"name\":\"soulseek\",\"payload\":{\"username\":\"bob\",\"files\":[]}}"
+        },
+        {
+          "method": "POST",
+          "path": "/v1/providers/nope/search",
+          "requestHeaders": {
+            "host": "relay.local:8174"
+          },
+          "requestBody": "{}",
+          "status": 404,
+          "headers": {
+            "content-type": "application/json",
+            "cross-origin-resource-policy": "cross-origin"
+          },
+          "body": "{\"error\":\"Unknown provider: nope\"}"
+        },
+        {
+          "method": "POST",
+          "path": "/v1/providers/a%20b/browse",
+          "requestHeaders": {
+            "host": "relay.local:8174"
+          },
+          "requestBody": "{}",
+          "status": 404,
+          "headers": {
+            "content-type": "application/json",
+            "cross-origin-resource-policy": "cross-origin"
+          },
+          "body": "{\"error\":\"Unknown provider: a b\"}"
+        },
+        {
+          "method": "POST",
+          "path": "/v1/providers/soulseek/other",
+          "requestHeaders": {
+            "host": "relay.local:8174"
+          },
+          "requestBody": "{}",
+          "status": 404,
+          "headers": {
+            "content-type": "application/json",
+            "cross-origin-resource-policy": "cross-origin"
+          },
+          "body": "{\"error\":\"not found\"}"
+        },
+        {
+          "method": "POST",
+          "path": "/v1/providers//search",
+          "requestHeaders": {
+            "host": "relay.local:8174"
+          },
+          "requestBody": "{}",
+          "status": 404,
+          "headers": {
+            "content-type": "application/json",
+            "cross-origin-resource-policy": "cross-origin"
+          },
+          "body": "{\"error\":\"not found\"}"
+        },
+        {
+          "method": "GET",
+          "path": "/v1/providers/soulseek/search",
+          "requestHeaders": {
+            "host": "relay.local:8174"
+          },
+          "requestBody": null,
+          "status": 404,
+          "headers": {
+            "content-type": "application/json",
+            "access-control-allow-origin": "*",
+            "access-control-allow-methods": "GET, HEAD, OPTIONS",
+            "access-control-allow-headers": "content-type, authorization, range",
+            "access-control-expose-headers": "content-length, content-range, accept-ranges, content-disposition",
+            "cross-origin-resource-policy": "cross-origin"
+          },
+          "body": "{\"error\":\"not found\"}"
+        },
+        {
+          "method": "POST",
+          "path": "/v1/providers/soulseek/search",
+          "requestHeaders": {
+            "host": "relay.local:8174",
+            "content-type": "application/json"
+          },
+          "requestBody": "{oops",
+          "status": 400,
+          "headers": {
+            "content-type": "application/json",
+            "cross-origin-resource-policy": "cross-origin"
+          },
+          "body": "{\"error\":\"Body must be JSON\"}"
         }
       ]
     },
@@ -992,7 +1414,71 @@
             "access-control-expose-headers": "content-length, content-range, accept-ranges, content-disposition",
             "cross-origin-resource-policy": "cross-origin"
           },
-          "body": "{\"jobs\":[{\"jobId\":\"fallback\"}]}"
+          "body": "{\"jobs\":[{\"jobId\":\"fallback\"},{\"jobId\":\"33333333-3333-3333-3333-333333333333\",\"state\":\"queued\"}]}"
+        },
+        {
+          "method": "GET",
+          "path": "/v1/jobs/33333333-3333-3333-3333-333333333333",
+          "requestHeaders": {
+            "host": "relay.local:8174"
+          },
+          "requestBody": null,
+          "status": 200,
+          "headers": {
+            "content-type": "application/json",
+            "access-control-allow-origin": "*",
+            "access-control-allow-methods": "GET, HEAD, OPTIONS",
+            "access-control-allow-headers": "content-type, authorization, range",
+            "access-control-expose-headers": "content-length, content-range, accept-ranges, content-disposition",
+            "cross-origin-resource-policy": "cross-origin"
+          },
+          "body": "{\"jobId\":\"33333333-3333-3333-3333-333333333333\",\"state\":\"queued\"}"
+        },
+        {
+          "method": "DELETE",
+          "path": "/v1/jobs/33333333-3333-3333-3333-333333333333",
+          "requestHeaders": {
+            "host": "relay.local:8174"
+          },
+          "requestBody": null,
+          "status": 404,
+          "headers": {
+            "content-type": "application/json",
+            "cross-origin-resource-policy": "cross-origin"
+          },
+          "body": "{\"error\":\"not found\"}"
+        },
+        {
+          "method": "GET",
+          "path": "/v1/jobs/22222222-2222-2222-2222-222222222222",
+          "requestHeaders": {
+            "host": "relay.local:8174"
+          },
+          "requestBody": null,
+          "status": 404,
+          "headers": {
+            "content-type": "application/json",
+            "access-control-allow-origin": "*",
+            "access-control-allow-methods": "GET, HEAD, OPTIONS",
+            "access-control-allow-headers": "content-type, authorization, range",
+            "access-control-expose-headers": "content-length, content-range, accept-ranges, content-disposition",
+            "cross-origin-resource-policy": "cross-origin"
+          },
+          "body": "{\"error\":\"not found\"}"
+        },
+        {
+          "method": "POST",
+          "path": "/v1/providers/soulseek/search",
+          "requestHeaders": {
+            "host": "relay.local:8174"
+          },
+          "requestBody": "{}",
+          "status": 404,
+          "headers": {
+            "content-type": "application/json",
+            "cross-origin-resource-policy": "cross-origin"
+          },
+          "body": "{\"error\":\"Mirror host unavailable on read-only peer\"}"
         },
         {
           "method": "POST",

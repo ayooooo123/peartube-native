@@ -311,6 +311,35 @@ pub fn clean_name(value: Option<&str>, fallback: &str) -> String {
     }
 }
 
+/// What a music announce may say about itself beyond its title: what the track is called and who
+/// made it. `title` is the album on every track, the way an episode's title is its show's name
+/// (the clients name a group from its first row), so a track's own name lives here. Disc and track
+/// are not repeated: they are the id's own `:sNNeMM` suffix, and two copies can only disagree.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Music {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artist: Option<String>,
+}
+
+/// `cleanMusic`: every value is free text a peer wrote, so it is clamped to `MAX_TITLE` and made
+/// well-formed here, once, on the way in. `None` when it says nothing.
+pub fn clean_music(music: Option<&Value>) -> Option<Music> {
+    let field = |key: &str| {
+        music?
+            .get(key)?
+            .as_str()
+            .filter(|text| !text.is_empty())
+            .map(|text| truncate_utf16(text, MAX_TITLE))
+    };
+    let music = Music {
+        title: field("title"),
+        artist: field("artist"),
+    };
+    (music.title.is_some() || music.artist.is_some()).then_some(music)
+}
+
 /// A blob pointer inside a video announcement.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]

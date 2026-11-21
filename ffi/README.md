@@ -88,8 +88,10 @@ sh ffi/build.sh darwin-arm64 /tmp/ffi-out
 ```
 
 Each run checks what it publishes before printing the asset: the ELF `LOAD`
-alignment, the six `pt_*` exports, the dylib install name, and that no
-build-machine home directory survived in the strings.
+alignment, that the six `pt_*` functions are its only exports, the dylib install
+name, and that no build-machine home directory survived in the strings. The
+library is built without the crate's `soulseek` feature: the relay's Soulseek
+client exports a C ABI of its own, which would be exported here beside `pt_*`.
 
 The app pins a release in its `native.lock` (release tag, commit, `jsRef`,
 `abiVersion`, each asset's sha256) with its `sync-native.py`.

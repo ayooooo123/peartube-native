@@ -428,6 +428,98 @@ fileCase('reload written file', {
   ]
 })
 
+fileCase('soulseek env fallbacks', {
+  env: {
+    PEARTUBE_SLSK_USER: '  alice  ',
+    PEARTUBE_SLSK_PASS: 'hunter2',
+    PEARTUBE_SLSK_SERVER: 'not a server',
+    PEARTUBE_SLSK_LISTEN_PORT: '50400',
+    PEARTUBE_SLSK_SHARE: '1',
+    PEARTUBE_SLSK_SHARE_MAX_FILES: '300'
+  },
+  steps: [
+    { op: 'view' },
+    { op: 'get', key: 'slskUser' },
+    { op: 'get', key: 'slskPass' },
+    { op: 'get', key: 'slskServer' },
+    { op: 'get', key: 'slskListenPort' },
+    { op: 'get', key: 'slskShare' },
+    { op: 'get', key: 'slskShareMaxFiles' },
+    { op: 'isLive', key: 'slskUser' },
+    { op: 'isLive', key: 'slskPass' },
+    { op: 'isLive', key: 'slskServer' },
+    { op: 'isLive', key: 'slskListenPort' },
+    { op: 'isLive', key: 'slskShare' },
+    { op: 'isLive', key: 'slskShareMaxFiles' },
+    { op: 'update', patch: { slskShare: false, slskShareMaxFiles: 50 } },
+    { op: 'update', patch: { slskShare: null } },
+    { op: 'snapshot' }
+  ]
+})
+
+fileCase('soulseek sharing flag off', {
+  env: { PEARTUBE_SLSK_SHARE: 'yes', PEARTUBE_SLSK_SHARE_MAX_FILES: 'many', PEARTUBE_SLSK_LISTEN_PORT: '' },
+  steps: [
+    { op: 'view' },
+    { op: 'snapshot' }
+  ]
+})
+
+fileCase('soulseek user, password and server', {
+  steps: [
+    { op: 'update', patch: { slskUser: '  bob\u00a0', slskPass: '  spaced secret  ', slskServer: ' Server.Example:02242 ' } },
+    { op: 'view' },
+    { op: 'update', patch: { slskServer: '[::1]:2242' } },
+    { op: 'update', patch: { slskServer: 'a:1:65535' } },
+    { op: 'update', patch: { slskServer: '   ' } },
+    { op: 'get', key: 'slskServer' },
+    { op: 'update', patch: { slskServer: '' } },
+    { op: 'update', patch: { slskServer: 'host.example:1' } },
+    { op: 'update', patch: { slskUser: '' } },
+    { op: 'update', patch: { slskUser: 'x'.repeat(256) } },
+    { op: 'update', patch: { slskUser: ' ' + 'y'.repeat(255) } },
+    { op: 'update', patch: { slskUser: '😀'.repeat(128) } },
+    { op: 'update', patch: { slskPass: 'p'.repeat(512) } },
+    { op: 'update', patch: { slskPass: '' } },
+    { op: 'update', patch: { slskListenPort: 0 } },
+    { op: 'update', patch: { slskListenPort: 65535 } },
+    { op: 'update', patch: { slskShare: true } },
+    { op: 'update', patch: { slskShareMaxFiles: 1 } },
+    { op: 'update', patch: { slskShareMaxFiles: 100000 } },
+    { op: 'update', patch: { slskShareMaxFiles: 2000.5 } },
+    { op: 'view' }
+  ]
+})
+
+fileCase('soulseek settings refused', {
+  steps: [
+    { op: 'update', patch: { slskUser: 'x'.repeat(257) } },
+    { op: 'update', patch: { slskUser: '😀'.repeat(128) + 'x' } },
+    { op: 'update', patch: { slskUser: 42 } },
+    { op: 'update', patch: { slskUser: ['a'] } },
+    { op: 'update', patch: { slskPass: 'p'.repeat(513) } },
+    { op: 'update', patch: { slskPass: false } },
+    { op: 'update', patch: { slskServer: 'no port' } },
+    { op: 'update', patch: { slskServer: 'host:0' } },
+    { op: 'update', patch: { slskServer: 'host:65536' } },
+    { op: 'update', patch: { slskServer: 'host:123456' } },
+    { op: 'update', patch: { slskServer: 'host:12a' } },
+    { op: 'update', patch: { slskServer: ':2242' } },
+    { op: 'update', patch: { slskServer: 'bad host:2242' } },
+    { op: 'update', patch: { slskServer: 'h'.repeat(254) + ':1' } },
+    { op: 'update', patch: { slskServer: 2242 } },
+    { op: 'update', patch: { slskListenPort: -1 } },
+    { op: 'update', patch: { slskListenPort: 65536 } },
+    { op: 'update', patch: { slskListenPort: 1.5 } },
+    { op: 'update', patch: { slskListenPort: '50300' } },
+    { op: 'update', patch: { slskShare: 'yes' } },
+    { op: 'update', patch: { slskShareMaxFiles: 0 } },
+    { op: 'update', patch: { slskShareMaxFiles: 100001 } },
+    { op: 'update', patch: { slskShareDir: '/' } },
+    { op: 'view' }
+  ]
+})
+
 const fixtures = { appSettingsDefaults: defaults, appSettings, nodeOptions: nodeOptionsCases, settingsFiles }
 writeFileSync(outFile('settings-reference.json'), JSON.stringify(fixtures, null, 2) + '\n')
 console.log(`wrote ${outFile('settings-reference.json')}`)

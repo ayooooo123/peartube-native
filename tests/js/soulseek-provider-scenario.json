@@ -1,0 +1,524 @@
+{
+  "about": "Sessions for tests/js/soulseek-provider.mjs (the app's plugin) and tests/soulseek_provider.rs (the Rust port). `tick` is the step of the scripted clock in ms; every `at`, `advance` and timeout is a multiple of it. The plugin's watchdog runs on each whole second after a download starts: scripted progress stays off those instants, except in the two `-on-the-second` scripts, where either order of the two gives the same job.",
+  "tick": 50,
+  "scripts": {
+    "normal": [
+      { "at": 50, "phase": "queued" },
+      { "at": 150, "phase": "queued", "queue": 3 },
+      { "at": 1250, "phase": "transferring", "permille": 400 },
+      { "at": 2350, "phase": "transferring", "permille": 900 },
+      { "at": 3450, "phase": "transferring", "permille": 950 },
+      { "at": 3550, "phase": "completed", "permille": 1000 },
+      { "at": 3600, "done": true }
+    ],
+    "quick": [
+      { "at": 50, "phase": "transferring", "permille": 500 },
+      { "at": 100, "done": true }
+    ],
+    "silent": [
+      { "at": 50, "phase": "queued" }
+    ],
+    "waiting": [
+      { "at": 50, "phase": "queued", "queue": 7 }
+    ],
+    "connecting": [
+      { "at": 50, "phase": "queued", "queue": 0 },
+      { "at": 100, "phase": "connecting" }
+    ],
+    "stall": [
+      { "at": 50, "phase": "queued", "queue": 1 },
+      { "at": 100, "phase": "transferring", "permille": 100 }
+    ],
+    "denied": [
+      { "at": 50, "phase": "queued" },
+      { "at": 100, "error": "upload denied by peer: File not shared..." }
+    ],
+    "denied-bare": [
+      { "at": 50, "error": "Upload Denied By Peer: " }
+    ],
+    "upload-failed": [
+      { "at": 50, "error": "peer failer reported upload failed for @@f\\A - B\\01.flac" }
+    ],
+    "walled": [
+      { "at": 50, "error": "disconnected: peer could not establish indirect connection" }
+    ],
+    "secret": [
+      { "at": 50, "error": "transfer to alice broke: hunter2secret" }
+    ],
+    "chatty": [
+      { "at": 50, "phase": "queued", "queue": 2 },
+      { "at": 350, "phase": "queued", "queue": 1 },
+      { "at": 750, "phase": "queued", "queue": 0 },
+      { "at": 1100, "phase": "queued", "queue": 0 },
+      { "at": 1300, "phase": "transferring", "permille": 100 },
+      { "at": 2250, "phase": "transferring", "permille": 500 },
+      { "at": 2300, "phase": "transferring", "permille": 600 },
+      { "at": 2350, "phase": "completed", "permille": 1000 },
+      { "at": 2400, "done": true }
+    ],
+    "connecting-on-the-second": [
+      { "at": 50, "phase": "queued", "queue": 0 },
+      { "at": 1000, "phase": "connecting" }
+    ],
+    "stall-on-the-second": [
+      { "at": 50, "phase": "queued", "queue": 0 },
+      { "at": 1000, "phase": "transferring", "permille": 100 }
+    ]
+  },
+  "search": {
+    "coltrane": {
+      "hits": [
+        { "username": "queued_hires", "slots": true, "queue": 4, "filename": "@@flac\\Album\\01.flac", "size": 40000000, "bitrate": 2304, "sample_rate": 96000, "bit_depth": 24, "length_secs": 240 },
+        { "username": "free_cd", "slots": true, "queue": 0, "filename": "@@flac\\Album\\01.flac", "size": 25000000, "bitrate": 1411, "sample_rate": 44100, "bit_depth": 16, "length_secs": 240 },
+        { "username": "junk", "slots": true, "queue": 0, "filename": "@@x\\cover.jpg", "size": 5 },
+        { "username": "free_hires", "slots": true, "queue": 0, "filename": "@@flac\\Album\\01.flac", "size": 45000000, "bitrate": 2304, "sample_rate": 96000, "bit_depth": 24, "length_secs": 240 },
+        { "username": "queued_smaller", "slots": false, "queue": 2, "filename": "@@flac\\Album\\01.flac", "size": 25000000, "bitrate": 1411, "sample_rate": 44100, "bit_depth": 16, "length_secs": 240 },
+        { "username": "lossy", "slots": false, "queue": 50, "filename": "@@music\\Lossy\\001.mp3", "size": 5000000, "bitrate": 320, "sample_rate": 44100, "bit_depth": 0, "length_secs": 200 }
+      ]
+    },
+    "boom": { "error": "search exploded for alice with hunter2secret in it" }
+  },
+  "peers": {
+    "bob": {
+      "browse": {
+        "records": [
+          { "filename": "@@m\\Artist\\Album (2001)\\02 - Two.flac", "size": 200, "bitrate": 900, "sample_rate": 96000, "bit_depth": 24, "length_secs": 61 },
+          { "filename": "@@m\\Artist\\Album (2001)\\01 - One.flac", "size": 100, "bitrate": 900, "sample_rate": 96000, "bit_depth": 24, "length_secs": 60 },
+          { "filename": "@@m\\Artist\\Album (2001)\\cover.jpg", "size": 50 },
+          { "filename": "@@m\\Other\\Second (1999)\\CD1\\01 - Same.flac", "size": 300 },
+          { "filename": "@@m\\Other\\Second (1999)\\CD2\\01 - Same.flac", "size": 301 }
+        ]
+      },
+      "files": {
+        "@@m\\Artist\\Album (2001)\\01 - One.flac": { "script": "normal", "pad": 4000, "tags": [["TRACKNUMBER", "1"], ["TITLE", "One"], ["ALBUM", "Album"], ["ARTIST", "Artist"], ["DATE", "2001"]] },
+        "@@m\\Artist\\Album (2001)\\02 - Two.flac": { "script": "quick", "pad": 3000, "tags": [["TRACKNUMBER", "2"], ["TITLE", "Two"], ["ALBUM", "Album"], ["ARTIST", "Artist"], ["DATE", "2001"]] },
+        "@@m\\Other\\Second (1999)\\CD1\\01 - Same.flac": { "script": "quick", "pad": 64, "tags": [] },
+        "@@m\\Other\\Second (1999)\\CD2\\01 - Same.flac": { "script": "quick", "pad": 65, "tags": [] }
+      }
+    },
+    "pair": {
+      "browse": { "records": [{ "filename": "@@p\\A - B\\01 a.flac", "size": 10 }] }
+    },
+    "tagged": {
+      "file": { "script": "quick", "pad": 128, "tags": [["ALBUM", "Giant Steps"], ["ALBUMARTIST", "John Coltrane"], ["TITLE", "Naima"], ["DATE", "1960"], ["TRACKNUMBER", "6"]] }
+    },
+    "vinyl": {
+      "browse": {
+        "records": [
+          { "filename": "@@v\\Artist - Record (2005)\\B1 Five.flac", "size": 100 },
+          { "filename": "@@v\\Artist - Record (2005)\\A10 Four.flac", "size": 100 },
+          { "filename": "@@v\\Artist - Record (2005)\\A2 Two.flac", "size": 100 },
+          { "filename": "@@v\\Artist - Record (2005)\\A3 Three.flac", "size": 100 },
+          { "filename": "@@v\\Artist - Record (2005)\\A1 One.flac", "size": 100 },
+          { "filename": "@@v\\Artist - Record (2005)\\0 Scans\\A0 Cover.flac", "size": 100 },
+          { "filename": "@@v\\Other Record\\A0 Zero.flac", "size": 100 }
+        ]
+      },
+      "file": { "script": "quick", "pad": 100, "tags": [["ALBUM", "Record"], ["ARTIST", "Artist"], ["DATE", "2005"]] }
+    },
+    "folder": {
+      "file": { "script": "quick", "pad": 90, "tags": [] }
+    },
+    "nowhere": {
+      "file": { "script": "quick", "pad": 80, "tags": [] }
+    },
+    "unlisted": {
+      "browse": { "error": "browse unlisted timed out" },
+      "file": { "script": "quick", "pad": 70, "tags": [] }
+    },
+    "ghost": {
+      "browse": { "error": "browse ghost timed out" }
+    },
+    "walled": {
+      "browse": { "error": "disconnected: peer could not establish indirect connection" },
+      "file": { "script": "walled" }
+    },
+    "silent": { "file": { "script": "silent" } },
+    "slow": { "file": { "script": "waiting" } },
+    "stuck": { "file": { "script": "connecting" } },
+    "staller": { "file": { "script": "stall", "pad": 1000, "tags": [] } },
+    "denier": { "file": { "script": "denied" } },
+    "curt": { "file": { "script": "denied-bare" } },
+    "failer": { "file": { "script": "upload-failed" } },
+    "leaky": { "file": { "script": "secret" } },
+    "chatty": { "file": { "script": "chatty", "pad": 2000, "tags": [["ALBUM", "Chat"], ["ARTIST", "Chatty"], ["TRACKNUMBER", "1"], ["TITLE", "Talk"]] } },
+    "punctual": { "file": { "script": "connecting-on-the-second" } },
+    "ontime": { "file": { "script": "stall-on-the-second", "pad": 1000, "tags": [] } },
+    "empty": { "file": { "script": "quick" } }
+  },
+  "sessions": [
+    {
+      "name": "unconfigured",
+      "options": {},
+      "steps": [
+        { "info": true },
+        { "do": "run", "payload": {} },
+        { "info": true },
+        { "do": "search", "payload": { "query": "coltrane" } },
+        { "do": "browse", "payload": { "username": "bob" } },
+        { "do": "mirror", "payload": { "username": "bob", "files": ["x.flac"] } },
+        { "jobs": true },
+        { "configure": { "slskUser": "  alice  " } },
+        { "info": true },
+        { "configure": { "slskPass": "hunter2secret" } },
+        { "info": true },
+        { "configure": { "slskPass": "hunter2secret", "slskServer": "" } },
+        { "do": "run", "payload": {} },
+        { "info": true },
+        { "stop": true },
+        { "info": true },
+        { "do": "run", "payload": {} }
+      ]
+    },
+    {
+      "name": "unavailable",
+      "backend": "none",
+      "options": { "slskUser": "alice", "slskPass": "hunter2secret" },
+      "steps": [
+        { "info": true },
+        { "do": "search", "payload": { "query": "coltrane" } },
+        { "do": "browse", "payload": { "username": "bob" } },
+        { "do": "mirror", "payload": { "username": "bob", "files": ["a\\b\\c.flac"] } },
+        { "do": "run", "payload": {} },
+        { "jobs": true },
+        { "info": true }
+      ]
+    },
+    {
+      "name": "unavailable and unconfigured",
+      "backend": "none",
+      "options": {},
+      "steps": [
+        { "info": true },
+        { "do": "run", "payload": {} },
+        { "info": true },
+        { "do": "search", "payload": { "query": "coltrane" } },
+        { "configure": { "slskUser": "alice", "slskPass": "hunter2secret" } },
+        { "info": true }
+      ]
+    },
+    {
+      "name": "search",
+      "options": { "slskUser": "alice", "slskPass": "hunter2secret", "slskServer": "  slsk.example.org:2242 ", "slskListenPort": 50300, "slskShare": true, "slskShareMaxFiles": 50, "searchTimeoutMs": 700 },
+      "steps": [
+        { "info": true },
+        { "do": "search", "payload": { "query": "  coltrane  ", "limit": 3, "timeoutMs": 100 } },
+        { "info": true },
+        { "do": "search", "payload": { "query": "   " } },
+        { "do": "search", "payload": {} },
+        { "do": "search", "payload": { "query": "boom" } },
+        { "do": "search", "payload": { "query": "coltrane", "limit": 0.5, "timeoutMs": 49 } },
+        { "do": "search", "payload": { "query": "coltrane", "limit": "2", "timeoutMs": "60000" } },
+        { "do": "search", "payload": { "query": "coltrane", "limit": 500, "timeoutMs": 50 } },
+        { "do": "search", "payload": { "query": "coltrane", "limit": null, "timeoutMs": null } },
+        { "do": "search", "payload": { "query": "coltrane", "limit": -4, "timeoutMs": 99.9 } },
+        { "do": "search", "payload": { "query": "coltrane", "limit": 2.5 } },
+        { "do": "search", "payload": { "query": 12345 } },
+        { "do": "run", "payload": { "query": "coltrane", "limit": 1 } },
+        { "do": "run", "payload": { "action": "search", "query": "coltrane", "files": [], "limit": 1 } },
+        { "do": "run", "payload": {} },
+        { "do": "mirror", "payload": { "username": "free_cd", "files": ["01.FLAC"] } },
+        { "jobs": true }
+      ]
+    },
+    {
+      "name": "browse",
+      "options": { "slskUser": "alice", "slskPass": "hunter2secret", "browseTimeoutMs": 1500 },
+      "steps": [
+        { "do": "browse", "payload": { "username": " bob " } },
+        { "do": "browse", "payload": { "username": "bob" } },
+        { "do": "browse", "payload": { "username": "bob", "refresh": true } },
+        { "do": "browse", "payload": { "username": "bob", "refresh": 0 } },
+        { "do": "browse", "payload": { "username": "ghost" } },
+        { "info": true },
+        { "do": "browse", "payload": { "username": "walled" } },
+        { "do": "browse", "payload": {} },
+        { "do": "browse", "payload": { "username": null } },
+        { "do": "run", "payload": { "action": "browse", "username": "vinyl" } },
+        { "do": "browse", "as": "first", "payload": { "username": "pair" } },
+        { "do": "browse", "as": "second", "payload": { "username": "pair" } },
+        { "await": "first" },
+        { "await": "second" },
+        { "do": "browse", "as": "first", "payload": { "username": "ghost" } },
+        { "do": "browse", "as": "second", "payload": { "username": "ghost" } },
+        { "await": "first" },
+        { "await": "second" },
+        { "info": true },
+        { "do": "browse", "payload": { "username": "u01" } },
+        { "do": "browse", "payload": { "username": "u02" } },
+        { "do": "browse", "payload": { "username": "u03" } },
+        { "do": "browse", "payload": { "username": "u04" } },
+        { "do": "browse", "payload": { "username": "u05" } },
+        { "do": "browse", "payload": { "username": "u06" } },
+        { "do": "browse", "payload": { "username": "u07" } },
+        { "do": "browse", "payload": { "username": "u08" } },
+        { "do": "browse", "payload": { "username": "u09" } },
+        { "do": "browse", "payload": { "username": "u10" } },
+        { "do": "browse", "payload": { "username": "u11" } },
+        { "do": "browse", "payload": { "username": "u12" } },
+        { "do": "browse", "payload": { "username": "u13" } },
+        { "do": "browse", "payload": { "username": "u14" } },
+        { "do": "browse", "payload": { "username": "vinyl" } },
+        { "do": "browse", "payload": { "username": "bob" } },
+        { "do": "browse", "payload": { "username": "pair" } },
+        { "do": "browse", "payload": { "username": "u15" } },
+        { "do": "browse", "payload": { "username": "bob" } },
+        { "do": "browse", "payload": { "username": "vinyl" } },
+        { "do": "browse", "payload": { "username": "pair" } },
+        { "do": "browse", "payload": { "username": "u15" } }
+      ]
+    },
+    {
+      "name": "browse again after five minutes",
+      "options": { "slskUser": "alice", "slskPass": "hunter2secret" },
+      "steps": [
+        { "do": "browse", "payload": { "username": "pair" } },
+        { "advance": 299900 },
+        { "do": "browse", "payload": { "username": "pair" } },
+        { "advance": 50 },
+        { "do": "browse", "payload": { "username": "pair" } },
+        { "do": "browse", "payload": { "username": "pair" } }
+      ]
+    },
+    {
+      "name": "album",
+      "options": { "slskUser": "alice", "slskPass": "hunter2secret" },
+      "steps": [
+        { "do": "mirror", "payload": {} },
+        { "do": "mirror", "payload": { "username": "bob" } },
+        { "do": "mirror", "payload": { "username": "bob", "files": ["cover.jpg", "", 42, null, { "filename": "notes.txt" }, { "size": 5 }, ["x.flac"]] } },
+        { "do": "mirror", "payload": { "username": "bob", "releaseId": " 01234567-89AB-CDEF-0123-456789ABCDEF ", "title": "  My Title  ", "wait": true, "files": [{ "filename": "@@m\\Artist\\Album (2001)\\01 - One.flac", "size": 100 }, " @@m\\Artist\\Album (2001)\\02 - Two.flac ", "cover.jpg", 42, { "filename": "" }, null] } },
+        { "tree": true },
+        { "jobs": true },
+        { "info": true },
+        { "do": "mirror", "payload": { "username": "bob", "wait": true, "files": ["@@m\\Artist\\Album (2001)\\01 - One.flac"] } },
+        { "tree": true },
+        { "do": "browse", "payload": { "username": "bob" } },
+        { "do": "mirror", "payload": { "username": "bob", "files": ["01 - one.FLAC", { "filename": "02 - Two.flac", "size": "9000" }] } },
+        { "jobs": true },
+        { "advance": 150 },
+        { "jobs": true },
+        { "advance": 1150 },
+        { "jobs": true },
+        { "advance": 1100 },
+        { "jobs": true },
+        { "advance": 1100 },
+        { "jobs": true },
+        { "advance": 100 },
+        { "jobs": true },
+        { "advance": 400 },
+        { "jobs": true },
+        { "tree": true },
+        { "do": "mirror", "payload": { "username": "bob", "wait": true, "files": ["@@m\\Other\\Second (1999)\\CD1\\01 - Same.flac", "@@m\\Other\\Second (1999)\\CD2\\01 - Same.flac"] } },
+        { "busy": 2 },
+        { "do": "mirror", "payload": { "username": "bob", "wait": true, "title": "Twice", "files": ["@@m\\Other\\Second (1999)\\CD1\\01 - Same.flac", "@@m\\Other\\Second (1999)\\CD2\\01 - Same.flac"] } },
+        { "tree": true },
+        { "jobs": true },
+        { "info": true },
+        { "do": "run", "payload": { "username": "bob", "wait": true, "files": ["@@m\\Artist\\Album (2001)\\02 - Two.flac"], "id": "ALBUM:0123456789abcdef0123:S01E09" } },
+        { "tree": true },
+        { "do": "mirror", "payload": { "username": "chatty", "files": ["@@c\\Chatty - Chat\\01 Talk.flac"] } },
+        { "advance": 100 },
+        { "advance": 300 },
+        { "advance": 400 },
+        { "advance": 350 },
+        { "advance": 1100 },
+        { "get": 7 },
+        { "advance": 50 },
+        { "get": 7 },
+        { "advance": 500 },
+        { "get": 7 },
+        { "do": "mirror", "payload": { "username": "bob", "wait": 1, "files": ["@@m\\Artist\\Album (2001)\\02 - Two.flac"] } },
+        { "advance": 500 },
+        { "get": 8 },
+        { "busy": 3 },
+        { "do": "mirror", "payload": { "username": "tagged", "files": ["@@x\\whatever\\zz.flac"] } },
+        { "advance": 250 },
+        { "get": 9 },
+        { "cancel": 9 },
+        { "get": 9 },
+        { "advance": 1500 },
+        { "get": 9 },
+        { "cancel": 9 },
+        { "jobs": true },
+        { "tree": true }
+      ]
+    },
+    {
+      "name": "lone tracks",
+      "importFolder": true,
+      "options": { "slskUser": "alice", "slskPass": "hunter2secret" },
+      "steps": [
+        { "info": true },
+        { "do": "mirror", "payload": { "username": "tagged", "wait": true, "files": ["@@x\\whatever\\zz.flac"] } },
+        { "do": "mirror", "payload": { "username": "vinyl", "wait": true, "files": [{ "filename": "@@v\\Artist - Record (2005)\\B1 Five.flac", "size": 100 }] } },
+        { "do": "mirror", "payload": { "username": "folder", "wait": true, "files": ["@@f\\Some Artist - Some Album (1988)\\03 - Third.flac"] } },
+        { "do": "mirror", "payload": { "username": "folder", "wait": true, "id": "mb:0123456789abcdef0123456789abcdef:s01e05", "files": ["@@f\\Some Artist - Some Album (1988)\\Seventh.flac"] } },
+        { "do": "mirror", "payload": { "username": "folder", "wait": true, "id": " CLIP:MySong ", "files": ["@@f\\Some Artist - Some Album (1988)\\Clip.flac"] } },
+        { "do": "mirror", "payload": { "username": "folder", "wait": true, "id": "not an id", "releaseId": "discogs:r249504", "title": "Named By Caller", "files": ["@@f\\Loose\\Untitled.flac"] } },
+        { "do": "mirror", "payload": { "username": "nowhere", "wait": true, "files": ["@@n\\track.flac"] } },
+        { "do": "mirror", "payload": { "username": "folder", "wait": true, "files": ["@@f\\Some Artist - Some Album (1988)\\Numberless.flac"] } },
+        { "do": "mirror", "payload": { "username": "unlisted", "wait": true, "files": ["@@u\\An Artist - An Album\\Numberless.flac"] } },
+        { "do": "mirror", "payload": { "username": "folder", "wait": true, "releaseId": "mb:0123456789abcdef0123456789abcdef", "files": ["@@f\\04 Lonely.flac"] } },
+        { "do": "mirror", "payload": { "username": "vinyl", "wait": true, "files": ["@@v\\Artist - Record (2005)\\A10 Four.flac"] } },
+        { "do": "mirror", "payload": { "username": "empty", "wait": true, "files": ["@@e\\Some Artist - Some Album\\01 Empty.flac"] } },
+        { "tree": true },
+        { "jobs": true },
+        { "info": true }
+      ]
+    },
+    {
+      "name": "failures",
+      "options": { "slskUser": "alice", "slskPass": "hunter2secret", "noAnswerMs": 3000, "noConnectMs": 2000 },
+      "steps": [
+        { "do": "mirror", "payload": { "username": "silent", "wait": true, "files": ["@@s\\A - B\\01.flac"] } },
+        { "do": "mirror", "payload": { "username": "stuck", "wait": true, "files": ["@@s\\A - B\\01.flac"] } },
+        { "do": "mirror", "payload": { "username": "staller", "wait": true, "files": ["@@s\\A - B\\01.flac"] } },
+        { "do": "mirror", "payload": { "username": "denier", "wait": true, "files": ["@@s\\A - B\\01.flac"] } },
+        { "do": "mirror", "payload": { "username": "curt", "wait": true, "files": ["@@s\\A - B\\01.flac"] } },
+        { "do": "mirror", "payload": { "username": "failer", "wait": true, "files": ["@@s\\A - B\\01.flac"] } },
+        { "do": "mirror", "payload": { "username": "walled", "wait": true, "files": ["@@s\\A - B\\01.flac"] } },
+        { "do": "mirror", "payload": { "username": "leaky", "wait": true, "files": ["@@s\\A - B\\01.flac"] } },
+        { "do": "mirror", "payload": { "username": "punctual", "wait": true, "files": ["@@s\\A - B\\01.flac"] } },
+        { "do": "mirror", "payload": { "username": "ontime", "wait": true, "files": ["@@s\\A - B\\01.flac"] } },
+        { "do": "mirror", "payload": { "username": "silent", "files": ["@@s\\A - B\\01.flac", "@@s\\A - B\\02.flac"] } },
+        { "advance": 2050 },
+        { "jobs": true },
+        { "advance": 2000 },
+        { "jobs": true },
+        { "do": "mirror", "payload": { "username": "slow", "files": ["@@s\\A - B\\01.flac"] } },
+        { "advance": 5000 },
+        { "jobs": true },
+        { "info": true },
+        { "tree": true }
+      ]
+    },
+    {
+      "name": "no listen port",
+      "boundPort": 0,
+      "options": { "slskUser": "alice", "slskPass": "hunter2secret", "slskListenPort": 0, "noAnswerMs": 1000, "noConnectMs": 1000 },
+      "steps": [
+        { "info": true },
+        { "do": "browse", "payload": { "username": "ghost" } },
+        { "do": "browse", "payload": { "username": "walled" } },
+        { "do": "mirror", "payload": { "username": "silent", "wait": true, "files": ["@@s\\A - B\\01.flac"] } },
+        { "do": "mirror", "payload": { "username": "stuck", "wait": true, "files": ["@@s\\A - B\\01.flac"] } },
+        { "do": "mirror", "payload": { "username": "walled", "wait": true, "files": ["@@s\\A - B\\01.flac"] } },
+        { "info": true }
+      ]
+    },
+    {
+      "name": "cancel and stop",
+      "options": { "slskUser": "alice", "slskPass": "hunter2secret", "noAnswerMs": 60000 },
+      "steps": [
+        { "do": "mirror", "payload": { "username": "slow", "files": ["@@s\\A - B\\01 x.flac"] } },
+        { "advance": 100 },
+        { "get": 1 },
+        { "cancel": 1 },
+        { "get": 1 },
+        { "advance": 1000 },
+        { "get": 1 },
+        { "cancel": 1 },
+        { "get": 1 },
+        { "cancel": 9 },
+        { "get": 9 },
+        { "jobs": true },
+        { "do": "mirror", "payload": { "username": "slow", "files": ["@@s\\A - B\\01 x.flac"] } },
+        { "do": "mirror", "as": "waited", "payload": { "username": "slow", "wait": true, "files": ["@@s\\A - B\\02 y.flac"] } },
+        { "advance": 100 },
+        { "info": true },
+        { "stop": true },
+        { "jobs": true },
+        { "await": "waited" },
+        { "advance": 1000 },
+        { "jobs": true },
+        { "info": true },
+        { "do": "search", "payload": { "query": "coltrane" } },
+        { "do": "browse", "payload": { "username": "bob" } },
+        { "do": "mirror", "payload": { "username": "bob", "files": ["a.flac"] } },
+        { "tree": true }
+      ]
+    },
+    {
+      "name": "login rejected",
+      "login": "rejected",
+      "options": { "slskUser": "alice", "slskPass": "hunter2secret" },
+      "steps": [
+        { "do": "search", "payload": { "query": "coltrane" } },
+        { "info": true },
+        { "do": "search", "as": "first", "payload": { "query": "coltrane" } },
+        { "do": "browse", "as": "second", "payload": { "username": "bob" } },
+        { "await": "first" },
+        { "await": "second" },
+        { "do": "mirror", "payload": { "username": "bob", "files": ["@@m\\A - B\\01.flac"] } },
+        { "jobs": true }
+      ]
+    },
+    {
+      "name": "login error",
+      "login": "error:server said no to alice / hunter2secret",
+      "options": { "slskUser": "alice", "slskPass": "hunter2secret" },
+      "steps": [
+        { "do": "search", "payload": { "query": "coltrane" } },
+        { "do": "run", "payload": {} },
+        { "info": true }
+      ]
+    },
+    {
+      "name": "configure",
+      "options": { "slskUser": "alice", "slskPass": "hunter2secret", "slskServer": "not a server" },
+      "steps": [
+        { "do": "search", "payload": { "query": "coltrane", "limit": 1 } },
+        { "configure": { "slskServer": "[::1]:2242" } },
+        { "do": "search", "payload": { "query": "coltrane", "limit": 1 } },
+        { "configure": { "slskServer": "host.example:0" } },
+        { "do": "search", "payload": { "query": "coltrane", "limit": 1 } },
+        { "configure": { "slskServer": "host.example:65536" } },
+        { "do": "search", "payload": { "query": "coltrane", "limit": 1 } },
+        { "configure": { "slskServer": " Host.Example:65535 " } },
+        { "do": "search", "payload": { "query": "coltrane", "limit": 1 } },
+        { "configure": { "slskServer": "a:1:2" } },
+        { "do": "search", "payload": { "query": "coltrane", "limit": 1 } },
+        { "configure": { "slskUser": " alice ", "slskPass": "hunter2secret", "slskServer": "a:1:2" } },
+        { "do": "search", "payload": { "query": "coltrane", "limit": 1 } },
+        { "configure": { "slskUser": "carol" } },
+        { "do": "search", "payload": { "query": "boom" } },
+        { "configure": { "slskPass": "x" } },
+        { "do": "search", "payload": { "query": "boom" } },
+        { "configure": { "slskPass": "" } },
+        { "do": "search", "payload": { "query": "coltrane" } },
+        { "info": true }
+      ]
+    },
+    {
+      "name": "many jobs",
+      "options": { "slskUser": "alice", "slskPass": "hunter2secret" },
+      "steps": [
+        { "do": "mirror", "repeat": 48, "payload": { "username": "walled", "wait": true, "files": ["@@w\\A - B\\01.flac"] } },
+        { "jobs": true },
+        { "do": "mirror", "payload": { "username": "slow", "files": ["@@s\\A - B\\01 x.flac"] } },
+        { "jobs": true },
+        { "do": "mirror", "payload": { "username": "walled", "wait": true, "files": ["@@w\\A - B\\01.flac"] } },
+        { "jobs": true }
+      ]
+    },
+    {
+      "name": "minutes are rounded",
+      "options": { "slskUser": "alice", "slskPass": "hunter2secret", "noAnswerMs": 90000 },
+      "steps": [
+        { "do": "mirror", "payload": { "username": "silent", "wait": true, "files": ["@@s\\A - B\\01.flac"] } }
+      ]
+    },
+    {
+      "name": "no scan",
+      "scan": false,
+      "options": { "slskUser": "alice", "slskPass": "hunter2secret" },
+      "steps": [
+        { "info": true },
+        { "do": "mirror", "payload": { "username": "tagged", "wait": true, "files": ["@@x\\whatever\\zz.flac"] } },
+        { "jobs": true },
+        { "tree": true }
+      ]
+    }
+  ]
+}

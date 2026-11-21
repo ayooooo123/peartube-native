@@ -4,6 +4,13 @@
 //! app's own `src/acquire.js` and `src/mirror.js` (from `PEARTUBE_APP`, else the sibling `../peartube`) against a
 //! scripted node, an in-memory filesystem, scripted HTTP feeds and a fake `ubit`. Here the same scenarios drive fake
 //! implementations of every seam; the two traces are compared as JSON.
+//!
+//! `tests/js/acquire-mirror-library.mjs` runs the app's mirror host on real files instead: the import folder,
+//! album folders, what the owner removed, and the Soulseek provider on a scripted network. Its sessions are in
+//! `tests/js/acquire-mirror-library.json`, and its trace is compared as JSON text.
+
+#[path = "support/soulseek_network.rs"]
+mod network;
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::io;
@@ -18,7 +25,7 @@ use peartube_native::acquire::{
     PageOptions, PutStreamFactory, RandomSource, SourceError, SourceRequest, SourceResponse,
     SourceSpec,
 };
-use peartube_native::mirror::{FileStat, MirrorFiles};
+use peartube_native::mirror::{DirEntry, FileStat, MirrorFiles};
 use peartube_native::node::api::{Announce, Entry, PutMeta, SearchOptions, SyncResult};
 use peartube_native::node::{Node, PutSource};
 use serde_json::{Map, Value, json};
@@ -217,8 +224,23 @@ impl MirrorFiles for Files {
         self.dirs.lock().unwrap().insert(path.to_owned());
     }
 
-    fn list_dir(&self, dir: &str) -> Vec<String> {
+    fn list_entries(&self, dir: &str) -> Vec<DirEntry> {
+        let base = dir.trim_end_matches('/');
         self.children(dir)
+            .into_iter()
+            .map(|name| {
+                let full = format!("{base}/{name}");
+                let below = format!("{full}/");
+                let is_dir = self.dirs.lock().unwrap().contains(&full)
+                    || self
+                        .files
+                        .lock()
+                        .unwrap()
+                        .keys()
+                        .any(|key| key.starts_with(&below));
+                DirEntry { name, is_dir }
+            })
+            .collect()
     }
 
     fn stat(&self, path: &str) -> Option<FileStat> {
@@ -244,9 +266,26 @@ impl MirrorFiles for Files {
         Files::read(self, path).map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
     }
 
+    fn read_head(&self, path: &str, max: usize) -> Option<Vec<u8>> {
+        Files::read(self, path).map(|bytes| bytes[..bytes.len().min(max)].to_vec())
+    }
+
+    fn write(&self, path: &str, text: &str) -> Result<(), String> {
+        self.set(path, text);
+        Ok(())
+    }
+
     fn write_atomic(&self, path: &str, text: &str) -> Result<(), String> {
         self.set(path, text);
         Ok(())
+    }
+
+    fn remove_file(&self, path: &str) -> Result<bool, String> {
+        Ok(self.files.lock().unwrap().remove(path).is_some())
+    }
+
+    fn remove_dir(&self, path: &str) {
+        self.dirs.lock().unwrap().remove(path);
     }
 
     fn open_read(&self, path: &str) -> Result<Box<dyn AsyncRead + Send + Unpin>, String> {
@@ -498,6 +537,8 @@ struct FakeNode {
     rechunk_migrate: Mutex<Vec<Value>>,
     rechunk_result: Mutex<Value>,
     rechunk_wait: Mutex<Option<Arc<tokio::sync::Notify>>>,
+    /// The ids `put` refuses once it has read the file.
+    refuse: Mutex<Vec<String>>,
 }
 
 impl FakeNode {
@@ -517,6 +558,7 @@ impl FakeNode {
                 json!({"total": 0, "migrated": 0, "deduped": 0, "remaining": 0, "migratedBytes": 0}),
             ),
             rechunk_wait: Mutex::new(None),
+            refuse: Mutex::new(Vec::new()),
         })
     }
 
@@ -721,6 +763,16 @@ impl Node for FakeNode {
         let meta = serde_json::to_value(&meta)
             .map_err(|error| AcquireError::Message(error.to_string()))?;
         self.calls.lock().unwrap()[index]["meta"] = meta.clone();
+        let id = meta["id"].as_str().unwrap_or_default();
+        if self
+            .refuse
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|refused| refused == id)
+        {
+            return Err(AcquireError::Message(format!("refused {id}")));
+        }
         let announce = announce_for_json(&meta, &bytes);
         serde_json::from_value(announce).map_err(|error| AcquireError::Message(error.to_string()))
     }
@@ -1842,6 +1894,7 @@ impl MirrorHarness {
                     "blob-rechunk",
                     "watch-dir",
                     "feed-mirror",
+                    "soulseek",
                 ]
                 .contains(&name)
             })
@@ -2080,4 +2133,291 @@ async fn mirror_host_matches_the_app() {
     }
 
     compare(&Value::Object(traces), &oracle);
+}
+
+// ---------------------------------------------------------------- library
+
+#[cfg(unix)]
+mod library {
+    use std::os::unix::fs::PermissionsExt;
+    use std::path::Path;
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use peartube_native::mirror::{
+        LocalMirrorFiles, MirrorConfig, MirrorError, MirrorHost, MirrorOptions, SoulseekSettings,
+    };
+    use serde_json::{Map, Value, json};
+
+    use super::network::{FakeBackend, Labels, Network, World, flac, tree};
+    use super::{Factory, FakeNode, Feeds, NOW, RechunkFactory, js_trace};
+
+    /// A file's modification time when a step names none, in seconds.
+    const MTIME: u64 = 1_600_000_000;
+
+    /// The ledger file's text, with the time of every file written during the run (a download) named `<now>`:
+    /// only those are later than the scripted clock.
+    fn steady(text: &str) -> String {
+        let mark = "\"mtimeMs\": ";
+        let mut out = String::new();
+        let mut rest = text;
+        while let Some(at) = rest.find(mark) {
+            let (head, tail) = rest.split_at(at + mark.len());
+            let digits = tail.bytes().take_while(u8::is_ascii_digit).count();
+            out.push_str(head);
+            match tail[..digits].parse::<u64>() {
+                Ok(ms) if ms >= NOW => out.push_str("\"<now>\""),
+                _ => out.push_str(&tail[..digits]),
+            }
+            rest = &tail[digits..];
+        }
+        out + rest
+    }
+
+    fn set_mode(path: &Path, mode: u32) {
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
+    }
+
+    /// A step that changes the files under `root`; false when the step is something else.
+    fn file_step(root: &Path, step: &Value) -> bool {
+        if let Some(path) = step.get("write").and_then(Value::as_str) {
+            let path = root.join(path);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            let bytes = match step.get("flac") {
+                Some(tags) => flac(
+                    &serde_json::from_value::<Vec<(String, String)>>(tags.clone()).unwrap(),
+                    step.get("pad").and_then(Value::as_u64).unwrap_or(0) as usize,
+                ),
+                None => step["text"].as_str().unwrap().as_bytes().to_vec(),
+            };
+            std::fs::write(&path, bytes).unwrap();
+            let at = step.get("mtime").and_then(Value::as_u64).unwrap_or(MTIME);
+            std::fs::File::options()
+                .write(true)
+                .open(&path)
+                .unwrap()
+                .set_modified(std::time::UNIX_EPOCH + Duration::from_secs(at))
+                .unwrap();
+        } else if let Some(link) = step.get("link").and_then(Value::as_str) {
+            let target = root.join(step["to"].as_str().unwrap());
+            std::os::unix::fs::symlink(target, root.join(link)).unwrap();
+        } else if let Some(path) = step.get("remove").and_then(Value::as_str) {
+            std::fs::remove_file(root.join(path)).unwrap();
+        } else {
+            return false;
+        }
+        true
+    }
+
+    fn outcome(result: Result<Value, MirrorError>) -> Value {
+        match result {
+            Ok(value) => json!({ "result": value }),
+            Err(error) => json!({ "error": { "message": error.message, "status": error.status } }),
+        }
+    }
+
+    /// One session of the scenario: the mirror host on real files in a temporary folder.
+    async fn run_session(network: &Arc<Network>, session: &Value) -> Value {
+        let name = session["name"].as_str().unwrap();
+        let root = std::env::temp_dir().join(format!(
+            "pt-library-rust-{}-{}",
+            std::process::id(),
+            name.replace(' ', "-")
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let storage = root.join("storage");
+        // The import folder is `import`, or the folder a session names.
+        let import = root.join(session["watchDir"].as_str().unwrap_or("import"));
+        let staging = storage.join("staging");
+        std::fs::create_dir_all(&storage).unwrap();
+        let watching = session["watchDir"] != false;
+        if watching {
+            std::fs::create_dir_all(&import).unwrap();
+        }
+        for step in session["before"].as_array().unwrap() {
+            assert!(file_step(&root, step), "not a file step {step}");
+        }
+        let read_only = session["readOnly"] == true;
+        if read_only {
+            set_mode(&import, 0o555);
+        }
+
+        let node = FakeNode::new();
+        let world = World::new(network.clone(), None, None);
+        let sign_in = |key: &str| {
+            session["soulseek"][key]
+                .as_str()
+                .unwrap_or_default()
+                .to_owned()
+        };
+        let host = MirrorHost::start(
+            node.clone(),
+            None,
+            Arc::new(LocalMirrorFiles),
+            Arc::new(Factory),
+            Arc::new(RechunkFactory),
+            Feeds::new(),
+            Vec::new(),
+            MirrorOptions {
+                storage: storage.to_string_lossy().into_owned(),
+                mirror_channel: false,
+                rechunk: false,
+                watch_dir: watching.then(|| import.to_string_lossy().into_owned()),
+                soulseek: SoulseekSettings {
+                    user: sign_in("slskUser"),
+                    pass: sign_in("slskPass"),
+                    backend: Some(Arc::new(FakeBackend(world.clone()))),
+                    random: Arc::new(Labels::default()),
+                    ..SoulseekSettings::default()
+                },
+                plugins_dir: Some(storage.join("plugins").to_string_lossy().into_owned()),
+                poll_interval_ms: 0,
+                now_ms: Arc::new(|| NOW),
+                ..MirrorOptions::default()
+            },
+        )
+        .await;
+        host.wait_idle().await;
+
+        let ledger_file = storage.join("mirror-watch.json");
+        let ledger = || std::fs::read_to_string(&ledger_file).ok();
+        let mut out: Vec<Value> = Vec::new();
+        let mut put = |step: Value, value: Value| {
+            let calls: Vec<Value> = std::mem::take(&mut *node.calls.lock().unwrap())
+                .into_iter()
+                .filter(|call| matches!(call["method"].as_str(), Some("put" | "append")))
+                .collect();
+            out.push(json!({
+                "step": step,
+                "calls": calls,
+                "network": world.take_log(),
+                "value": value,
+            }));
+        };
+        put(json!("start"), Value::Null);
+        for (i, step) in session["steps"].as_array().unwrap().iter().enumerate() {
+            let payload = || step.get("payload").cloned().unwrap_or(Value::Null);
+            let value = if file_step(&root, step) {
+                Value::Null
+            } else if let Some(ids) = step.get("refuse") {
+                *node.refuse.lock().unwrap() = serde_json::from_value(ids.clone()).unwrap();
+                Value::Null
+            } else if let Some(plugin) = step.get("run").and_then(Value::as_str) {
+                outcome(host.run(plugin, payload()).await)
+            } else if let Some(plugins) = step.get("together").and_then(Value::as_array) {
+                // Runs asked for while another is under way.
+                let runs = plugins
+                    .iter()
+                    .map(|plugin| host.run(plugin.as_str().unwrap(), Value::Null));
+                futures_util::future::join_all(runs)
+                    .await
+                    .into_iter()
+                    .map(outcome)
+                    .collect()
+            } else if let Some(next) = step.get("configure") {
+                let text = |key: &str| next.get(key).and_then(Value::as_str).map(str::to_owned);
+                host.configure(MirrorConfig {
+                    feeds: None,
+                    slsk_user: text("slskUser"),
+                    slsk_pass: text("slskPass"),
+                    slsk_server: text("slskServer"),
+                });
+                Value::Null
+            } else if let Some(call) = step.get("provider").and_then(Value::as_str) {
+                let provider = step["name"].as_str().unwrap();
+                outcome(match call {
+                    "search" => host.search_provider(provider, payload()).await,
+                    "browse" => host.browse_provider(provider, payload()).await,
+                    "mirror" => host.mirror_provider(provider, payload()).await,
+                    other => panic!("unknown provider call {other}"),
+                })
+            } else if step.get("jobs").is_some() {
+                Value::Array(host.list_provider_jobs())
+            } else if let Some(n) = step.get("job").and_then(Value::as_u64) {
+                json!(host.get_provider_job(&format!("job-{n}")))
+            } else if let Some(n) = step.get("cancel").and_then(Value::as_u64) {
+                json!(host.cancel_provider_job(&format!("job-{n}")))
+            } else if let Some(wanted) = step.get("forget").and_then(Value::as_array) {
+                // An announce is named by its ledger key, by its place in the ledger, or outright.
+                let rows: Map<String, Value> = ledger()
+                    .map(|text| serde_json::from_str(&text).unwrap())
+                    .unwrap_or_default();
+                let gone: Vec<(String, String)> = wanted
+                    .iter()
+                    .map(|want| {
+                        let row = match (want.as_str(), want.get("row").and_then(Value::as_u64)) {
+                            (Some(key), _) => &rows[key],
+                            (None, Some(place)) => rows.values().nth(place as usize).unwrap(),
+                            (None, None) => want,
+                        };
+                        let text = |key: &str| row[key].as_str().unwrap().to_owned();
+                        (text("id"), text("sha256"))
+                    })
+                    .collect();
+                json!(host.forget_imported(&gone).await)
+            } else if step.get("list").is_some() {
+                host.list()
+                    .into_iter()
+                    .filter(|plugin| {
+                        matches!(plugin["name"].as_str(), Some("watch-dir" | "soulseek"))
+                    })
+                    .collect()
+            } else if step.get("tree").is_some() {
+                json!({
+                    "import": import.exists().then(|| tree(&import)),
+                    "staging": staging.exists().then(|| tree(&staging)),
+                })
+            } else if step.get("ledger").is_some() {
+                json!(ledger().map(|text| steady(&text)))
+            } else {
+                panic!("unknown step {step}");
+            };
+            put(json!(i), value);
+        }
+        host.close().await;
+        if read_only {
+            set_mode(&import, 0o755);
+        }
+        let _ = std::fs::remove_dir_all(&root);
+        let text = json!({ "name": name, "trace": out }).to_string();
+        let root = serde_json::to_string(&root.to_string_lossy()).unwrap();
+        serde_json::from_str(&text.replace(&root[1..root.len() - 1], "<root>")).unwrap()
+    }
+
+    #[tokio::test]
+    async fn the_library_matches_the_app() {
+        let oracle = js_trace("acquire-mirror-library.mjs");
+        let scenario: Value =
+            serde_json::from_str(include_str!("js/acquire-mirror-library.json")).unwrap();
+        let network = Network::load();
+        let sessions = scenario["sessions"].as_array().unwrap();
+        let expected = oracle["sessions"].as_array().unwrap();
+        assert_eq!(expected.len(), sessions.len());
+        let mut records = 0;
+        for (session, expected) in sessions.iter().zip(expected) {
+            let actual = run_session(&network, session).await;
+            assert_eq!(actual["name"], expected["name"]);
+            let (actual, expected) = (
+                actual["trace"].as_array().unwrap(),
+                expected["trace"].as_array().unwrap(),
+            );
+            for (actual, expected) in actual.iter().zip(expected) {
+                assert_eq!(
+                    actual.to_string(),
+                    expected.to_string(),
+                    "session “{}”, step {}",
+                    session["name"],
+                    expected["step"]
+                );
+                records += 1;
+            }
+            assert_eq!(
+                actual.len(),
+                expected.len(),
+                "session “{}”",
+                session["name"]
+            );
+        }
+        assert!(records > 100, "{records} records compared");
+    }
 }

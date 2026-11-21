@@ -22,13 +22,16 @@ use crate::cast::adapters::NodePeer;
 use crate::cast::traits::CastPeer;
 use crate::cast::{CastController, ControllerOptions};
 use crate::http::{self, Api, ApiServer, BlobAddr, HttpError, Options};
-use crate::mirror::{ArtFeed, LocalMirrorFiles, MirrorHost, MirrorOptions};
+use crate::mirror::{
+    ArtFeed, LocalMirrorFiles, MirrorConfig, MirrorHost, MirrorOptions, SoulseekSettings,
+};
 use crate::node::Node;
 use crate::node::core::{CoreNode, NodeStreams, create_node};
 use crate::private_overlay::dht::DhtOptions;
 use crate::private_overlay::peeroxide::open_dht;
 use crate::private_overlay::{GuardOptions, PrivateGuard, create_private_guard, to_hex};
 use crate::protocol::API_PORT;
+use crate::providers::soulseek;
 use crate::replicate::{ReplicateConfig, Replicator};
 use crate::settings::Settings;
 use crate::traffic::TrafficGate;
@@ -594,6 +597,22 @@ impl Relay {
                         .cloned()
                         .and_then(non_empty),
                     feeds: strings(&cfg("feeds")),
+                    soulseek: SoulseekSettings {
+                        user: text(&cfg("slskUser")),
+                        pass: text(&cfg("slskPass")),
+                        server: text(&cfg("slskServer")),
+                        listen_port: cfg("slskListenPort")
+                            .as_u64()
+                            .and_then(|port| u16::try_from(port).ok())
+                            .unwrap_or(soulseek::DEFAULT_LISTEN_PORT),
+                        share: js_truthy(&cfg("slskShare")),
+                        share_max_files: cfg("slskShareMaxFiles")
+                            .as_u64()
+                            .and_then(|files| u32::try_from(files).ok())
+                            .unwrap_or(soulseek::DEFAULT_SHARE_MAX_FILES),
+                        backend: soulseek::client::network(),
+                        ..SoulseekSettings::default()
+                    },
                     plugins_dir: None,
                     start_runs: if hiverelay_enabled {
                         vec!["hiverelay-seed".to_owned()]
@@ -805,8 +824,13 @@ impl Relay {
             }
             node.serve_search(search_serve(&media_check, on));
         }
-        if has(&["feeds"]) {
-            mirror.configure(Some(strings(&self.cfg("feeds").await)));
+        if has(&["feeds", "slskUser", "slskPass", "slskServer"]) {
+            mirror.configure(MirrorConfig {
+                feeds: Some(strings(&self.cfg("feeds").await)),
+                slsk_user: Some(text(&self.cfg("slskUser").await)),
+                slsk_pass: Some(text(&self.cfg("slskPass").await)),
+                slsk_server: Some(text(&self.cfg("slskServer").await)),
+            });
         }
         if has(&[
             "replicate",
@@ -1152,6 +1176,15 @@ impl MirrorBridge {
     fn current(&self) -> Option<Arc<MirrorHost<CoreNode>>> {
         self.0.upgrade()?.mirror.lock().unwrap().clone()
     }
+
+    fn open(&self) -> Result<Arc<MirrorHost<CoreNode>>, HttpError> {
+        self.current()
+            .ok_or_else(|| HttpError::new(404, "Mirror host unavailable on read-only peer"))
+    }
+}
+
+fn mirror_error(error: crate::mirror::MirrorError) -> HttpError {
+    HttpError::new(error.status.unwrap_or(500), error.message)
 }
 
 impl http::Mirror for MirrorBridge {
@@ -1165,13 +1198,51 @@ impl http::Mirror for MirrorBridge {
         payload: Value,
     ) -> BoxFuture<'a, Result<Value, HttpError>> {
         Box::pin(async move {
-            let mirror = self
-                .current()
-                .ok_or_else(|| HttpError::new(404, "Mirror host unavailable on read-only peer"))?;
-            mirror
-                .run(plugin, payload)
-                .await
-                .map_err(|e| HttpError::new(e.status.unwrap_or(500), e.message))
+            let mirror = self.open()?;
+            mirror.run(plugin, payload).await.map_err(mirror_error)
+        })
+    }
+
+    fn provider<'a>(
+        &'a self,
+        call: http::ProviderCall,
+        name: &'a str,
+        payload: Value,
+    ) -> BoxFuture<'a, Result<Value, HttpError>> {
+        Box::pin(async move {
+            let mirror = self.open()?;
+            match call {
+                http::ProviderCall::Search => mirror.search_provider(name, payload).await,
+                http::ProviderCall::Browse => mirror.browse_provider(name, payload).await,
+                http::ProviderCall::Mirror => mirror.mirror_provider(name, payload).await,
+            }
+            .map_err(mirror_error)
+        })
+    }
+
+    fn provider_jobs(&self) -> Vec<Value> {
+        self.current()
+            .map(|mirror| mirror.list_provider_jobs())
+            .unwrap_or_default()
+    }
+
+    fn provider_job(&self, id: &str) -> Option<Value> {
+        self.current()?.get_provider_job(id)
+    }
+
+    fn cancel_provider_job(&self, id: &str) -> Option<Value> {
+        self.current()?.cancel_provider_job(id)
+    }
+
+    fn forget_imported<'a>(
+        &'a self,
+        gone: Vec<(String, String)>,
+    ) -> BoxFuture<'a, Vec<(String, &'static str)>> {
+        Box::pin(async move {
+            match self.current() {
+                Some(mirror) => mirror.forget_imported(&gone).await,
+                None => Vec::new(),
+            }
         })
     }
 }

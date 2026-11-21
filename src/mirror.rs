@@ -1,12 +1,16 @@
 //! Mirror plugin host for PearTube relays, ported from `src/mirror.js`.
 //!
 //! Built-in plugins: `http-acquire` (the durable acquirer as a plugin), `channel-backfill`, `blob-rechunk`,
-//! `watch-dir` and `feed-mirror`. `p2p-replicate` (`crate::replicate`) and `hiverelay-seed`
-//! (`crate::hiverelay::seeder`) own their modules: replication needs block-range downloads off a remote
-//! core, and the seeder needs the Corestore and the node's connections. The caller passes them to
-//! [`MirrorHost::start`] and they register as the app's plugins do.
+//! `watch-dir` ([`watch`]: the import folder, where a folder of music files becomes one album), `feed-mirror`
+//! and `soulseek` (the provider in [`crate::providers::soulseek`], which mirrors albums into the folder
+//! `watch-dir` sweeps). `p2p-replicate` (`crate::replicate`) and `hiverelay-seed` (`crate::hiverelay::seeder`)
+//! own their modules: replication needs block-range downloads off a remote core, and the seeder needs the
+//! Corestore and the node's connections. The caller passes them to [`MirrorHost::start`] and they register
+//! as the app's plugins do.
 //!
 //! The filesystem and remote-feed fetches sit behind small traits so a test can script them.
+
+pub mod watch;
 
 use std::future::Future;
 use std::path::Path;
@@ -16,15 +20,19 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use serde_json::{Map, Value, json};
-use sha2::{Digest, Sha256};
 use tokio::io::AsyncRead;
 use tokio::task::JoinHandle;
 
-use crate::acquire::{AcquireError, Acquirer, AddJob, JobSource, PutStreamFactory, SourceSpec};
+use self::watch::{WatchDirPlugin, WatchState};
+use crate::acquire::{
+    AcquireError, Acquirer, AddJob, JobSource, OsRandom, PutStreamFactory, RandomSource, SourceSpec,
+};
 use crate::art;
 use crate::node::Node;
 use crate::node::api::{PutMeta, SearchOptions};
-use crate::protocol::{MAX_TITLE, is_hex64, is_id, is_media_file};
+use crate::protocol::{is_hex64, is_id};
+use crate::providers::soulseek::client::Backend;
+use crate::providers::soulseek::{self, Provider, SoulseekError, StagingScan};
 
 /// What a mirror plugin run may ask its host for, as `ctxFor(name)` in the app.
 pub struct Ctx<N: Node> {
@@ -35,6 +43,20 @@ pub struct Ctx<N: Node> {
     files: Arc<dyn MirrorFiles>,
     factory: Arc<dyn PutStreamFactory<N>>,
     onchange: Option<Arc<dyn Fn() + Send + Sync>>,
+}
+
+impl<N: Node> Clone for Ctx<N> {
+    fn clone(&self) -> Self {
+        Self {
+            node: self.node.clone(),
+            storage: self.storage.clone(),
+            acquirer: self.acquirer.clone(),
+            mirror_channel: self.mirror_channel,
+            files: self.files.clone(),
+            factory: self.factory.clone(),
+            onchange: self.onchange.clone(),
+        }
+    }
 }
 
 impl<N: Node + 'static> Ctx<N>
@@ -96,14 +118,18 @@ where
         Ok(job)
     }
 
-    /// `ingestStream`: `put`, then `append`, then tell listeners.
+    /// `ingestStream`: `put`, then `append`, then tell listeners. `music` is a track's own name and
+    /// artist, when the file is one.
     pub async fn ingest_stream(
         &self,
         id: &str,
         title: &str,
         reader: Box<dyn AsyncRead + Send + Unpin>,
         private: bool,
+        music: Option<Value>,
     ) -> Result<Value, MirrorError> {
+        let mut extra = Map::new();
+        extra.insert("music".to_owned(), music.unwrap_or(Value::Null));
         let meta = PutMeta {
             id: id.to_owned(),
             title: title.to_owned(),
@@ -111,7 +137,7 @@ where
             epoch: None,
             store: None,
             expected_size: None,
-            extra: Map::new(),
+            extra,
         };
         let op = self
             .node
@@ -255,6 +281,24 @@ pub trait MirrorPlugin<N: Node>: Send + Sync {
     fn info(&self) -> Value {
         Value::Object(Map::new())
     }
+    /// The plugin as a provider, when it is one.
+    fn provider(&self) -> Option<&dyn MirrorProvider<N>> {
+        None
+    }
+}
+
+/// What a provider call answers.
+pub type ProviderFuture<'a> = Pin<Box<dyn Future<Output = Result<Value, MirrorError>> + Send + 'a>>;
+
+/// A plugin that finds media somewhere else and mirrors it in: the `search`, `browse`, `mirror` and
+/// job calls the app's provider plugins carry, behind `/v1/providers/<name>/…` and `/v1/jobs`.
+pub trait MirrorProvider<N: Node>: Send + Sync {
+    fn search<'a>(&'a self, payload: Value, ctx: &'a Ctx<N>) -> ProviderFuture<'a>;
+    fn browse<'a>(&'a self, payload: Value, ctx: &'a Ctx<N>) -> ProviderFuture<'a>;
+    fn mirror<'a>(&'a self, payload: Value, ctx: &'a Ctx<N>) -> ProviderFuture<'a>;
+    fn list_jobs(&self) -> Vec<Value>;
+    fn get_job(&self, job_id: &str) -> Option<Value>;
+    fn cancel_job(&self, job_id: &str) -> Option<Value>;
 }
 
 /// One directory entry, as `statSync` reports it.
@@ -265,16 +309,30 @@ pub struct FileStat {
     pub mtime_ms: f64,
 }
 
+/// One name in a folder. `is_dir` is the entry's own kind: a link to a folder is not a folder.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DirEntry {
+    pub name: String,
+    pub is_dir: bool,
+}
+
 /// The files a mirror host touches.
 pub trait MirrorFiles: Send + Sync {
     fn exists(&self, path: &str) -> bool;
     fn mkdirs(&self, path: &str);
-    /// Names inside `dir`, unsorted; callers sort as the app does.
-    fn list_dir(&self, dir: &str) -> Vec<String>;
+    /// What is inside `dir`, unsorted; callers sort as the app does. Empty when it cannot be read.
+    fn list_entries(&self, dir: &str) -> Vec<DirEntry>;
     fn stat(&self, path: &str) -> Option<FileStat>;
     fn read(&self, path: &str) -> Option<String>;
+    /// The first `max` bytes of a file.
+    fn read_head(&self, path: &str, max: usize) -> Option<Vec<u8>>;
+    fn write(&self, path: &str, text: &str) -> Result<(), String>;
     fn write_atomic(&self, path: &str, text: &str) -> Result<(), String>;
     fn open_read(&self, path: &str) -> Result<Box<dyn AsyncRead + Send + Unpin>, String>;
+    /// Removes a file; `Ok(false)` when there was none.
+    fn remove_file(&self, path: &str) -> Result<bool, String>;
+    /// Removes a folder that is empty.
+    fn remove_dir(&self, path: &str);
 }
 
 /// The real filesystem.
@@ -289,12 +347,15 @@ impl MirrorFiles for LocalMirrorFiles {
         let _ = std::fs::create_dir_all(path);
     }
 
-    fn list_dir(&self, dir: &str) -> Vec<String> {
+    fn list_entries(&self, dir: &str) -> Vec<DirEntry> {
         std::fs::read_dir(dir)
             .map(|entries| {
                 entries
                     .flatten()
-                    .map(|entry| entry.file_name().to_string_lossy().into_owned())
+                    .map(|entry| DirEntry {
+                        name: entry.file_name().to_string_lossy().into_owned(),
+                        is_dir: entry.file_type().is_ok_and(|kind| kind.is_dir()),
+                    })
                     .collect()
             })
             .unwrap_or_default()
@@ -319,6 +380,21 @@ impl MirrorFiles for LocalMirrorFiles {
         std::fs::read_to_string(path).ok()
     }
 
+    fn read_head(&self, path: &str, max: usize) -> Option<Vec<u8>> {
+        use std::io::Read;
+        let mut head = Vec::new();
+        std::fs::File::open(path)
+            .ok()?
+            .take(max as u64)
+            .read_to_end(&mut head)
+            .ok()?;
+        Some(head)
+    }
+
+    fn write(&self, path: &str, text: &str) -> Result<(), String> {
+        std::fs::write(path, text).map_err(|error| error.to_string())
+    }
+
     fn write_atomic(&self, path: &str, text: &str) -> Result<(), String> {
         use std::io::Write;
         let tmp = format!("{path}.tmp");
@@ -339,6 +415,18 @@ impl MirrorFiles for LocalMirrorFiles {
     fn open_read(&self, path: &str) -> Result<Box<dyn AsyncRead + Send + Unpin>, String> {
         let file = std::fs::File::open(path).map_err(|error| error.to_string())?;
         Ok(Box::new(tokio::fs::File::from_std(file)))
+    }
+
+    fn remove_file(&self, path: &str) -> Result<bool, String> {
+        match std::fs::remove_file(path) {
+            Ok(()) => Ok(true),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+            Err(error) => Err(error.to_string()),
+        }
+    }
+
+    fn remove_dir(&self, path: &str) {
+        let _ = std::fs::remove_dir(path);
     }
 }
 
@@ -413,199 +501,6 @@ pub async fn fetch_json(
         .map_err(|error| MirrorError::plain(format!("Feed JSON: {error}")))
 }
 
-/// Truncate to PearTube's `MAX_TITLE` UTF-16 units, as JS `slice` does.
-fn title_slice(text: &str) -> String {
-    let mut units = 0;
-    let mut out = String::new();
-    for ch in text.chars() {
-        let width = ch.len_utf16();
-        if units + width > MAX_TITLE {
-            break;
-        }
-        units += width;
-        out.push(ch);
-    }
-    out
-}
-
-fn sha256_hex(text: &str) -> String {
-    let digest = Sha256::digest(text.as_bytes());
-    let mut out = String::with_capacity(64);
-    for byte in digest {
-        out.push_str(&format!("{byte:02x}"));
-    }
-    out
-}
-
-/// `path.basename(path, path.extname(path))`.
-fn stem(file_path: &str) -> String {
-    let name = Path::new(file_path)
-        .file_name()
-        .map(|name| name.to_string_lossy().into_owned())
-        .unwrap_or_default();
-    match name.rfind('.') {
-        Some(index) if index > 0 => name[..index].to_owned(),
-        _ => name,
-    }
-}
-
-fn ascii_word(byte: u8) -> bool {
-    byte.is_ascii_alphanumeric() || byte == b'_'
-}
-
-/// First `tt` + 6..=10 digits at a word boundary, as the lowercased match text.
-fn find_imdb(stem: &str) -> Option<String> {
-    let bytes = stem.as_bytes();
-    let lower = stem.to_ascii_lowercase();
-    let bytes_lower = lower.as_bytes();
-    for index in 0..bytes.len() {
-        if index > 0 && ascii_word(bytes[index - 1]) {
-            continue;
-        }
-        if bytes_lower.get(index) != Some(&b't') || bytes_lower.get(index + 1) != Some(&b't') {
-            continue;
-        }
-        let mut end = index + 2;
-        while end < bytes_lower.len() && bytes_lower[end].is_ascii_digit() {
-            end += 1;
-        }
-        if (6..=10).contains(&(end - index - 2)) {
-            return Some(lower[index..end].to_owned());
-        }
-    }
-    None
-}
-
-/// First `sNN(eNN)` at a word boundary, as `(NN, NN)`.
-fn find_episode(stem: &str) -> Option<(String, String)> {
-    let bytes = stem.as_bytes();
-    let lower = stem.to_ascii_lowercase();
-    let bytes_lower = lower.as_bytes();
-    for index in 0..bytes.len() {
-        if index > 0 && ascii_word(bytes[index - 1]) {
-            continue;
-        }
-        if bytes_lower.get(index) != Some(&b's') {
-            continue;
-        }
-        let Some(season) = bytes_lower.get(index + 1..index + 3) else {
-            continue;
-        };
-        if !season.iter().all(u8::is_ascii_digit) || bytes_lower.get(index + 3) != Some(&b'e') {
-            continue;
-        }
-        let mut end = index + 4;
-        while end < bytes_lower.len() && bytes_lower[end].is_ascii_digit() {
-            end += 1;
-        }
-        if !(2..=3).contains(&(end - index - 4)) {
-            continue;
-        }
-        return Some((
-            lower[index + 1..index + 3].to_owned(),
-            lower[index + 4..end].to_owned(),
-        ));
-    }
-    None
-}
-
-/// `inferMediaMeta`: the ID a file name (or its sidecar) names.
-pub fn infer_media_meta(file_path: &str, sidecar: Option<&Value>) -> (String, String) {
-    let stem = stem(file_path);
-    if let Some(id) = sidecar
-        .and_then(|sidecar| sidecar.get("id"))
-        .and_then(Value::as_str)
-    {
-        let id = id.to_lowercase();
-        if is_id(&id) {
-            let title = sidecar
-                .and_then(|sidecar| sidecar.get("title"))
-                .map(|value| match value {
-                    Value::String(text) => text.clone(),
-                    other => other.to_string(),
-                })
-                .filter(|title| !title.is_empty())
-                .unwrap_or_else(|| stem.clone());
-            return (id, title_slice(&title));
-        }
-    }
-    if let Some(imdb) = find_imdb(&stem) {
-        let episode = find_episode(&stem);
-        let clean = |with_episode: bool| {
-            let mut text = remove_pattern(&stem, &imdb);
-            if with_episode && let Some((season, episode)) = &episode {
-                text = remove_pattern(&text, &format!("s{season}e{episode}"));
-            }
-            let text = text
-                .chars()
-                .map(|ch| {
-                    if matches!(ch, '.' | '_' | '-') {
-                        ' '
-                    } else {
-                        ch
-                    }
-                })
-                .collect::<String>();
-            let text = collapse_spaces(&text);
-            if text.is_empty() { stem.clone() } else { text }
-        };
-        if let Some((season, episode)) = &episode {
-            return (format!("imdb:{imdb}:s{season}e{episode}"), clean(true));
-        }
-        return (format!("imdb:{imdb}"), clean(false));
-    }
-    let slug: String = stem
-        .to_lowercase()
-        .chars()
-        .filter(char::is_ascii_alphanumeric)
-        .collect();
-    let suffix = if slug.len() >= 4 {
-        slug.chars().take(24).collect()
-    } else {
-        sha256_hex(&stem)[..12].to_owned()
-    };
-    let title = collapse_spaces(
-        &stem
-            .chars()
-            .map(|ch| if matches!(ch, '.' | '_') { ' ' } else { ch })
-            .collect::<String>(),
-    );
-    let title = if title.is_empty() { stem } else { title };
-    (format!("clip:{suffix}"), title)
-}
-
-/// Remove every case-insensitive occurrence of `needle`.
-fn remove_pattern(text: &str, needle: &str) -> String {
-    let lower = text.to_lowercase();
-    let needle_lower = needle.to_lowercase();
-    let mut out = String::with_capacity(text.len());
-    let mut cursor = 0;
-    while let Some(found) = lower[cursor..].find(&needle_lower) {
-        let start = cursor + found;
-        out.push_str(&text[cursor..start]);
-        cursor = start + needle_lower.len();
-    }
-    out.push_str(&text[cursor..]);
-    out
-}
-
-fn collapse_spaces(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    let mut space = false;
-    for ch in text.trim().chars() {
-        if ch == ' ' {
-            space = true;
-        } else {
-            if space && !out.is_empty() {
-                out.push(' ');
-            }
-            space = false;
-            out.push(ch);
-        }
-    }
-    out
-}
-
 /// A per-entry migration callback (`onMigrate(oldTag, target)`).
 pub type MigrationCallback = Box<dyn Fn(&str, Value) + Send + Sync>;
 
@@ -624,6 +519,36 @@ pub trait RechunkOptionsFactory<N: Node>: Send + Sync {
     fn make(&self, options: RechunkOptions) -> N::RechunkOptions;
 }
 
+/// The Soulseek provider's settings (`slskUser` to `slskShareMaxFiles`), and what makes its clients.
+pub struct SoulseekSettings {
+    pub user: String,
+    pub pass: String,
+    /// `host:port`; empty is the provider's own default.
+    pub server: String,
+    /// Peers connect back to this TCP port; 0 lets the system pick one each start.
+    pub listen_port: u16,
+    pub share: bool,
+    pub share_max_files: u32,
+    /// `None` on a host with no Soulseek client: the plugin then reports `unavailable`.
+    pub backend: Option<Arc<dyn Backend>>,
+    pub random: Arc<dyn RandomSource>,
+}
+
+impl Default for SoulseekSettings {
+    fn default() -> Self {
+        Self {
+            user: String::new(),
+            pass: String::new(),
+            server: String::new(),
+            listen_port: soulseek::DEFAULT_LISTEN_PORT,
+            share: false,
+            share_max_files: soulseek::DEFAULT_SHARE_MAX_FILES,
+            backend: None,
+            random: Arc::new(OsRandom),
+        }
+    }
+}
+
 /// `createMirrorHost`'s options.
 pub struct MirrorOptions {
     pub storage: String,
@@ -631,6 +556,7 @@ pub struct MirrorOptions {
     pub rechunk: bool,
     pub watch_dir: Option<String>,
     pub feeds: Vec<String>,
+    pub soulseek: SoulseekSettings,
     pub plugins_dir: Option<String>,
     pub poll_interval_ms: u64,
     /// Plugins to run once the host is up, by name, as `relay.js` runs `hiverelay-seed`.
@@ -648,6 +574,7 @@ impl Default for MirrorOptions {
             rechunk: false,
             watch_dir: None,
             feeds: Vec::new(),
+            soulseek: SoulseekSettings::default(),
             plugins_dir: None,
             poll_interval_ms: 60_000,
             start_runs: Vec::new(),
@@ -675,132 +602,6 @@ impl Stats {
             "lastError": self.last_error.clone().map_or(Value::Null, Value::String),
         })
     }
-}
-
-/// Shared state the `watch-dir` plugin keeps between runs.
-pub struct WatchState {
-    ledger: Mutex<Map<String, Value>>,
-    state_file: String,
-    scanning: AtomicBool,
-    watch_dir: Mutex<Option<String>>,
-    closed: Arc<AtomicBool>,
-    files: Arc<dyn MirrorFiles>,
-    now_ms: Arc<dyn Fn() -> u64 + Send + Sync>,
-}
-
-impl WatchState {
-    fn save(&self) {
-        let text = {
-            let ledger = self.ledger.lock().expect("mirror ledger");
-            Value::Object(ledger.clone()).to_string()
-        };
-        let _ = self.files.write_atomic(&self.state_file, &text);
-    }
-
-    async fn scan<N>(&self, dir: Option<&str>, ctx: &Ctx<N>) -> Result<Value, MirrorError>
-    where
-        N: Node + 'static,
-        N::Error: From<AcquireError>,
-    {
-        let Some(dir) = dir else {
-            return Ok(empty_scan());
-        };
-        if !self.files.exists(dir) {
-            return Ok(empty_scan());
-        }
-        if self.scanning.swap(true, Ordering::SeqCst) {
-            let mut out = empty_scan();
-            if let Some(map) = out.as_object_mut() {
-                map.insert("busy".into(), json!(true));
-            }
-            return Ok(out);
-        }
-        let result = self.scan_inner(dir, ctx).await;
-        self.scanning.store(false, Ordering::SeqCst);
-        result
-    }
-
-    async fn scan_inner<N>(&self, dir: &str, ctx: &Ctx<N>) -> Result<Value, MirrorError>
-    where
-        N: Node + 'static,
-        N::Error: From<AcquireError>,
-    {
-        let root = std::path::absolute(dir).unwrap_or_else(|_| std::path::PathBuf::from(dir));
-        let mut names = self.files.list_dir(&root.to_string_lossy());
-        names.sort();
-        let mut scanned = 0u64;
-        let mut ingested = Vec::new();
-        for name in names {
-            if self.closed.load(Ordering::SeqCst) {
-                break;
-            }
-            if !is_media_file(&name) {
-                continue;
-            }
-            let full = root.join(&name).to_string_lossy().into_owned();
-            let Some(stat) = self.files.stat(&full) else {
-                continue;
-            };
-            if !stat.is_file || stat.size == 0 {
-                continue;
-            }
-            scanned += 1;
-            let mtime = stat.mtime_ms.trunc() as i64;
-            let previous = self
-                .ledger
-                .lock()
-                .expect("mirror ledger")
-                .get(&name)
-                .cloned();
-            if let Some(previous) = &previous
-                && previous.get("size").and_then(Value::as_u64) == Some(stat.size)
-                && previous.get("mtimeMs").and_then(Value::as_f64) == Some(mtime as f64)
-            {
-                continue;
-            }
-            let sidecar_path = format!("{full}.json");
-            let sidecar = if self.files.exists(&sidecar_path) {
-                self.files
-                    .read(&sidecar_path)
-                    .and_then(|text| serde_json::from_str::<Value>(&text).ok())
-            } else {
-                None
-            };
-            let (id, title) = infer_media_meta(&full, sidecar.as_ref());
-            let reader = self.files.open_read(&full).map_err(MirrorError::plain)?;
-            let op = ctx.ingest_stream(&id, &title, reader, false).await?;
-            let mut entry = Map::new();
-            entry.insert("size".into(), json!(stat.size));
-            entry.insert("mtimeMs".into(), json!(mtime));
-            entry.insert("id".into(), op.get("id").cloned().unwrap_or(Value::Null));
-            entry.insert(
-                "sha256".into(),
-                op.get("sha256").cloned().unwrap_or(Value::Null),
-            );
-            entry.insert("ingestedAt".into(), json!((self.now_ms)()));
-            self.ledger
-                .lock()
-                .expect("mirror ledger")
-                .insert(name.clone(), Value::Object(entry));
-            self.save();
-            ingested.push(json!({
-                "file": name,
-                "id": op.get("id").cloned().unwrap_or(Value::Null),
-                "title": op.get("title").cloned().unwrap_or(Value::Null),
-                "size": op.get("size").cloned().unwrap_or(Value::Null),
-                "sha256": op.get("sha256").cloned().unwrap_or(Value::Null),
-            }));
-        }
-        Ok(json!({
-            "scanned": scanned,
-            "ingested": ingested.len(),
-            "items": ingested,
-        }))
-    }
-}
-
-fn empty_scan() -> Value {
-    json!({"scanned": 0, "ingested": 0, "items": []})
 }
 
 struct HttpAcquirePlugin<N: Node> {
@@ -1045,62 +846,6 @@ where
     }
 }
 
-struct WatchDirPlugin {
-    state: Arc<WatchState>,
-}
-
-impl<N: Node + 'static> MirrorPlugin<N> for WatchDirPlugin
-where
-    N::Error: From<AcquireError>,
-{
-    fn name(&self) -> &str {
-        "watch-dir"
-    }
-
-    fn description(&self) -> &str {
-        "Ingests media files dropped into the import folder (PEARTUBE_WATCH_DIR) once, tracking fingerprints in mirror-watch.json"
-    }
-
-    fn run<'a>(
-        &'a self,
-        _payload: Value,
-        ctx: &'a Ctx<N>,
-    ) -> Pin<Box<dyn Future<Output = Result<Value, MirrorError>> + Send + 'a>> {
-        Box::pin(async move {
-            let dir = self.state.watch_dir.lock().expect("watch dir").clone();
-            match dir {
-                Some(dir) => self.state.scan(Some(&dir), ctx).await,
-                None => Ok(json!({
-                    "skipped": true,
-                    "reason": "watch_dir_not_configured",
-                    "scanned": 0,
-                    "ingested": 0,
-                    "items": []
-                })),
-            }
-        })
-    }
-
-    fn poll<'a>(
-        &'a self,
-        ctx: &'a Ctx<N>,
-    ) -> Pin<Box<dyn Future<Output = Result<Option<Value>, MirrorError>> + Send + 'a>> {
-        Box::pin(async move {
-            let dir = self.state.watch_dir.lock().expect("watch dir").clone();
-            match dir {
-                Some(dir) => Ok(Some(self.state.scan(Some(&dir), ctx).await?)),
-                None => Ok(None),
-            }
-        })
-    }
-
-    fn info(&self) -> Value {
-        let tracked = self.state.ledger.lock().expect("mirror ledger").len();
-        let watching = self.state.watch_dir.lock().expect("watch dir").is_some();
-        json!({"watching": watching, "trackedFiles": tracked})
-    }
-}
-
 struct FeedMirrorPlugin {
     feeds: Arc<Mutex<Vec<String>>>,
     feed: Arc<dyn FeedFetch>,
@@ -1323,6 +1068,124 @@ where
     }
 }
 
+/// The `soulseek` plugin: the provider behind the host's plugin and provider calls. Its mirrors land
+/// in the folder `watch-dir` sweeps, and each asks for that sweep once its files are in place.
+struct SoulseekPlugin {
+    provider: Provider,
+    watch: Arc<WatchState>,
+    /// Where mirrors land.
+    staging_root: String,
+}
+
+impl SoulseekPlugin {
+    fn scan<N>(&self, ctx: &Ctx<N>) -> StagingScan
+    where
+        N: Node + 'static,
+        N::Error: From<AcquireError>,
+    {
+        let (watch, ctx, root) = (self.watch.clone(), ctx.clone(), self.staging_root.clone());
+        Arc::new(move || {
+            let (watch, ctx, root) = (watch.clone(), ctx.clone(), root.clone());
+            Box::pin(async move {
+                let prefix = watch.prefix_of(&root);
+                Ok(watch.scan(Some(&root), &ctx, prefix).await)
+            })
+        })
+    }
+}
+
+fn provider_error(error: SoulseekError) -> MirrorError {
+    MirrorError {
+        message: error.message,
+        status: error.status,
+    }
+}
+
+fn unknown_provider(name: &str) -> MirrorError {
+    MirrorError::with_status(format!("Unknown provider: {name}"), 404)
+}
+
+impl<N: Node + 'static> MirrorPlugin<N> for SoulseekPlugin
+where
+    N::Error: From<AcquireError>,
+{
+    fn name(&self) -> &str {
+        soulseek::NAME
+    }
+
+    fn description(&self) -> &str {
+        soulseek::DESCRIPTION
+    }
+
+    fn run<'a>(
+        &'a self,
+        payload: Value,
+        ctx: &'a Ctx<N>,
+    ) -> Pin<Box<dyn Future<Output = Result<Value, MirrorError>> + Send + 'a>> {
+        Box::pin(async move {
+            self.provider
+                .run(&payload, Some(self.scan(ctx)))
+                .await
+                .map_err(provider_error)
+        })
+    }
+
+    fn stop<'a>(&'a self) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
+        Box::pin(async move { self.provider.stop() })
+    }
+
+    fn info(&self) -> Value {
+        self.provider.info()
+    }
+
+    fn provider(&self) -> Option<&dyn MirrorProvider<N>> {
+        Some(self)
+    }
+}
+
+impl<N: Node + 'static> MirrorProvider<N> for SoulseekPlugin
+where
+    N::Error: From<AcquireError>,
+{
+    fn search<'a>(&'a self, payload: Value, _ctx: &'a Ctx<N>) -> ProviderFuture<'a> {
+        Box::pin(async move { self.provider.search(&payload).await.map_err(provider_error) })
+    }
+
+    fn browse<'a>(&'a self, payload: Value, _ctx: &'a Ctx<N>) -> ProviderFuture<'a> {
+        Box::pin(async move { self.provider.browse(&payload).await.map_err(provider_error) })
+    }
+
+    fn mirror<'a>(&'a self, payload: Value, ctx: &'a Ctx<N>) -> ProviderFuture<'a> {
+        Box::pin(async move {
+            self.provider
+                .mirror(&payload, Some(self.scan(ctx)))
+                .await
+                .map_err(provider_error)
+        })
+    }
+
+    fn list_jobs(&self) -> Vec<Value> {
+        self.provider.list_jobs()
+    }
+
+    fn get_job(&self, job_id: &str) -> Option<Value> {
+        self.provider.get_job(job_id)
+    }
+
+    fn cancel_job(&self, job_id: &str) -> Option<Value> {
+        self.provider.cancel_job(job_id)
+    }
+}
+
+/// What `configure` may change while the host runs; `None` leaves a value as it is.
+#[derive(Debug, Clone, Default)]
+pub struct MirrorConfig {
+    pub feeds: Option<Vec<String>>,
+    pub slsk_user: Option<String>,
+    pub slsk_pass: Option<String>,
+    pub slsk_server: Option<String>,
+}
+
 /// One registered mirror plugin, with the name it was registered under.
 pub type Plugin<N> = Arc<dyn MirrorPlugin<N>>;
 
@@ -1334,6 +1197,7 @@ pub struct MirrorHost<N: Node> {
     stats: Arc<Mutex<std::collections::HashMap<String, Stats>>>,
     acquirer: Option<Acquirer<N>>,
     watch_state: Arc<WatchState>,
+    soulseek: Provider,
     feeds: Arc<Mutex<Vec<String>>>,
     rechunk_progress: Arc<Mutex<Value>>,
     closed: Arc<AtomicBool>,
@@ -1362,14 +1226,55 @@ where
         opts: MirrorOptions,
     ) -> Self {
         let closed = Arc::new(AtomicBool::new(false));
+        let staging_dir = watch::staging_dir(&opts.storage);
         let watch_state = Arc::new(WatchState {
-            ledger: Mutex::new(load_ledger(&*files, &opts.storage)),
+            ledger: Mutex::new(watch::load_ledger(&*files, &opts.storage)),
             state_file: format!("{}/mirror-watch.json", opts.storage),
             scanning: AtomicBool::new(false),
             watch_dir: Mutex::new(opts.watch_dir.clone()),
+            staging_dir: staging_dir.clone(),
             closed: closed.clone(),
             files: files.clone(),
             now_ms: opts.now_ms.clone(),
+        });
+        // Soulseek mirrors land in the import folder the relay already sweeps, so a mirrored album
+        // sits beside (and joins) the albums imported from there, under the same ledger keys. A
+        // read-only import folder cannot take them; they go to `<storage>/staging`, which
+        // `watch-dir` sweeps too under the `staging:` prefix.
+        let staging_root = match opts.watch_dir.as_deref() {
+            Some(dir) if watch::writable_dir(&*files, dir, (opts.now_ms)()) => watch::resolved(dir),
+            _ => staging_dir.clone(),
+        };
+        let staged = staging_root == staging_dir;
+        eprintln!(
+            "{}",
+            json!({
+                "msg": "soulseek staging root",
+                "root": staging_root,
+                "sweptAs": if staged { "staging:" } else { "watch-dir" },
+            })
+        );
+        let soulseek = Provider::new(soulseek::Options {
+            staging_root: Some(staging_root.clone()),
+            staging_label: match (staged, &opts.watch_dir) {
+                (false, _) => "import folder",
+                (true, Some(_)) => "storage (import folder is read-only)",
+                (true, None) => "storage",
+            }
+            .to_owned(),
+            user: opts.soulseek.user.clone(),
+            pass: opts.soulseek.pass.clone(),
+            server: opts.soulseek.server.clone(),
+            listen_port: opts.soulseek.listen_port,
+            share: opts.soulseek.share,
+            share_max_files: opts.soulseek.share_max_files,
+            onchange: opts.onchange.clone(),
+            ..soulseek::Options::new(
+                opts.storage.clone(),
+                opts.soulseek.backend.clone(),
+                opts.soulseek.random.clone(),
+                opts.now_ms.clone(),
+            )
         });
         let feeds = Arc::new(Mutex::new(opts.feeds.clone()));
         let rechunk_progress = Arc::new(Mutex::new(json!({
@@ -1398,6 +1303,7 @@ where
             stats: Arc::new(Mutex::new(std::collections::HashMap::new())),
             acquirer: acquirer.clone(),
             watch_state,
+            soulseek: soulseek.clone(),
             feeds,
             rechunk_progress,
             closed,
@@ -1426,6 +1332,11 @@ where
         for plugin in extra {
             host.register(plugin);
         }
+        host.register(Arc::new(SoulseekPlugin {
+            provider: soulseek,
+            watch: host.watch_state.clone(),
+            staging_root,
+        }));
 
         if let Some(onstarting) = &opts.onstarting {
             onstarting();
@@ -1469,6 +1380,15 @@ where
         if let Some(dir) = opts.watch_dir.clone().filter(|_| !host.is_closed()) {
             files.mkdirs(&dir);
             let _ = host.run("watch-dir", Value::Null).await;
+        }
+        let own_staging = opts
+            .watch_dir
+            .as_deref()
+            .is_none_or(|dir| watch::resolved(dir) != watch::resolved(&staging_dir));
+        if files.exists(&staging_dir) && own_staging && !host.is_closed() {
+            host.watch_state
+                .scan(Some(&staging_dir), &host.ctx, "staging:")
+                .await;
         }
         if !host.feeds.lock().expect("feeds").is_empty() && !host.is_closed() {
             host.spawn_run("feed-mirror", Value::Null);
@@ -1558,15 +1478,7 @@ where
             return;
         };
         let stats = self.stats.clone();
-        let ctx = Ctx {
-            node: self.ctx.node.clone(),
-            storage: self.ctx.storage.clone(),
-            acquirer: self.ctx.acquirer.clone(),
-            mirror_channel: self.ctx.mirror_channel,
-            files: self.ctx.files.clone(),
-            factory: self.ctx.factory.clone(),
-            onchange: self.ctx.onchange.clone(),
-        };
+        let ctx = self.ctx.clone();
         let now_ms = self.now_ms.clone();
         let name = name.to_owned();
         let handle = tokio::spawn(async move {
@@ -1596,15 +1508,7 @@ where
         let stats = self.stats.clone();
         let closed = self.closed.clone();
         let now_ms = self.now_ms.clone();
-        let template = Ctx {
-            node: self.ctx.node.clone(),
-            storage: self.ctx.storage.clone(),
-            acquirer: self.ctx.acquirer.clone(),
-            mirror_channel: self.ctx.mirror_channel,
-            files: self.ctx.files.clone(),
-            factory: self.ctx.factory.clone(),
-            onchange: self.ctx.onchange.clone(),
-        };
+        let ctx = self.ctx.clone();
         // Keep the app's polling interval: the plugin list is small and each poll is cheap.
         let handle = tokio::spawn(async move {
             loop {
@@ -1612,15 +1516,6 @@ where
                 if closed.load(Ordering::SeqCst) {
                     return;
                 }
-                let ctx = Ctx {
-                    node: template.node.clone(),
-                    storage: template.storage.clone(),
-                    acquirer: template.acquirer.clone(),
-                    mirror_channel: template.mirror_channel,
-                    files: template.files.clone(),
-                    factory: template.factory.clone(),
-                    onchange: template.onchange.clone(),
-                };
                 for (name, plugin) in &plugins {
                     match plugin.poll(&ctx).await {
                         Ok(Some(result)) => {
@@ -1672,11 +1567,12 @@ where
             .collect()
     }
 
-    /// `configure`: followed feeds take effect without a restart. The import folder is fixed at start.
+    /// `configure`: followed feeds and the Soulseek sign-in take effect without a restart. The import
+    /// folder is fixed at start.
     ///
     /// `replicate*` keys go to `crate::replicate::Replicator::configure`.
-    pub fn configure(&self, feeds: Option<Vec<String>>) {
-        if let Some(next) = feeds {
+    pub fn configure(&self, config: MirrorConfig) {
+        if let Some(next) = config.feeds {
             let added: Vec<String> = {
                 let mut configured = self.feeds.lock().expect("feeds");
                 let added = next
@@ -1691,9 +1587,79 @@ where
                 self.spawn_run("feed-mirror", json!({ "url": url }));
             }
         }
+        if config.slsk_user.is_some() || config.slsk_pass.is_some() || config.slsk_server.is_some()
+        {
+            self.soulseek.configure(
+                config.slsk_user.as_deref(),
+                config.slsk_pass.as_deref(),
+                config.slsk_server.as_deref(),
+            );
+        }
         if let Some(onchange) = &self.onchange {
             onchange();
         }
+    }
+
+    /// `searchProvider(name, payload)`.
+    pub async fn search_provider(&self, name: &str, payload: Value) -> Result<Value, MirrorError> {
+        let plugin = self.plugin(name);
+        match plugin.as_deref().and_then(MirrorPlugin::provider) {
+            Some(provider) => provider.search(payload, &self.ctx).await,
+            None => Err(unknown_provider(name)),
+        }
+    }
+
+    /// `browseProvider(name, payload)`.
+    pub async fn browse_provider(&self, name: &str, payload: Value) -> Result<Value, MirrorError> {
+        let plugin = self.plugin(name);
+        match plugin.as_deref().and_then(MirrorPlugin::provider) {
+            Some(provider) => provider.browse(payload, &self.ctx).await,
+            None => Err(unknown_provider(name)),
+        }
+    }
+
+    /// `mirrorProvider(name, payload)`.
+    pub async fn mirror_provider(&self, name: &str, payload: Value) -> Result<Value, MirrorError> {
+        let plugin = self.plugin(name);
+        match plugin.as_deref().and_then(MirrorPlugin::provider) {
+            Some(provider) => provider.mirror(payload, &self.ctx).await,
+            None => Err(unknown_provider(name)),
+        }
+    }
+
+    /// `listProviderJobs()`: every provider's mirrors, for `/v1/jobs`.
+    pub fn list_provider_jobs(&self) -> Vec<Value> {
+        let plugins = self.plugins.lock().expect("mirror plugins").clone();
+        plugins
+            .iter()
+            .filter_map(|(_, plugin)| plugin.provider())
+            .flat_map(|provider| provider.list_jobs())
+            .collect()
+    }
+
+    /// `getProviderJob(jobId)`.
+    pub fn get_provider_job(&self, job_id: &str) -> Option<Value> {
+        let plugins = self.plugins.lock().expect("mirror plugins").clone();
+        plugins
+            .iter()
+            .filter_map(|(_, plugin)| plugin.provider())
+            .find_map(|provider| provider.get_job(job_id))
+    }
+
+    /// `cancelProviderJob(jobId)`.
+    pub fn cancel_provider_job(&self, job_id: &str) -> Option<Value> {
+        let plugins = self.plugins.lock().expect("mirror plugins").clone();
+        plugins
+            .iter()
+            .filter_map(|(_, plugin)| plugin.provider())
+            .find_map(|provider| provider.cancel_job(job_id))
+    }
+
+    /// `forgetImported(gone)`: after the owner removed announces, the files this relay mirrored for
+    /// them go too. `gone` is each removed announce's `(id, sha256)`; the answer says `deleted` or
+    /// `kept` for each `id/sha256` it found a file for.
+    pub async fn forget_imported(&self, gone: &[(String, String)]) -> Vec<(String, &'static str)> {
+        self.watch_state.forget_imported(gone).await
     }
 
     /// Wait for the work the host started in the background (feeds, rechunk, configure-driven scans).
@@ -1744,15 +1710,6 @@ where
     pub fn storage(&self) -> &str {
         &self.storage
     }
-}
-
-fn load_ledger(files: &dyn MirrorFiles, storage: &str) -> Map<String, Value> {
-    let path = format!("{storage}/mirror-watch.json");
-    files
-        .read(&path)
-        .and_then(|text| serde_json::from_str::<Value>(&text).ok())
-        .and_then(|value| value.as_object().cloned())
-        .unwrap_or_default()
 }
 
 /// The clock a host uses for stats and the ledger.

@@ -15,5 +15,7 @@ name = "peartube_native_ffi"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [dependencies]
-peartube-native = { path = ".." }
+# Without `soulseek`: only the relay mirrors from Soulseek, and that client's own C ABI would be
+# exported from this library beside `pt_*`.
+peartube-native = { path = "..", default-features = false, features = ["peeroxide-dht"] }
 serde_json = { version = "1", features = ["preserve_order"] }

@@ -185,6 +185,30 @@ try {
     await store.close()
   }
 
+  // --- music: what an announce says of a track beyond its title -----------------------------
+  {
+    const dir = join(root, 'music')
+    const store = new Corestore(dir, { primaryKey: b4a.from(PRIMARY, 'hex'), unsafe: true })
+    const blobs = await createBlobs(makeCtx({ dir, store, ops: [] }))
+    // What a caller may hand `put` as `music`: only a name and an artist are kept, each clamped; anything else
+    // that is not nothing announces `music: null`.
+    const given = [
+      { title: ' Blue Train ', artist: 'John Coltrane', disc: 1 },
+      { title: 'T'.repeat(310), artist: '' },
+      { artist: 7 },
+      {},
+      'a string',
+      0
+    ]
+    const announces = []
+    for (const [n, music] of given.entries()) {
+      const meta = { id: `clip:music${n}`, title: `Music ${n}`, store: `video:fixture-music-${n}`, music }
+      announces.push(JSON.stringify(await blobs.put(meta, stream(data(1000 + n)))))
+    }
+    out.music = { given, announces }
+    await store.close()
+  }
+
   // --- cache ceiling: scripted recency, progress and streaming ------------------------------
   {
     const dir = join(root, 'cache-viewer')

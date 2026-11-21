@@ -2,9 +2,9 @@
 //
 // Modes (argv[2]):
 //   testnet              create a testnet, print its bootstrap nodes, stay up
-//   publish <size> <id> <title> <bootstrap-json>
-//                        create a node on the given testnet, publish random bytes, print the
-//                        announce, its stream URL and SHA-256, stay up
+//   publish <size> <id> <title> <bootstrap-json> [music-json]
+//                        create a node on the given testnet, publish random bytes (with `music`, when given),
+//                        print the announce, its stream URL and SHA-256, stay up
 //   follow <bootstrap-json> <channel-hex> <id>
 //                        follow a channel until `id` is listed, print the search JSON, stay up
 //   fetch <url>          fetch the whole URL and print its SHA-256
@@ -82,12 +82,13 @@ if (mode === 'testnet') {
   out({ bootstrap: testnet.bootstrap })
   keepAlive(() => testnet.destroy())
 } else if (mode === 'publish') {
-  const [sizeText, id, title, bootstrapJson] = args
+  const [sizeText, id, title, bootstrapJson, musicJson] = args
   const bootstrap = JSON.parse(bootstrapJson)
   const size = Number(sizeText)
   const bytes = randomBytes(size)
   const node = await createNode({ storage: tmp(), bootstrap })
-  const published = await node.publish({ id, title }, Readable.from([bytes]))
+  const music = musicJson ? { music: JSON.parse(musicJson) } : {}
+  const published = await node.publish({ id, title, ...music }, Readable.from([bytes]))
   out({
     channel: published.channel,
     writer: published.writer,
