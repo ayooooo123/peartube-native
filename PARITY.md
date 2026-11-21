@@ -38,27 +38,29 @@ there is no Rust code to compare.
 | `src/control-channel.js` | `control_channel` | `match` (symmetric request-before-reply dispatch) | `15298dd16` |
 | `src/cast.js` | `cast/` (`controller`, `receiver`, `pairing`, `state`, `media`, `mdns`, `http`, `disk`) | `match` (per-peer pairing lockout, `leavePeer`; the live LAN cast test needs working multicast; see `src/lan.js`) | `15298dd16` |
 | `src/hiverelay.js` | `hiverelay`, `hiverelay::seeder` | `match` (on stop the relay leaves its topics; it has no `leavePeer` for recruited relays, and the process closes right after) | `8326afa2c` |
-| `src/http.js` | `http` | `match` (`requireOwner` + DNS-rebinding `localHost` guard, read-only `GET /v1/resolve`, `/v1/entries/info` `mediaInfo` + owner `health`, SHA-256 web ETags, dead-SSE pruning, `GET`/`HEAD`-only CORS) | `15298dd16` |
+| `src/http.js` | `http` | `debt:` app PR #573 added `POST /v1/entries/remove` (album/announce delete with on-disk fate for mirrored files) and the `soulseek` provider routes (`/v1/providers/soulseek/search`, `browse`, `mirror`); not ported. Otherwise `match` (`requireOwner` + DNS-rebinding `localHost` guard, read-only `GET /v1/resolve`, `/v1/entries/info` `mediaInfo` + owner `health`, SHA-256 web ETags, dead-SSE pruning, `GET`/`HEAD`-only CORS) | `15298dd16` |
 | `src/identify.js` | `identify` | `match` | `15298dd16` |
 | `src/index.js` | `node/core`, `node/factory` | `match` (`entryHealth`, `keepCopy`, `copyExisting`, `search.close()` order) | `15298dd16` |
 | `src/lan.js` | `lan/` (`discovery`, `mdns`, `host`) | `debt:` `tests/lan_mdns.rs::mdns_interop_with_bonjour_service` fails (bonjour-service never reports the Rust record; seen on Linux CI and a Mac, and at `d9a520e` before this alignment) while JS↔Rust LAN discovery in `tests/lan_interop.rs` passes on Linux; macOS runners have no LAN multicast, so CI skips the mDNS discovery tests there — see README "Known gaps" | `8326afa2c` |
-| `src/mirror.js` | `mirror`, `replicate`, `media_check` | `match` (`feed-mirror` `existing` handoff, env-only `watch-dir`) | `15298dd16` |
+| `src/mirror.js` | `mirror`, `replicate`, `media_check` | `debt:` app PR #573 made `watch-dir` scan one level of subfolders as albums (identity from tags, `<release>:sNNeMM` ids, `music` on each announce, `.peartube-album.json` pins, `mirror-watch.json` keyed by relative path, unchanged albums not re-read) and added the `soulseek` provider plugin; not ported. Otherwise `match` (`feed-mirror` `existing` handoff, env-only `watch-dir`) | `15298dd16` |
 | `src/mnemonic.js` | `mnemonic` | `match` | `8326afa2c` |
-| `src/node/blobs.js` | `node/blobs`, `node/hash_state` | `debt:` `entryHealth` (`wholePeers`/`lanPeers`) approximates per-peer replicator counts from `hypercore-rs`'s public session API (`remote_contiguous_length >= length` for 0/1 `wholePeers` and node-level `is_lan()` connections for `lanPeers`); Merkle `sameBytes` failover and `kept-copies.json` match | `15298dd16` |
-| `src/node/catalog.js` | `node/catalog` | `match` (`publicEntries`, `isKept` `local: true`, opened watch links capped at 32) | `15298dd16` |
+| `src/node/blobs.js` | `node/blobs`, `node/hash_state` | `debt:` `entryHealth` (`wholePeers`/`lanPeers`) approximates per-peer replicator counts from `hypercore-rs`'s public session API (`remote_contiguous_length >= length` for 0/1 `wholePeers` and node-level `is_lan()` connections for `lanPeers`); Merkle `sameBytes` failover and `kept-copies.json` match. `put` does not yet write the `music` field app PR #573 added (`cleanMusic`) | `15298dd16` |
+| `src/node/catalog.js` | `node/catalog` | `debt:` entries do not yet carry `music` (`{ title, artist }`, clamped by `cleanMusic` on read), added in app PR #573. Otherwise `match` (`publicEntries`, `isKept` `local: true`, opened watch links capped at 32) | `15298dd16` |
 | `src/node/channel.js` | `node/channel` | `match` (startup `saveIdentity` best-effort) | `15298dd16` |
 | `src/node/identity.js` | `identity` | `match` (`dirty` startup guard, rollback + throw on explicit mutations) | `15298dd16` |
 | `src/node/network.js` | `node/network` | `match` (`destroySwarm` `clear()` before force-destroy) | `15298dd16` |
 | `src/node/sources.js` | `node/sources` | `debt:` with no `findingPeers` guard held, hypercore-rs `update()` still waits for a first peer where Hypercore returns at once; every app path holds the guard, so the node behaves the same | `8326afa2c` |
 | `src/node/storage.js` | `node/storage` | `match` | `15298dd16` |
 | `src/private-overlay.js` | `private_overlay` | `match` (session-owned routes & RV slots, canonical IPv6 `/48` buckets, 64 KiB frame cap, 256/10 s DHT op rate limit) | `15298dd16` |
-| `src/protocol.js` | `protocol` | `match` (`safe_equal`, `ipv6_groups`, `media_format`) | `15298dd16` |
+| `src/protocol.js` | `protocol` | `debt:` `cleanMusic` (the announce's `music` object, clamped to `MAX_TITLE`) from app PR #573 is not ported. Otherwise `match` (`safe_equal`, `ipv6_groups`, `media_format`) | `15298dd16` |
+| `src/providers/soulseek.js` | — | `debt:` Soulseek provider plugin from app PR #573 (search, browse, mirror into the import folder, jobs, opt-in sharing via `slskShare`/`slskShareMaxFiles`). The client is the Rust crate `peartube-soulseek`, so a port can link it directly; not ported | — |
 | `src/qr.js` | `cast/qr` | `match` | `8326afa2c` |
 | `src/rebuild-view.js` | — | `JS-only:` the library behind `bin/rebuild-view.js`; an operator repair tool, not a runtime path | — |
-| `src/resolution.js` | `resolution` | `match` (`media_info` container/duration/tracks + string/track caps) | `15298dd16` |
+| `src/resolution.js` | `resolution` | `debt:` app PR #573 added FLAC STREAMINFO and MPEG audio (`MP1`/`MP2`/`MP3`, Xing duration) readers to `mediaInfo`; not ported. Otherwise `match` (`media_info` container/duration/tracks + string/track caps) | `15298dd16` |
 | `src/search.js` | `search` | `debt:` peeroxide's `join` has no per-lookup `limit`, so a Rust searcher dials every relay the search-topic lookup returns where hyperswarm stops at 4; it still asks at most 4 (2 per `/24`) and closes the search-only connections a minute after the last search — see README "Known gaps". Keyed per peer, `serve(null)` before `closed`, `FRESH` 10 s | `15298dd16` |
-| `src/settings.js` | `settings` | `match` (`watchDir` migrated out of saved settings) | `15298dd16` |
+| `src/settings.js` | `settings` | `debt:` the `slskUser`/`slskPass`/`slskServer`/`slskListenPort`/`slskShare`/`slskShareMaxFiles` settings from app PR #573 are not in the Rust SPEC. Otherwise `match` (`watchDir` migrated out of saved settings) | `15298dd16` |
 | `src/ssrf.js` | `ssrf` | `match` (pre-connect IP/DNS + NAT64 `64:ff9b::/96` guard, no pooled-socket bypass, `PEARTUBE_ALLOW_PRIVATE_URLS`) | `15298dd16` |
+| `src/tags.js` | — | `debt:` music tag reader (FLAC and Ogg Vorbis/Opus comments, ID3v2.3/2.4) and `albumKey`, added in app PR #573; not ported | — |
 | `src/traffic.js` | `traffic` | `match` | `8326afa2c` |
 | `src/ui.js` | — | `JS-only:` shared asset; `relay.Dockerfile` copies the app's own file to `web/index.html` at image build and the relay serves it | `15298dd16` |
 | `worklet/worker.js` | `app`, `lifecycle`, `ipc`, `backend` | `match` (`searchGlobal`) | `d6b9fc3ce` |
