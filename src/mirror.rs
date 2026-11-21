@@ -10,6 +10,7 @@
 //!
 //! The filesystem and remote-feed fetches sit behind small traits so a test can script them.
 
+pub mod close;
 pub mod sources;
 pub mod watch;
 
@@ -278,8 +279,8 @@ pub trait MirrorPlugin<N: Node>: Send + Sync {
     ) -> Pin<Box<dyn Future<Output = Result<Option<Value>, MirrorError>> + Send + 'a>> {
         Box::pin(async { Ok(None) })
     }
-    fn stop<'a>(&'a self) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
-        Box::pin(async {})
+    fn stop(&self) -> close::Stop<'_> {
+        Box::pin(async { Ok(()) })
     }
     fn info(&self) -> Value {
         Value::Object(Map::new())
@@ -640,6 +641,9 @@ pub struct MirrorOptions {
     pub start_runs: Vec<String>,
     pub onchange: Option<Arc<dyn Fn() + Send + Sync>>,
     pub onstarting: Option<Arc<dyn Fn() + Send + Sync>>,
+    /// Runs once, after every plugin has stopped: detach the relay's traffic listener and stop
+    /// its gate.
+    pub stop_traffic: Option<Box<dyn FnOnce() + Send + Sync>>,
     pub now_ms: Arc<dyn Fn() -> u64 + Send + Sync>,
 }
 
@@ -659,6 +663,7 @@ impl Default for MirrorOptions {
             start_runs: Vec::new(),
             onchange: None,
             onstarting: None,
+            stop_traffic: None,
             now_ms: Arc::new(system_now_ms),
         }
     }
@@ -1211,8 +1216,11 @@ where
         })
     }
 
-    fn stop<'a>(&'a self) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
-        Box::pin(async move { self.provider.stop() })
+    fn stop(&self) -> close::Stop<'_> {
+        Box::pin(async move {
+            self.provider.stop();
+            Ok(())
+        })
     }
 
     fn info(&self) -> Value {
@@ -1301,8 +1309,11 @@ where
         })
     }
 
-    fn stop<'a>(&'a self) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
-        Box::pin(self.provider.stop())
+    fn stop(&self) -> close::Stop<'_> {
+        Box::pin(async move {
+            self.provider.stop().await;
+            Ok(())
+        })
     }
 
     fn info(&self) -> Value {
@@ -1381,10 +1392,12 @@ pub struct MirrorHost<N: Node> {
     feeds: Arc<Mutex<Vec<String>>>,
     rechunk_progress: Arc<Mutex<Value>>,
     closed: Arc<AtomicBool>,
+    closing: std::sync::OnceLock<close::Closing>,
     now_ms: Arc<dyn Fn() -> u64 + Send + Sync>,
     onchange: Option<Arc<dyn Fn() + Send + Sync>>,
-    tasks: Mutex<Vec<JoinHandle<()>>>,
+    tasks: Arc<Mutex<Vec<JoinHandle<()>>>>,
     poll_task: Mutex<Option<JoinHandle<()>>>,
+    stop_traffic: Mutex<Option<Box<dyn FnOnce() + Send + Sync>>>,
     ctx: Ctx<N>,
 }
 
@@ -1500,10 +1513,12 @@ where
             feeds,
             rechunk_progress,
             closed,
+            closing: std::sync::OnceLock::new(),
             now_ms: opts.now_ms.clone(),
             onchange: opts.onchange.clone(),
-            tasks: Mutex::new(Vec::new()),
+            tasks: Arc::new(Mutex::new(Vec::new())),
             poll_task: Mutex::new(None),
+            stop_traffic: Mutex::new(opts.stop_traffic),
             ctx,
         };
         host.register(Arc::new(HttpAcquirePlugin {
@@ -1881,24 +1896,6 @@ where
                 }
                 None => return,
             }
-        }
-    }
-
-    /// `close`: stop polling, let every plugin stop, and refuse new work. Every stop starts before
-    /// any is awaited: a plugin with work parked on this host (a mirror waiting for an import)
-    /// must mark it stopped now, not after an earlier plugin's stop has finished. Every stop is
-    /// awaited to its end; a stop has no error to give here, so none can cut the others short.
-    pub async fn close(&self) {
-        self.closed.store(true, Ordering::SeqCst);
-        if let Some(handle) = self.poll_task.lock().expect("poll task").take() {
-            handle.abort();
-        }
-        let plugins = self.plugins.lock().expect("mirror plugins").clone();
-        futures_util::future::join_all(plugins.iter().map(|(_, plugin)| plugin.stop())).await;
-        let handles: Vec<JoinHandle<()>> =
-            self.tasks.lock().expect("mirror tasks").drain(..).collect();
-        for handle in handles {
-            handle.abort();
         }
     }
 

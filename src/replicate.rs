@@ -642,8 +642,11 @@ impl MirrorPlugin<CoreNode> for Replicator {
         })
     }
 
-    fn stop<'a>(&'a self) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
-        Box::pin(async move { self.close() })
+    fn stop(&self) -> crate::mirror::close::Stop<'_> {
+        Box::pin(async move {
+            self.close();
+            Ok(())
+        })
     }
 
     fn info(&self) -> Value {

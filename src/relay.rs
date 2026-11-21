@@ -56,8 +56,6 @@ struct Open {
 /// `p2p-replicate` and the traffic gate whose `peersBusy` it waits on.
 struct Replication {
     replicator: Replicator,
-    traffic: TrafficGate,
-    detach_traffic: Box<dyn Fn() + Send + Sync>,
     /// `scheduleReplicate`: catalog changes ask for a pass, 2 s later and one at a time.
     kick: Arc<tokio::sync::Notify>,
     kicker: tokio::task::JoinHandle<()>,
@@ -633,6 +631,13 @@ impl Relay {
                     } else {
                         Vec::new()
                     },
+                    stop_traffic: Some(Box::new({
+                        let gate = traffic.clone();
+                        move || {
+                            detach_traffic();
+                            gate.stop();
+                        }
+                    })),
                     onchange: Some(notify.clone()),
                     ..MirrorOptions::default()
                 },
@@ -648,14 +653,7 @@ impl Relay {
             });
         }
         let replication = self
-            .start_replication(
-                &node,
-                &mirror,
-                notify.clone(),
-                traffic,
-                detach_traffic,
-                hiverelay_enabled,
-            )
+            .start_replication(&node, &mirror, notify.clone(), traffic, hiverelay_enabled)
             .await;
 
         let mut changes = node.onchange();
@@ -678,20 +676,18 @@ impl Relay {
         Ok(())
     }
 
-    #[allow(clippy::too_many_arguments)] // the node, its plugins, and the one gate they share
     async fn start_replication(
         &self,
         node: &Arc<CoreNode>,
         mirror: &Arc<MirrorHost<CoreNode>>,
         onchange: Arc<dyn Fn() + Send + Sync>,
         traffic: TrafficGate,
-        detach_traffic: Box<dyn Fn() + Send + Sync>,
         hiverelay: bool,
     ) -> Replication {
         let replicator = Replicator::new(
             node.clone(),
             self.0.storage.clone(),
-            traffic.clone(),
+            traffic,
             self.replicate_config().await,
             Some(onchange),
         );
@@ -716,8 +712,6 @@ impl Relay {
         kick.notify_one();
         Replication {
             replicator,
-            traffic,
-            detach_traffic,
             kick,
             kicker,
         }
@@ -746,7 +740,9 @@ impl Relay {
         else {
             return;
         };
-        mirror.close().await;
+        if let Err(error) = mirror.close().await {
+            log("mirror close failed", json!({ "error": error.to_string() }));
+        }
         // The cast stack closes before the node it drives, as `stop()` does.
         self.0.api.set_cast(None);
         let cast = self.0.cast.lock().unwrap().take();
@@ -754,8 +750,6 @@ impl Relay {
             cast.close().await;
         }
         replication.kicker.abort();
-        (replication.detach_traffic)();
-        replication.traffic.stop();
         *self.0.mirror.lock().unwrap() = None;
         *self.0.acquirer.lock().unwrap() = None;
         acquirer.close();

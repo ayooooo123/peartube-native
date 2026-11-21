@@ -1977,7 +1977,7 @@ async fn mirror_host_matches_the_app() {
             .unwrap()
             .insert("result".into(), result);
         traces.insert("backfill".into(), trace);
-        harness.host.close().await;
+        harness.host.close().await.unwrap();
     }
 
     {
@@ -2014,7 +2014,7 @@ async fn mirror_host_matches_the_app() {
             .unwrap()
             .insert("result".into(), result);
         traces.insert("feed".into(), trace);
-        harness.host.close().await;
+        harness.host.close().await.unwrap();
     }
 
     {
@@ -2047,7 +2047,7 @@ async fn mirror_host_matches_the_app() {
             .unwrap()
             .insert("result".into(), result);
         traces.insert("manifest".into(), trace);
-        harness.host.close().await;
+        harness.host.close().await.unwrap();
     }
 
     {
@@ -2089,7 +2089,7 @@ async fn mirror_host_matches_the_app() {
             .unwrap()
             .insert("runs".into(), json!([first, second, third]));
         traces.insert("watch".into(), trace);
-        harness.host.close().await;
+        harness.host.close().await.unwrap();
     }
 
     {
@@ -2137,7 +2137,7 @@ async fn mirror_host_matches_the_app() {
             .unwrap()
             .insert("result".into(), result);
         traces.insert("rechunk".into(), trace);
-        harness.host.close().await;
+        harness.host.close().await.unwrap();
     }
 
     {
@@ -2151,7 +2151,7 @@ async fn mirror_host_matches_the_app() {
         let mut trace = harness.trace();
         trace.as_object_mut().unwrap().insert("error".into(), error);
         traces.insert("list".into(), trace);
-        harness.host.close().await;
+        harness.host.close().await.unwrap();
     }
 
     compare(&Value::Object(traces), &oracle);
@@ -2170,6 +2170,7 @@ mod library {
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::Duration;
 
+    use peartube_native::mirror::close::{CloseError, Closing};
     use peartube_native::mirror::{
         Ctx, LocalMirrorFiles, MirrorConfig, MirrorError, MirrorHost, MirrorOptions, MirrorPlugin,
         MirrorProvider, ProviderFuture, SoulseekSettings,
@@ -2326,8 +2327,156 @@ mod library {
             Box::pin(async { Ok(Value::Null) })
         }
 
-        fn stop<'a>(&'a self) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
-            Box::pin(async { tokio::time::sleep(Duration::from_millis(20)).await })
+        fn stop(&self) -> peartube_native::mirror::close::Stop<'_> {
+            Box::pin(async {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+                Ok(())
+            })
+        }
+    }
+
+    struct StopProbe {
+        name: String,
+        release: tokio::sync::watch::Receiver<bool>,
+        started: Arc<std::sync::Mutex<Vec<String>>>,
+        finished: Arc<std::sync::Mutex<Vec<String>>>,
+        host: std::sync::Weak<MirrorHost<FakeNode>>,
+        from_stop: Arc<std::sync::Mutex<Option<Closing>>>,
+    }
+
+    impl MirrorPlugin<FakeNode> for StopProbe {
+        fn name(&self) -> &str {
+            &self.name
+        }
+        fn run<'a>(&'a self, _: Value, _: &'a Ctx<FakeNode>) -> ProviderFuture<'a> {
+            unreachable!()
+        }
+        fn stop(&self) -> peartube_native::mirror::close::Stop<'_> {
+            let first = {
+                let mut started = self.started.lock().unwrap();
+                let first = !started.contains(&self.name);
+                started.push(self.name.clone());
+                first
+            };
+            if self.name == "reenter" && first {
+                let close = self.host.upgrade().unwrap().close();
+                *self.from_stop.lock().unwrap() = Some(close);
+            }
+            if self.name == "throw" {
+                panic!("not async");
+            }
+            Box::pin(async move {
+                if matches!(self.name.as_str(), "slow" | "late failure" | "reenter") {
+                    self.release.clone().wait_for(|open| *open).await.unwrap();
+                }
+                self.finished.lock().unwrap().push(self.name.clone());
+                match self.name.as_str() {
+                    "fail" => Err(MirrorError::with_status("disk gone", 507)),
+                    "late failure" => Err(MirrorError::plain("late failure")),
+                    "slow" | "reenter" => Ok(()),
+                    other => panic!("unknown stop {other}"),
+                }
+            })
+        }
+    }
+
+    fn stop_reason(error: &CloseError) -> Value {
+        let one = |e: &MirrorError| json!({ "message": e.message, "status": e.status });
+        match error {
+            CloseError::Plugin(e) => one(e),
+            CloseError::Several(errors) => json!({
+                "message": error.to_string(),
+                "errors": errors.iter().map(one).collect::<Vec<_>>(),
+            }),
+        }
+    }
+
+    /// Compare the host before the slow stop is released and once close returns. The app runs
+    /// its real gate; here the relay's detach/stop callback records when it releases that resource.
+    /// A promise settles with nobody awaiting it, so the Rust close must finish the same way.
+    #[tokio::test]
+    async fn shutdown_matches_all_settled_on_the_app() {
+        use futures_util::{FutureExt, future::join_all};
+        use std::sync::{Mutex, atomic::AtomicBool};
+        let oracle = js_trace("mirror-close.mjs");
+        for case in oracle.as_array().unwrap() {
+            let storage = tempfile::tempdir().unwrap();
+            let listening = Arc::new(AtomicBool::new(true));
+            let released = Arc::new(tokio::sync::Notify::new());
+            let host = Arc::new(
+                MirrorHost::start(
+                    FakeNode::new(),
+                    None,
+                    Arc::new(LocalMirrorFiles),
+                    Arc::new(Factory),
+                    Arc::new(RechunkFactory),
+                    Feeds::new(),
+                    Vec::new(),
+                    MirrorOptions {
+                        storage: storage.path().display().to_string(),
+                        poll_interval_ms: 0,
+                        mirror_channel: false,
+                        rechunk: false,
+                        stop_traffic: Some(Box::new({
+                            let (live, released) = (listening.clone(), released.clone());
+                            move || {
+                                live.store(false, Ordering::SeqCst);
+                                released.notify_one();
+                            }
+                        })),
+                        ..MirrorOptions::default()
+                    },
+                )
+                .await,
+            );
+            let (release, gate) = tokio::sync::watch::channel(false);
+            let started = Arc::new(Mutex::new(Vec::new()));
+            let finished = Arc::new(Mutex::new(Vec::new()));
+            let from_stop = Arc::new(Mutex::new(None));
+            for n in case["stops"].as_array().unwrap() {
+                host.register(Arc::new(StopProbe {
+                    name: n.as_str().unwrap().into(),
+                    release: gate.clone(),
+                    started: started.clone(),
+                    finished: finished.clone(),
+                    host: Arc::downgrade(&host),
+                    from_stop: from_stop.clone(),
+                }));
+            }
+            let first = host.close();
+            let at_return = started.lock().unwrap().clone();
+            let mut calls = vec![first, host.close()];
+            calls.extend(from_stop.lock().unwrap().take());
+            let settled = calls
+                .iter()
+                .filter(|c| (**c).clone().now_or_never().is_some())
+                .count();
+            assert_eq!(
+                json!({ "settled": settled, "listening": listening.load(Ordering::SeqCst),
+                "started": *started.lock().unwrap(), "atReturn": at_return }),
+                case["before"],
+                "before release: {}",
+                case["stops"]
+            );
+            release.send_replace(true);
+            // No caller polls its handle between the release and the end of the close.
+            tokio::time::timeout(Duration::from_secs(5), released.notified())
+                .await
+                .expect("the close finishes with no caller waiting");
+            let mut results = tokio::time::timeout(Duration::from_secs(5), join_all(calls))
+                .await
+                .expect("every caller gets the result");
+            results.push(host.close().await);
+            let same = results.iter().all(|r| r == &results[0]);
+            assert_eq!(json!(same), case["same"]);
+            assert_eq!(json!(results.len()), case["callers"]);
+            assert_eq!(
+                json!(results[0].as_ref().err().map(stop_reason)),
+                case["error"]
+            );
+            assert_eq!(json!(*started.lock().unwrap()), case["started"]);
+            assert_eq!(json!(*finished.lock().unwrap()), case["finished"]);
+            assert_eq!(json!(listening.load(Ordering::SeqCst)), case["listening"]);
         }
     }
 
@@ -2511,13 +2660,13 @@ mod library {
                         .collect()
                 };
                 let mut closing = Box::pin(host.close());
-                let done = std::future::poll_fn(|cx| {
-                    std::task::Poll::Ready(closing.as_mut().poll(cx).is_ready())
-                })
-                .await;
+                let done =
+                    std::future::poll_fn(|cx| std::task::Poll::Ready(closing.as_mut().poll(cx)))
+                        .await;
                 let at_once = view();
-                if !done {
-                    closing.await;
+                match done {
+                    std::task::Poll::Ready(result) => result.unwrap(),
+                    std::task::Poll::Pending => closing.await.unwrap(),
                 }
                 closed = true;
                 json!({ "atOnce": at_once, "closed": view() })
@@ -2619,7 +2768,7 @@ mod library {
             put(json!(i), value);
         }
         if !closed {
-            host.close().await;
+            host.close().await.unwrap();
         }
         if read_only {
             set_mode(&import, 0o755);

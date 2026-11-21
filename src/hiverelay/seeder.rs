@@ -1445,8 +1445,11 @@ impl MirrorPlugin<CoreNode> for HiverelaySeeder {
         })
     }
 
-    fn stop<'a>(&'a self) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
-        Box::pin(HiverelaySeeder::stop(self))
+    fn stop(&self) -> crate::mirror::close::Stop<'_> {
+        Box::pin(async move {
+            HiverelaySeeder::stop(self).await;
+            Ok(())
+        })
     }
 
     fn info(&self) -> Value {
