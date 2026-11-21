@@ -152,15 +152,18 @@ can reclaim an owned or cached core after its last reader and peer leave.
 Cache reclamation offloads both the blocking RocksDB flush and compaction from
 the backend's runtime workers, so HTTP and replication keep polling.
 
-The standalone cast receiver uses RocksDB MemEnv (including media blobs), not
-flash. Its obsolete `peer_dir/corestore` cache and stale cache/catalog indexes
-are removed on startup;
-`receiver.json` and `identity.json` remain on disk. Phone/desktop owned nodes keep
-their disk stores. The receiver's store budget is `min(1.5 GB, MemTotal/4,
+The standalone cast receiver keeps its store on disk in `peer_dir/corestore`
+without a write-ahead log (`storageWal: false`), as the app's receiver does; it
+persists across restarts. The node option `storageMemory: true` (RocksDB MemEnv)
+still exists but the receiver no longer uses it: on a Pi 4 the RAM store kept
+everything a cast received (4.1–4.5 GB on a 4K film), while the disk store held
+323–325 MB and played the same. `receiver.json` and `identity.json` stay beside
+the store. The receiver's memory budget is `min(1.5 GB, MemTotal/4,
 MemAvailable/2)` from `/proc/meminfo`, with a conservative 256 MiB fallback when
 unavailable and a 64 MiB floor so zero available RAM cannot disable eviction.
-Live media gets 40% of this budget; read-ahead reservations across all concurrent
-Range/hybrid responses share at most 75% of that live ceiling. A response without
+The cache ceiling (`set_cache_max_bytes`) is 40% of this budget; read-ahead
+reservations across all concurrent Range/hybrid responses share at most 75% of
+that ceiling. A response without
 remaining read-ahead capacity fetches on demand. Trailing data gets at most
 64 MiB (or one eighth of the ceiling), with the existing small block guards.
 Each response may reserve at most half the pool, leaving room for an overlapping
@@ -168,8 +171,7 @@ seek. Demand-only readers retry reservations as they advance. After 15 seconds
 of client backpressure the lease parks, releasing its reader, requests and
 reservation without closing the HTTP body. Reading again re-registers the
 reader and reopens the stream at its current position.
-The remaining room covers memtables, metadata, in-flight writes and old/new blob
-files during GC; watched blocks are trimmed every three seconds even while
+Watched blocks are trimmed every three seconds even while
 buffering. Only the active load trims windows; title changes clear prior blobs.
 Trailing eviction protects the slowest reader, and stale future data beyond the
 furthest reader plus 7/8 of the live ceiling is dropped after backwards seeks.
