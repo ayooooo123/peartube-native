@@ -122,6 +122,16 @@ const provider = (call, name, payload) => {
 }
 const libraryMirror = {
   ...mirror,
+  async searchSources (payload, emit) {
+    const query = payload.query
+    if (!query || 'stream' in payload) throw Object.assign(new Error('query is required'), { status: 400 })
+    const results = [{ title: query, source: 'youtube' }]
+    const error = { source: 'soulseek', status: 503, message: 'No peer' }
+    emit?.({ source: 'youtube', results, truncated: false })
+    if (query === 'interrupted') throw new Error('Host closed')
+    emit?.({ source: 'soulseek', results: [], truncated: false, error })
+    return { query, sources: ['soulseek', 'youtube'], results, bySource: { soulseek: 0, youtube: 1 }, truncated: { soulseek: false, youtube: false }, errors: [error] }
+  },
   searchProvider: async (name, payload) => provider('search', name, payload),
   browseProvider: async (name, payload) => provider('browse', name, payload),
   mirrorProvider: async (name, payload) => provider('mirror', name, payload),
@@ -253,6 +263,8 @@ const scenarios = {
     json('GET', '/v1/search?id=x'),
     json('POST', '/v1/providers/soulseek/search', {}),
     json('GET', `/v1/providers/youtube/thumb/${THUMB}`),
+    raw('POST', '/v1/search/sources', '{bad'),
+    json('POST', '/v1/search/sources', { query: 'x', stream: true }, { authorization: 'Bearer secret', origin: 'https://other.test' }),
     raw('OPTIONS', '/v1/status')
   ],
   library: [
@@ -274,6 +286,12 @@ const scenarios = {
     json('DELETE', '/v1/jobs/0123456789abcdef0123456789abcdef0123'),
     json('GET', '/v1/jobs/' + JOBS[0].replace('1', 'A')),
     json('POST', '/v1/providers/soulseek/search', { query: 'x' }),
+    json('POST', '/v1/search/sources', { query: 'music' }),
+    json('POST', '/v1/search/sources', { query: 'music', stream: 'yes' }),
+    json('POST', '/v1/search/sources', { query: 'interrupted', stream: true }),
+    json('POST', '/v1/search/sources', { stream: true }),
+    json('POST', '/v1/search/sources', null),
+    raw('POST', '/v1/search/sources', '{bad'),
     json('POST', '/v1/providers/soulseek/browse', { username: 'bob' }),
     json('POST', '/v1/providers/soulseek/mirror', { username: 'bob', files: [] }),
     json('POST', '/v1/providers/nope/search', {}),
@@ -310,6 +328,7 @@ const scenarios = {
     json('GET', `/v1/providers/youtube/thumb/${THUMB}`),
     json('POST', '/v1/entries/remove', { key: 'abc' }),
     json('POST', '/v1/acquire', { id: 'i' }),
+    raw('POST', '/v1/search/sources', '{bad'),
     json('GET', '/v1/plugins'),
     json('POST', '/v1/mirror', {}),
     json('GET', '/v1/playlist.m3u'),

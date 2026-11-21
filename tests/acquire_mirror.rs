@@ -2172,7 +2172,7 @@ mod library {
 
     use peartube_native::mirror::{
         Ctx, LocalMirrorFiles, MirrorConfig, MirrorError, MirrorHost, MirrorOptions, MirrorPlugin,
-        SoulseekSettings,
+        MirrorProvider, ProviderFuture, SoulseekSettings,
     };
     use serde_json::{Map, Value, json};
 
@@ -2241,6 +2241,69 @@ mod library {
         match result {
             Ok(value) => json!({ "result": value }),
             Err(error) => json!({ "error": { "message": error.message, "status": error.status } }),
+        }
+    }
+
+    /// The source declared in `searchPlugins`. A held search receives one permit after the
+    /// deadline; its completion proves that timing out the caller did not cancel the provider.
+    struct ScriptedSource {
+        spec: Value,
+        release: Arc<tokio::sync::Notify>,
+        finished: Arc<tokio::sync::Notify>,
+    }
+
+    impl MirrorPlugin<FakeNode> for ScriptedSource {
+        fn name(&self) -> &str {
+            self.spec["name"].as_str().unwrap()
+        }
+        fn provider(&self) -> Option<&dyn MirrorProvider<FakeNode>> {
+            Some(self)
+        }
+        fn run<'a>(&'a self, _: Value, _: &'a Ctx<FakeNode>) -> ProviderFuture<'a> {
+            unreachable!()
+        }
+    }
+
+    impl MirrorProvider<FakeNode> for ScriptedSource {
+        fn search<'a>(&'a self, payload: Value, _: &'a Ctx<FakeNode>) -> ProviderFuture<'a> {
+            Box::pin(async move {
+                let plan = self.spec["queries"]
+                    .get(payload["query"].as_str().unwrap())
+                    .unwrap_or(&self.spec);
+                if let Some(ms) = plan["delay"].as_u64() {
+                    tokio::time::sleep(Duration::from_millis(ms)).await;
+                }
+                if plan["hold"] == true {
+                    self.release.notified().await;
+                    self.finished.notify_one();
+                }
+                if let Some(error) = plan["error"].as_str() {
+                    return Err(MirrorError {
+                        message: error.repeat(plan["repeat"].as_u64().unwrap_or(1) as usize),
+                        status: plan["status"].as_u64().map(|s| s as u16),
+                    });
+                }
+                Ok(if plan["args"] == true {
+                    json!({ "candidates": [payload] })
+                } else {
+                    plan["reply"].clone()
+                })
+            })
+        }
+        fn browse<'a>(&'a self, _: Value, _: &'a Ctx<FakeNode>) -> ProviderFuture<'a> {
+            unreachable!()
+        }
+        fn mirror<'a>(&'a self, _: Value, _: &'a Ctx<FakeNode>) -> ProviderFuture<'a> {
+            unreachable!()
+        }
+        fn list_jobs(&self) -> Vec<Value> {
+            Vec::new()
+        }
+        fn get_job(&self, _: &str) -> Option<Value> {
+            None
+        }
+        fn cancel_job(&self, _: &str) -> Option<Value> {
+            None
         }
     }
 
@@ -2336,6 +2399,15 @@ mod library {
         )
         .await;
         host.wait_idle().await;
+        let release = Arc::new(tokio::sync::Notify::new());
+        let finished = Arc::new(tokio::sync::Notify::new());
+        for spec in session["searchPlugins"].as_array().into_iter().flatten() {
+            host.register(Arc::new(ScriptedSource {
+                spec: spec.clone(),
+                release: release.clone(),
+                finished: finished.clone(),
+            }));
+        }
         let host = Arc::new(host);
         // Calls a `begin` step started and no step has taken the outcome of yet.
         let mut pending: HashMap<String, tokio::task::JoinHandle<Value>> = HashMap::new();
@@ -2473,6 +2545,25 @@ mod library {
                     slsk_server: text("slskServer"),
                 });
                 Value::Null
+            } else if let Some(query) = step.get("searchSources") {
+                let mut parts = Vec::new();
+                let answer = host
+                    .search_sources(
+                        query.clone(),
+                        Some(&mut |part| {
+                            parts.push(serde_json::to_value(part).unwrap());
+                        }),
+                    )
+                    .await;
+                let mut record = outcome(answer.map(|v| serde_json::to_value(v).unwrap()));
+                record["parts"] = Value::Array(parts);
+                record
+            } else if step.get("releaseSearch").is_some() {
+                release.notify_one();
+                let resumed = tokio::time::timeout(Duration::from_secs(1), finished.notified())
+                    .await
+                    .is_ok();
+                json!({ "finishedLate": usize::from(resumed) })
             } else if let Some(call) = step.get("provider").and_then(Value::as_str) {
                 let provider = step["name"].as_str().unwrap();
                 outcome(match call {

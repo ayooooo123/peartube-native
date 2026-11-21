@@ -1231,6 +1231,20 @@ fn mirror_error(error: crate::mirror::MirrorError) -> HttpError {
     HttpError::new(error.status.unwrap_or(500), error.message)
 }
 
+impl http::SourceSearch for MirrorHost<CoreNode> {
+    fn search<'a>(
+        &'a self,
+        query: Value,
+        on_source: Option<crate::mirror::sources::OnSource<'a>>,
+    ) -> BoxFuture<'a, Result<crate::mirror::sources::SearchReply, HttpError>> {
+        Box::pin(async move {
+            self.search_sources(query, on_source)
+                .await
+                .map_err(mirror_error)
+        })
+    }
+}
+
 impl http::Mirror for MirrorBridge {
     fn list(&self) -> Value {
         Value::Array(self.current().map(|m| m.list()).unwrap_or_default())
@@ -1245,6 +1259,10 @@ impl http::Mirror for MirrorBridge {
             let mirror = self.open()?;
             mirror.run(plugin, payload).await.map_err(mirror_error)
         })
+    }
+
+    fn source_search(self: Arc<Self>) -> Result<Arc<dyn http::SourceSearch>, HttpError> {
+        Ok(self.open()?)
     }
 
     fn provider<'a>(

@@ -1,6 +1,41 @@
 {
   "sessions": [
     {
+      "name": "source search",
+      "watchDir": false,
+      "before": [],
+      "searchPlugins": [
+        { "name": "soulseek", "delay": 15, "reply": { "truncated": 1, "candidates": [
+          { "filename": "Album\\Two.flac", "rank": 9 },
+          { "filename": "Album\\One.Mp3", "rank": 1 },
+          { "filename": "song.WMA", "title": "", "lossy": false },
+          { "filename": "record.AAC" }, { "filename": "record.OpUs" },
+          { "filename": "record.ogg" }, { "filename": "record.m4a" }, { "filename": "record.wav" }
+        ] }, "queries": { "deadline": { "hold": true, "reply": { "candidates": [{ "title": "late" }] } },
+          "args": { "args": true }, "bad rows": { "reply": { "candidates": [null] } } } },
+        { "name": "youtube", "reply": { "candidates": [
+          { "title": "Fast result", "lossy": true, "source": "wrong" },
+          { "filename": "other.aac", "lossy": null }
+        ] } },
+        { "name": "unavailable", "error": "Please try again. ", "repeat": 23, "status": 429 }
+      ],
+      "steps": [
+        { "searchSources": { "query": "  all  " } },
+        { "searchSources": { "query": "some", "sources": ["youtube", "soulseek", "youtube"] } },
+        { "searchSources": { "query": "  args ", "sources": ["soulseek"], "limit": "5", "timeoutMs": 8000, "other": true } },
+        { "searchSources": { "query": ["args"], "sources": ["soulseek"], "limit": 0 } },
+        { "searchSources": { "query": "deadline", "sources": ["soulseek", "youtube"], "timeoutMs": 1 } },
+        { "releaseSearch": true },
+        { "searchSources": { "query": "bad rows", "sources": ["soulseek", "youtube"] } },
+        { "searchSources": { "query": " " } },
+        { "searchSources": { "query": true, "sources": [] } },
+        { "searchSources": { "query": 4, "sources": "youtube" } },
+        { "searchSources": { "query": "x", "sources": [3] } },
+        { "searchSources": { "query": "x", "sources": ["watch-dir"] } },
+        { "searchSources": { "query": "x", "sources": ["", "youtube"] } }
+      ]
+    },
+    {
       "name": "albums",
       "watchDir": true,
       "before": [

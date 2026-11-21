@@ -14,8 +14,8 @@ use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
 use bytes::Bytes;
-use futures_util::FutureExt;
 use futures_util::future::BoxFuture;
+use futures_util::{FutureExt, StreamExt};
 use http_body_util::combinators::UnsyncBoxBody;
 use http_body_util::{BodyExt, Empty, Full, StreamBody};
 use hyper::body::{Frame, Incoming};
@@ -34,6 +34,7 @@ use tokio::task::JoinSet;
 use url::Url;
 
 use crate::art::{self, CINEMETA_URL};
+use crate::mirror::sources::{OnSource, SearchReply, SourcePart};
 use crate::node::Node;
 use crate::node::api::{Announce, Entry, SearchOptions, Source, SourceSpec, Status};
 use crate::protocol::{
@@ -197,6 +198,8 @@ pub trait Mirror: Send + Sync {
         plugin: &'a str,
         payload: Value,
     ) -> BoxFuture<'a, Result<Value, HttpError>>;
+    /// Take the current host before reading a search body. The relay can reopen while serving HTTP.
+    fn source_search(self: Arc<Self>) -> Result<Arc<dyn SourceSearch>, HttpError>;
     /// `searchProvider`, `browseProvider` or `mirrorProvider`, of the provider `name`.
     fn provider<'a>(
         &'a self,
@@ -222,6 +225,15 @@ pub trait Mirror: Send + Sync {
         name: &'a str,
         id: &'a str,
     ) -> BoxFuture<'a, Result<Option<Picture>, HttpError>>;
+}
+
+/// A search on the host that was open when the owner made the request.
+pub trait SourceSearch: Send + Sync {
+    fn search<'a>(
+        &'a self,
+        query: Value,
+        on_source: Option<OnSource<'a>>,
+    ) -> BoxFuture<'a, Result<SearchReply, HttpError>>;
 }
 
 /// What `/v1/providers/<name>/…` asks of a provider.
@@ -653,6 +665,13 @@ impl<N: Node> Api<N> {
                 .unwrap_or_else(owner_error);
         }
 
+        if method == Method::POST && path == "/v1/search/sources" {
+            return self
+                .search_sources(&mut request)
+                .await
+                .unwrap_or_else(owner_error);
+        }
+
         let restricted = is_write(&method) || is_owner_path(&path);
         let payload = match self.route(&mut request).await {
             Ok(Some(Value::Null)) | Ok(None) => {
@@ -662,6 +681,74 @@ impl<N: Node> Api<N> {
             Err(error) => (status(error.status()), json!({"error": error.message})),
         };
         json_response(payload.0, &payload.1, restricted)
+    }
+
+    async fn search_sources(
+        &self,
+        req: &mut RequestContext<'_>,
+    ) -> Result<Response<Body>, HttpError> {
+        self.require_owner(req)?;
+        let host = self
+            .options
+            .mirror
+            .as_ref()
+            .ok_or_else(|| HttpError::new(404, "Mirror host unavailable on read-only peer"))?
+            .clone()
+            .source_search()?;
+        let payload = self.read_body(req.body).await?;
+        if payload.is_null() {
+            return Err(HttpError::new(
+                400,
+                "Cannot read properties of null (reading 'stream')",
+            ));
+        }
+        let mut query = object(payload);
+        let stream = query
+            .shift_remove("stream")
+            .as_ref()
+            .is_some_and(crate::app_settings::js_truthy);
+        let query = Value::Object(query);
+        if !stream {
+            let all = host.search(query, None).await?;
+            return Ok(json_response(StatusCode::OK, &all, true));
+        }
+
+        // One frame per selected source, then one summary. Do not send the SSE headers until
+        // the host has accepted the query. Even if the client goes away, its providers finish.
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        tokio::spawn(async move {
+            let mut emit = |part: &SourcePart| {
+                if !tx.is_closed() {
+                    let _ = tx.send(Ok(search_frame("source", part)));
+                }
+            };
+            let result = host.search(query, Some(&mut emit)).await;
+            if !tx.is_closed() {
+                let _ = tx.send(result.map(|all| search_frame("done", &all.summary)));
+            }
+        });
+        let first = rx
+            .recv()
+            .await
+            .ok_or_else(|| HttpError::new(500, "Search ended without an answer"))??;
+        let frames =
+            futures_util::stream::once(async move { Ok::<_, io::Error>(Frame::data(first)) })
+                .chain(futures_util::stream::unfold(rx, |mut rx| async move {
+                    // An error after the first frame ends the stream without a `done` event.
+                    rx.recv()
+                        .await?
+                        .ok()
+                        .map(|bytes| (Ok(Frame::data(bytes)), rx))
+                }));
+        let mut response = Response::new(StreamBody::new(frames).boxed_unsync());
+        let headers = response.headers_mut();
+        corp(headers);
+        headers.insert(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("text/event-stream"),
+        );
+        headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
+        Ok(response)
     }
 
     async fn thumbnail(
@@ -1868,6 +1955,15 @@ struct RequestContext<'a> {
     body: &'a mut Option<Incoming>,
 }
 
+fn search_frame(event: &str, data: &impl serde::Serialize) -> Bytes {
+    let mut bytes = Vec::from(b"event: ");
+    bytes.extend_from_slice(event.as_bytes());
+    bytes.extend_from_slice(b"\ndata: ");
+    serde_json::to_writer(&mut bytes, data).expect("source events contain JSON values");
+    bytes.extend_from_slice(b"\n\n");
+    bytes.into()
+}
+
 fn owner_error(error: HttpError) -> Response<Body> {
     json_response(
         status(error.status()),
@@ -1979,7 +2075,11 @@ fn full(bytes: Bytes) -> Response<Body> {
     Response::new(Full::new(bytes).map_err(|e| match e {}).boxed_unsync())
 }
 
-fn json_response(status: StatusCode, value: &Value, restricted: bool) -> Response<Body> {
+fn json_response(
+    status: StatusCode,
+    value: &impl serde::Serialize,
+    restricted: bool,
+) -> Response<Body> {
     let text = serde_json::to_string(value).unwrap_or_else(|_| "{}".to_owned());
     let mut response = full(Bytes::from(text));
     *response.status_mut() = status;

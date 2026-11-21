@@ -929,6 +929,36 @@
           "body": "{\"error\":\"Unauthorized\"}"
         },
         {
+          "method": "POST",
+          "path": "/v1/search/sources",
+          "requestHeaders": {
+            "host": "relay.local:8174"
+          },
+          "requestBody": "{bad",
+          "status": 401,
+          "headers": {
+            "content-type": "application/json",
+            "cross-origin-resource-policy": "cross-origin"
+          },
+          "body": "{\"error\":\"Unauthorized\"}"
+        },
+        {
+          "method": "POST",
+          "path": "/v1/search/sources",
+          "requestHeaders": {
+            "host": "relay.local:8174",
+            "authorization": "Bearer secret",
+            "origin": "https://other.test"
+          },
+          "requestBody": "{\"query\":\"x\",\"stream\":true}",
+          "status": 403,
+          "headers": {
+            "content-type": "application/json",
+            "cross-origin-resource-policy": "cross-origin"
+          },
+          "body": "{\"error\":\"This relay can only be changed from its own page\"}"
+        },
+        {
           "method": "OPTIONS",
           "path": "/v1/status",
           "requestHeaders": {
@@ -1217,6 +1247,92 @@
             "cross-origin-resource-policy": "cross-origin"
           },
           "body": "{\"call\":\"search\",\"name\":\"soulseek\",\"payload\":{\"query\":\"x\"}}"
+        },
+        {
+          "method": "POST",
+          "path": "/v1/search/sources",
+          "requestHeaders": {
+            "host": "relay.local:8174"
+          },
+          "requestBody": "{\"query\":\"music\"}",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json",
+            "cross-origin-resource-policy": "cross-origin"
+          },
+          "body": "{\"query\":\"music\",\"sources\":[\"soulseek\",\"youtube\"],\"results\":[{\"title\":\"music\",\"source\":\"youtube\"}],\"bySource\":{\"soulseek\":0,\"youtube\":1},\"truncated\":{\"soulseek\":false,\"youtube\":false},\"errors\":[{\"source\":\"soulseek\",\"status\":503,\"message\":\"No peer\"}]}"
+        },
+        {
+          "method": "POST",
+          "path": "/v1/search/sources",
+          "requestHeaders": {
+            "host": "relay.local:8174"
+          },
+          "requestBody": "{\"query\":\"music\",\"stream\":\"yes\"}",
+          "status": 200,
+          "headers": {
+            "content-type": "text/event-stream",
+            "cache-control": "no-cache",
+            "cross-origin-resource-policy": "cross-origin"
+          },
+          "body": "event: source\ndata: {\"source\":\"youtube\",\"results\":[{\"title\":\"music\",\"source\":\"youtube\"}],\"truncated\":false}\n\nevent: source\ndata: {\"source\":\"soulseek\",\"results\":[],\"truncated\":false,\"error\":{\"source\":\"soulseek\",\"status\":503,\"message\":\"No peer\"}}\n\nevent: done\ndata: {\"query\":\"music\",\"sources\":[\"soulseek\",\"youtube\"],\"bySource\":{\"soulseek\":0,\"youtube\":1},\"truncated\":{\"soulseek\":false,\"youtube\":false},\"errors\":[{\"source\":\"soulseek\",\"status\":503,\"message\":\"No peer\"}]}\n\n"
+        },
+        {
+          "method": "POST",
+          "path": "/v1/search/sources",
+          "requestHeaders": {
+            "host": "relay.local:8174"
+          },
+          "requestBody": "{\"query\":\"interrupted\",\"stream\":true}",
+          "status": 200,
+          "headers": {
+            "content-type": "text/event-stream",
+            "cache-control": "no-cache",
+            "cross-origin-resource-policy": "cross-origin"
+          },
+          "body": "event: source\ndata: {\"source\":\"youtube\",\"results\":[{\"title\":\"interrupted\",\"source\":\"youtube\"}],\"truncated\":false}\n\n"
+        },
+        {
+          "method": "POST",
+          "path": "/v1/search/sources",
+          "requestHeaders": {
+            "host": "relay.local:8174"
+          },
+          "requestBody": "{\"stream\":true}",
+          "status": 400,
+          "headers": {
+            "content-type": "application/json",
+            "cross-origin-resource-policy": "cross-origin"
+          },
+          "body": "{\"error\":\"query is required\"}"
+        },
+        {
+          "method": "POST",
+          "path": "/v1/search/sources",
+          "requestHeaders": {
+            "host": "relay.local:8174"
+          },
+          "requestBody": "null",
+          "status": 400,
+          "headers": {
+            "content-type": "application/json",
+            "cross-origin-resource-policy": "cross-origin"
+          },
+          "body": "{\"error\":\"Cannot read properties of null (reading 'stream')\"}"
+        },
+        {
+          "method": "POST",
+          "path": "/v1/search/sources",
+          "requestHeaders": {
+            "host": "relay.local:8174"
+          },
+          "requestBody": "{bad",
+          "status": 400,
+          "headers": {
+            "content-type": "application/json",
+            "cross-origin-resource-policy": "cross-origin"
+          },
+          "body": "{\"error\":\"Body must be JSON\"}"
         },
         {
           "method": "POST",
@@ -1756,6 +1872,20 @@
             "cross-origin-resource-policy": "cross-origin"
           },
           "body": "{\"error\":\"Acquire unavailable on read-only peer\"}"
+        },
+        {
+          "method": "POST",
+          "path": "/v1/search/sources",
+          "requestHeaders": {
+            "host": "relay.local:8174"
+          },
+          "requestBody": "{bad",
+          "status": 404,
+          "headers": {
+            "content-type": "application/json",
+            "cross-origin-resource-policy": "cross-origin"
+          },
+          "body": "{\"error\":\"Mirror host unavailable on read-only peer\"}"
         },
         {
           "method": "GET",

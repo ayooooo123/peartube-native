@@ -10,6 +10,7 @@
 //!
 //! The filesystem and remote-feed fetches sit behind small traits so a test can script them.
 
+pub mod sources;
 pub mod watch;
 
 use std::future::Future;

@@ -138,6 +138,23 @@ async function runSession (session) {
     soulseekOpts: { loadAddon: async () => fakeAddon(session, network) }
   })
 
+  // A source can finish out of order, fail or outlive the caller's deadline. Its reply is
+  // independent of the host that groups the rows. A held search only finishes when released.
+  const heldSearches = []
+  let finishedLate = 0
+  for (const source of session.searchPlugins || []) {
+    host.register({ name: source.name, async search (payload) {
+      const plan = source.queries?.[payload.query] ?? source
+      if (plan.delay) await new Promise(resolve => setTimeout(resolve, plan.delay))
+      if (plan.hold) {
+        await new Promise(resolve => heldSearches.push(resolve))
+        finishedLate++
+      }
+      if (plan.error) throw Object.assign(new Error(plan.error.repeat(plan.repeat || 1)), { status: plan.status })
+      return plan.args ? { candidates: [payload] } : plan.reply
+    } })
+  }
+
   // Job ids are random: each is named by the order it was made in.
   const labels = new Map()
   const note = () => { for (const job of host.listProviderJobs()) if (!labels.has(job.jobId)) labels.set(job.jobId, `job-${labels.size + 1}`) }
@@ -220,6 +237,14 @@ async function runSession (session) {
       host.configure(step.configure)
       for (let n = 0; n < 40; n++) await new Promise(resolve => setImmediate(resolve))
       put(i, null)
+    } else if (step.searchSources) {
+      const parts = []
+      const answer = await outcome(() => host.searchSources(step.searchSources, part => parts.push(part)))
+      put(i, { ...answer, parts })
+    } else if (step.releaseSearch) {
+      for (const resume of heldSearches.splice(0)) resume()
+      await new Promise(resolve => setImmediate(resolve))
+      put(i, { finishedLate })
     } else if (step.provider) {
       put(i, await outcome(async () => host[`${step.provider}Provider`](step.name, step.payload)))
     } else if (step.jobs) {
