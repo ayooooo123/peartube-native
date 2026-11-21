@@ -840,3 +840,42 @@ async fn embedded_ubit_sdk_runs_by_default_and_blocks_loopback_ssrf() {
     assert_eq!(missing.status(), Some(501));
     assert_eq!(missing.code(), Some("UBIT_MISSING"));
 }
+
+/// An audio save gets its own SDK settings for the call. The relay's settings folder stays as
+/// the operator left it: a mode written there would turn a video download beside it into audio.
+#[tokio::test]
+async fn audio_save_leaves_the_relay_settings_folder_unchanged() {
+    let server = serve(json!([{
+        "path": "/watch",
+        "status": 200,
+        "headers": { "content-type": "text/html" },
+        "body": "<html></html>"
+    }]))
+    .await;
+    let config = tempfile::tempdir().expect("config dir");
+    let settings = b"{\"cookies\":\"builtin\"}\n";
+    fs::write(config.path().join("settings.json"), settings).expect("settings");
+    let out = tempfile::tempdir().expect("out dir");
+
+    let saved = identify::download_page(
+        &format!("{}/watch", server.base),
+        &out.path().to_string_lossy(),
+        DownloadOptions {
+            config_dir: config.path().to_string_lossy().into_owned(),
+            audio: true,
+            ..Default::default()
+        },
+    )
+    .await;
+    assert!(saved.is_err(), "the embedded SDK refuses a loopback page");
+
+    let held: Vec<_> = fs::read_dir(config.path())
+        .expect("config dir")
+        .map(|entry| entry.expect("entry").file_name())
+        .collect();
+    assert_eq!(held, ["settings.json"]);
+    assert_eq!(
+        fs::read(config.path().join("settings.json")).expect("settings"),
+        settings
+    );
+}
