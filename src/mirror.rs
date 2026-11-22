@@ -10,7 +10,6 @@
 //!
 //! The filesystem and remote-feed fetches sit behind small traits so a test can script them.
 
-pub mod close;
 pub mod sources;
 pub mod watch;
 
@@ -279,8 +278,8 @@ pub trait MirrorPlugin<N: Node>: Send + Sync {
     ) -> Pin<Box<dyn Future<Output = Result<Option<Value>, MirrorError>> + Send + 'a>> {
         Box::pin(async { Ok(None) })
     }
-    fn stop(&self) -> close::Stop<'_> {
-        Box::pin(async { Ok(()) })
+    fn stop<'a>(&'a self) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
+        Box::pin(async {})
     }
     fn info(&self) -> Value {
         Value::Object(Map::new())
@@ -1214,11 +1213,8 @@ where
         })
     }
 
-    fn stop(&self) -> close::Stop<'_> {
-        Box::pin(async move {
-            self.provider.stop();
-            Ok(())
-        })
+    fn stop<'a>(&'a self) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
+        Box::pin(async move { self.provider.stop() })
     }
 
     fn info(&self) -> Value {
@@ -1307,11 +1303,8 @@ where
         })
     }
 
-    fn stop(&self) -> close::Stop<'_> {
-        Box::pin(async move {
-            self.provider.stop().await;
-            Ok(())
-        })
+    fn stop<'a>(&'a self) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
+        Box::pin(self.provider.stop())
     }
 
     fn info(&self) -> Value {
@@ -1402,10 +1395,9 @@ pub struct MirrorHost<N: Node> {
     feeds: Arc<Mutex<Vec<String>>>,
     rechunk_progress: Arc<Mutex<Value>>,
     closed: Arc<AtomicBool>,
-    closing: std::sync::OnceLock<close::Closing>,
     now_ms: Arc<dyn Fn() -> u64 + Send + Sync>,
     onchange: Option<Arc<dyn Fn() + Send + Sync>>,
-    tasks: Arc<Mutex<Vec<JoinHandle<()>>>>,
+    tasks: Mutex<Vec<JoinHandle<()>>>,
     poll_task: Mutex<Option<JoinHandle<()>>>,
     stop_traffic: Mutex<Option<Box<dyn FnOnce() + Send + Sync>>>,
     startup: Mutex<Option<Startup<N>>>,
@@ -1525,10 +1517,9 @@ where
             feeds,
             rechunk_progress,
             closed,
-            closing: std::sync::OnceLock::new(),
             now_ms: opts.now_ms.clone(),
             onchange: opts.onchange.clone(),
-            tasks: Arc::new(Mutex::new(Vec::new())),
+            tasks: Mutex::new(Vec::new()),
             poll_task: Mutex::new(None),
             stop_traffic: Mutex::new(opts.stop_traffic),
             startup: Mutex::new(Some(Startup {
@@ -1576,13 +1567,14 @@ where
     }
 
     /// The rest of `createMirrorHost`: the startup backfill, the folder import, the feeds, the
-    /// start runs and the poll timer. A closed host starts nothing, also when it was closed before
-    /// this call, and its folder import ends between files. Only the first call does the work.
+    /// start runs and the poll timer. The backfill runs even when the host is already closed, as
+    /// the app's does; the work after it starts only on a host that is not closed, and the folder
+    /// import ends between files. Only the first call does the work.
     pub async fn startup(&self) {
         let Some(startup) = self.startup.lock().expect("mirror startup").take() else {
             return;
         };
-        if startup.mirror_channel && !self.is_closed() {
+        if startup.mirror_channel {
             let _ = self.run("channel-backfill", Value::Null).await;
         }
         if startup.rechunk && !self.is_closed() {
@@ -1874,6 +1866,31 @@ where
         }
         if let Some(onchange) = &self.onchange {
             onchange();
+        }
+    }
+
+    /// Stop polling and start every plugin's stop before waiting. A save that is waiting for
+    /// an import must receive its stop even if the importer's stop is still pending.
+    /// Each call runs the stops again. The first call that finishes releases the traffic gate.
+    pub async fn close(&self) {
+        self.closed.store(true, Ordering::SeqCst);
+        if let Some(handle) = self.poll_task.lock().expect("poll task").take() {
+            handle.abort();
+        }
+        let plugins: Vec<_> = self
+            .plugins
+            .lock()
+            .expect("mirror plugins")
+            .iter()
+            .map(|(_, plugin)| plugin.clone())
+            .collect();
+        futures_util::future::join_all(plugins.iter().map(|plugin| plugin.stop())).await;
+        let traffic = self.stop_traffic.lock().expect("traffic gate").take();
+        if let Some(stop) = traffic {
+            stop();
+        }
+        for handle in self.tasks.lock().expect("mirror tasks").drain(..) {
+            handle.abort();
         }
     }
 

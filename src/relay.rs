@@ -11,7 +11,7 @@
 use std::collections::HashMap;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 
 use futures_util::future::BoxFuture;
@@ -67,6 +67,10 @@ struct Replication {
     kicker: tokio::task::JoinHandle<()>,
 }
 
+const RUNNING: u8 = 0;
+const STOPPING: u8 = 1;
+const STOPPED: u8 = 2;
+
 struct Inner {
     env: HashMap<String, String>,
     storage: PathBuf,
@@ -90,7 +94,7 @@ struct Inner {
     /// `privateGuard`: the forwarder for other peers' private routing, with the settings it runs.
     guard: Arc<Mutex<Option<(String, PrivateGuard)>>>,
     retry_pending: AtomicBool,
-    shutting_down: AtomicBool,
+    shutdown_state: AtomicU8,
 }
 
 /// The relay process. Cloning shares it.
@@ -264,7 +268,7 @@ impl Relay {
                 extra: extra.clone(),
                 guard: guard.clone(),
                 retry_pending: AtomicBool::new(false),
-                shutting_down: AtomicBool::new(false),
+                shutdown_state: AtomicU8::new(RUNNING),
             }
         });
         let relay = Relay(relay);
@@ -314,10 +318,12 @@ impl Relay {
             if let Some(started) = started {
                 wait_started(started).await;
             }
-            // After a shutdown signal the relay starts no guard. A step the signal refused never
-            // started, so it logs no failure; a step admitted before the signal reports a failure
-            // through `log`, even when the signal arrives meanwhile.
-            relay.start_guard(log).await;
+            // `serial(applyGuard)`: a step asked for after a shutdown refuses at once, and its
+            // refusal is a guard failure the owner sees, like any other. A step admitted before
+            // the signal runs to its end and reports what it finds.
+            if let Err(error) = relay.start_guard().await {
+                log("private guard failed to start", json!({ "error": error }));
+            }
             Ok(relay.status().await.unwrap_or(Value::Null))
         })
         .await
@@ -342,7 +348,7 @@ impl Relay {
 
     /// SIGTERM: stop the API, close what is open and return.
     pub async fn shutdown(&self) {
-        if self.0.shutting_down.swap(true, Ordering::SeqCst) {
+        if self.0.shutdown_state.fetch_max(STOPPING, Ordering::SeqCst) != RUNNING {
             return;
         }
         let servers: Vec<ApiServer> = std::mem::take(&mut *self.0.servers.lock().unwrap());
@@ -352,46 +358,29 @@ impl Relay {
         // The plugins stop first, without a wait for the step in flight: a step that waits for the
         // start runs (a live setting for the plugins) then ends with them, between files.
         let host = self.0.host.lock().unwrap().clone();
-        if let Some(host) = host {
-            // `close_locked` reports a stop that failed: it gets this same close.
-            let _ = host.close().await;
+        if let Some(host) = &host {
+            // End a startup import between files before waiting for the step that uses it.
+            host.close().await;
         }
         let mut open = self.0.open.lock().await;
-        self.close_locked(&mut open).await;
+        self.close_locked(&mut open, host.as_ref()).await;
         self.stop_guard().await;
+        // Still holding the node lock: nothing that arrives behind this stop may reopen storage.
+        self.0.shutdown_state.store(STOPPED, Ordering::SeqCst);
     }
 
-    /// The first optional guard step: after the plugins start, the guard opens when the settings
-    /// want one. A shutdown that has begun when the step is asked refuses at once, without waiting
-    /// for the turn that a step in flight holds; a step that waits its turn refuses it when the
-    /// turn comes. Either way it starts no guard, is not a failure and calls no reporter. Once
-    /// admitted, the step holds the turn until the configuration ends and reports a failure
-    /// through `report`, whatever a shutdown does meanwhile.
-    async fn start_guard(&self, report: impl FnOnce(&str, Value)) {
-        // No wait behind the step in flight once the shutdown is known.
-        if self.running().is_err() {
-            return;
-        }
-        let Ok(_turn) = self.turn().await else {
-            return;
-        };
-        if let Err(error) = self.configure_guard().await {
-            report("private guard failed to start", json!({ "error": error }));
-        }
+    /// `serial(applyGuard)` once the plugins start: the guard opens when the settings want one.
+    /// A step asked for after a shutdown has begun refuses at once; a step admitted before the
+    /// signal runs to its end and reports the error it then finds, whatever a shutdown does
+    /// meanwhile.
+    async fn start_guard(&self) -> Result<(), String> {
+        let _turn = self.turn().await?;
+        self.apply_guard().await
     }
 
     /// `applyGuard()`: the guard runs on its own HyperDHT and port with a fresh key each
     /// start, and opens no Corestore. JS runs it as a child process; here it is in-process.
     async fn apply_guard(&self) -> Result<(), String> {
-        // No guard starts once the relay is shutting down.
-        self.running()?;
-        self.configure_guard().await
-    }
-
-    /// The guard configuration behind `apply_guard`: the wanted guard opens, and a guard that
-    /// the settings no longer want closes. It runs to its end once the step is admitted, so a
-    /// shutdown that begins meanwhile does not turn its settings failure into a refusal.
-    async fn configure_guard(&self) -> Result<(), String> {
         let port = self.cfg("privateGuardPort").await.as_u64().unwrap_or(0) as u16;
         let bootstrap = strings(&self.cfg("bootstrap").await);
         let want = js_truthy(&self.cfg("privateGuard").await)
@@ -455,25 +444,31 @@ impl Relay {
         self.0.settings.lock().await.get(key)
     }
 
-    /// `assertRunning()`: once a shutdown has begun, a lifecycle step starts nothing more.
+    /// The check `serial` makes when a step is asked for: after a shutdown has begun, no step
+    /// starts any more work.
     fn running(&self) -> Result<(), String> {
-        match self.0.shutting_down.load(Ordering::SeqCst) {
-            true => Err("The relay is shutting down".into()),
-            false => Ok(()),
+        if self.0.shutdown_state.load(Ordering::SeqCst) == RUNNING {
+            Ok(())
+        } else {
+            Err("The relay is shutting down".into())
         }
     }
 
     /// `serial(fn)`: the lifecycle steps run one at a time, in the order they were asked for. A
-    /// step that waited its turn does not begin once a shutdown has begun.
+    /// step that is asked for after a shutdown has begun refuses at once; a step that was asked
+    /// for before it runs when its turn comes.
     async fn turn(&self) -> Result<tokio::sync::MutexGuard<'_, Option<Open>>, String> {
-        let open = self.0.open.lock().await;
         self.running()?;
+        let open = self.0.open.lock().await;
+        // A task can be preempted between admission and joining the queue. An admitted task
+        // ahead of the final stop still runs; one behind it cannot reopen a closed relay.
+        if self.0.shutdown_state.load(Ordering::SeqCst) == STOPPED {
+            return Err("The relay is shutting down".into());
+        }
         Ok(open)
     }
 
     async fn open_locked(&self, open: &mut Option<Open>) -> Result<(), String> {
-        // A reopen whose stop ended after a shutdown signal gets no replacement node.
-        self.running()?;
         let snapshot = self.0.settings.lock().await.snapshot();
         // The snapshot holds each value JSON-encoded, the form `markApplied` compares.
         let cfg = |key: &str| {
@@ -713,13 +708,6 @@ impl Relay {
         ));
         // `onstarting`: from here on a stop can close the host, also while it starts.
         *self.0.host.lock().unwrap() = Some(mirror.clone());
-        // `if (stopping) host.close()`: a shutdown that began during this open closes the host
-        // before it starts the backfill or the folder import. The shutdown reads the host after
-        // it sets its flag, so one of the two always closes it. `close_locked` reports a stop
-        // that failed: it gets this same close.
-        if self.0.shutting_down.load(Ordering::SeqCst) {
-            let _ = mirror.close().await;
-        }
         node.serve_search(search_serve(&media_check, global_search));
         let (done, started) = tokio::sync::watch::channel(false);
         let replication = self
@@ -827,7 +815,11 @@ impl Relay {
     }
 
     /// The node keeps serving until the plugins have stopped.
-    async fn close_locked(&self, open: &mut Option<Open>) {
+    async fn close_locked(
+        &self,
+        open: &mut Option<Open>,
+        stopped_host: Option<&Arc<MirrorHost<CoreNode>>>,
+    ) {
         let Some(Open {
             node,
             acquirer,
@@ -840,8 +832,8 @@ impl Relay {
         else {
             return;
         };
-        if let Err(error) = mirror.close().await {
-            log("mirror close failed", json!({ "error": error.to_string() }));
+        if !stopped_host.is_some_and(|host| Arc::ptr_eq(host, &mirror)) {
+            mirror.close().await;
         }
         // `await mirrorStarting`: the closed host starts nothing more, and a folder import in
         // flight ends between files.
@@ -872,9 +864,8 @@ impl Relay {
     }
 
     async fn reopen_locked(&self, open: &mut Option<Open>) -> Result<(), String> {
-        self.close_locked(open).await;
+        self.close_locked(open, None).await;
         let result = self.open_locked(open).await;
-        // A reopen that a shutdown refused is not a reopen that failed.
         if let Err(error) = &result
             && self.running().is_ok()
         {
@@ -896,14 +887,9 @@ impl Relay {
         if open.is_some() || self.running().is_err() {
             return;
         }
-        // A step that a shutdown signal refused is not a step that failed.
         if let Err(error) = self.open_locked(&mut open).await {
-            if self.running().is_ok() {
-                log("restart recovery failed", json!({ "error": error }));
-            }
-        } else if let Err(error) = self.apply_guard().await
-            && self.running().is_ok()
-        {
+            log("restart recovery failed", json!({ "error": error }));
+        } else if let Err(error) = self.apply_guard().await {
             log("private guard failed to start", json!({ "error": error }));
         }
     }
@@ -918,10 +904,8 @@ impl Relay {
         Ok(())
     }
 
-    /// `state.applySettings(changed)`: live settings apply in place; any other change reopens.
-    /// A live change that had to wait (for the directory, for the plugins, for the cast
-    /// controller) and goes on after a shutdown signal ends there: it starts no plugin run and
-    /// nothing else, and the saved value applies at the next start.
+    /// `state.applySettings(changed)`: live settings apply in place; any other change reopens
+    /// the node.
     async fn apply_settings(&self, changed: Vec<String>) -> Result<(), String> {
         let mut open = self.turn().await?;
         let live = {
@@ -966,7 +950,6 @@ impl Relay {
         if has(&["directory"]) {
             let sources = node.list_sources().await;
             self.sync_directory(&node, &sources).await?;
-            self.running()?;
         }
         // `await mirrorStarting`: these changes go to the plugins, which must have started.
         let convert = has(&["rechunk"]) && js_truthy(&self.cfg("rechunk").await);
@@ -984,8 +967,6 @@ impl Relay {
             ])
         {
             wait_started(started).await;
-            // A shutdown closes the host under this wait.
-            self.running()?;
         }
         if convert {
             let mirror = mirror.clone();
@@ -1023,7 +1004,6 @@ impl Relay {
         }
         if has(&["lan", "lanHost"]) {
             self.refresh_cast_lan().await;
-            self.running()?;
             let lan = match js_truthy(&self.cfg("lan").await) {
                 true => match self.lan_host(&self.cfg("lanHost").await) {
                     Some(host) => Some(
@@ -1916,11 +1896,11 @@ mod tests {
     use super::*;
     use futures_util::FutureExt;
 
-    /// An admitted guard step keeps the lifecycle turn through its settings wait and reports the
-    /// settings error it then finds, even though a shutdown has begun. Only the refusal at
-    /// admission is the quiet, successful no-attempt.
+    /// `serial(applyGuard)`: a guard step asked for before a shutdown runs when its turn comes
+    /// and reports the settings error it then finds; a step asked for after the shutdown refuses
+    /// at once with the shutdown error, which the startup logs like any other failure.
     #[tokio::test]
-    async fn an_admitted_guard_step_reports_its_error_after_a_shutdown_starts() {
+    async fn a_queued_guard_step_finishes_and_a_new_one_refuses_after_a_shutdown() {
         let storage = tempfile::tempdir().expect("a temporary storage folder");
         let env = HashMap::from([
             ("PEARTUBE_API_HOST".to_owned(), "127.0.0.1".to_owned()),
@@ -1938,52 +1918,47 @@ mod tests {
             .await
             .expect("the API listens on loopback");
 
-        let reports: Arc<Mutex<Vec<(String, Value)>>> = Arc::new(Mutex::new(Vec::new()));
-        // Hold the settings without changing them: the admitted guard step stops at its first
-        // setting read, with the lifecycle turn still in hand.
+        // Hold the settings without changing them: the first guard step stops at its first
+        // setting read, with the lifecycle turn still in hand. The second is in line behind it.
         let settings = relay.0.settings.lock().await;
-        let sink = reports.clone();
-        let mut admitted = std::pin::pin!(relay.start_guard(move |message, fields| {
-            sink.lock().unwrap().push((message.to_owned(), fields));
-        }));
+        let mut admitted = std::pin::pin!(relay.start_guard());
         assert!(admitted.as_mut().now_or_never().is_none());
+        let mut queued = std::pin::pin!(relay.start_guard());
+        assert!(queued.as_mut().now_or_never().is_none());
         assert!(
             relay.0.open.try_lock().is_err(),
             "the admitted step holds the lifecycle turn"
         );
 
-        // One poll sets the shutdown flag, then waits for the turn that the step holds.
+        // One poll sets the shutdown flag, then waits for the turn that the steps hold.
         let mut shutdown = std::pin::pin!(relay.shutdown());
         assert!(shutdown.as_mut().now_or_never().is_none());
         assert!(relay.running().is_err());
 
-        // A new step refuses at once while the turn is held: it does not wait, and it reports
-        // nothing.
-        let mut refused = std::pin::pin!(
-            relay.start_guard(|_, _| { panic!("a refused guard startup must not report") })
-        );
-        assert!(
-            refused.as_mut().now_or_never().is_some(),
-            "a refused guard startup completes without waiting"
+        // A step asked for after the shutdown refuses at once, without waiting for the turn.
+        let mut refused = std::pin::pin!(relay.start_guard());
+        assert_eq!(
+            refused.as_mut().now_or_never(),
+            Some(Err("The relay is shutting down".to_owned())),
+            "a step asked for after the shutdown did not refuse at once"
         );
         assert!(relay.0.open.try_lock().is_err());
 
-        // Released settings let the admitted step read the equal guard and peer ports and report
-        // the configuration error, not a refusal.
+        // Released settings let both admitted steps read the equal guard and peer ports and
+        // report the configuration error, not a refusal.
         drop(settings);
-        tokio::time::timeout(std::time::Duration::from_secs(5), admitted.as_mut())
-            .await
-            .expect("the admitted guard step completes");
+        for step in [&mut admitted, &mut queued] {
+            let error = tokio::time::timeout(std::time::Duration::from_secs(5), step.as_mut())
+                .await
+                .expect("an admitted guard step completes")
+                .expect_err("the equal ports do not start a guard");
+            assert_eq!(
+                error,
+                "privateGuardPort: use a different port from the peer port"
+            );
+        }
         tokio::time::timeout(std::time::Duration::from_secs(5), shutdown.as_mut())
             .await
             .expect("the shutdown completes");
-        let reports = reports.lock().unwrap();
-        assert_eq!(reports.len(), 1, "the admitted step reports exactly once");
-        let (message, fields) = &reports[0];
-        assert_eq!(message.as_str(), "private guard failed to start");
-        assert_eq!(
-            *fields,
-            serde_json::json!({ "error": "privateGuardPort: use a different port from the peer port" })
-        );
     }
 }

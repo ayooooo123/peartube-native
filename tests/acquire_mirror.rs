@@ -1977,7 +1977,7 @@ async fn mirror_host_matches_the_app() {
             .unwrap()
             .insert("result".into(), result);
         traces.insert("backfill".into(), trace);
-        harness.host.close().await.unwrap();
+        harness.host.close().await;
     }
 
     {
@@ -2014,7 +2014,7 @@ async fn mirror_host_matches_the_app() {
             .unwrap()
             .insert("result".into(), result);
         traces.insert("feed".into(), trace);
-        harness.host.close().await.unwrap();
+        harness.host.close().await;
     }
 
     {
@@ -2047,7 +2047,7 @@ async fn mirror_host_matches_the_app() {
             .unwrap()
             .insert("result".into(), result);
         traces.insert("manifest".into(), trace);
-        harness.host.close().await.unwrap();
+        harness.host.close().await;
     }
 
     {
@@ -2089,7 +2089,7 @@ async fn mirror_host_matches_the_app() {
             .unwrap()
             .insert("runs".into(), json!([first, second, third]));
         traces.insert("watch".into(), trace);
-        harness.host.close().await.unwrap();
+        harness.host.close().await;
     }
 
     {
@@ -2137,7 +2137,7 @@ async fn mirror_host_matches_the_app() {
             .unwrap()
             .insert("result".into(), result);
         traces.insert("rechunk".into(), trace);
-        harness.host.close().await.unwrap();
+        harness.host.close().await;
     }
 
     {
@@ -2151,7 +2151,7 @@ async fn mirror_host_matches_the_app() {
         let mut trace = harness.trace();
         trace.as_object_mut().unwrap().insert("error".into(), error);
         traces.insert("list".into(), trace);
-        harness.host.close().await.unwrap();
+        harness.host.close().await;
     }
 
     compare(&Value::Object(traces), &oracle);
@@ -2170,7 +2170,6 @@ mod library {
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::Duration;
 
-    use peartube_native::mirror::close::{CloseError, Closing};
     use peartube_native::mirror::{
         Ctx, LocalMirrorFiles, MirrorConfig, MirrorError, MirrorHost, MirrorOptions, MirrorPlugin,
         MirrorProvider, ProviderFuture, SoulseekSettings,
@@ -2327,98 +2326,110 @@ mod library {
             Box::pin(async { Ok(Value::Null) })
         }
 
-        fn stop(&self) -> peartube_native::mirror::close::Stop<'_> {
-            Box::pin(async {
-                tokio::time::sleep(Duration::from_millis(20)).await;
-                Ok(())
-            })
+        fn stop<'a>(&'a self) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
+            Box::pin(async { tokio::time::sleep(Duration::from_millis(20)).await })
         }
     }
 
-    #[derive(Default)]
-    struct SavedCloses {
-        early: Vec<Closing>,
-        late: Option<Closing>,
-    }
-
-    struct StopProbe {
-        name: String,
+    /// A plugin registered before the others whose stop is held until the test releases it.
+    struct HeldStop {
         release: tokio::sync::watch::Receiver<bool>,
-        started: Arc<std::sync::Mutex<Vec<String>>>,
-        finished: Arc<std::sync::Mutex<Vec<String>>>,
-        host: std::sync::Weak<MirrorHost<FakeNode>>,
-        from_stop: Arc<std::sync::Mutex<SavedCloses>>,
+        finished: Arc<std::sync::Mutex<Vec<&'static str>>>,
     }
 
-    impl MirrorPlugin<FakeNode> for StopProbe {
+    impl MirrorPlugin<FakeNode> for HeldStop {
         fn name(&self) -> &str {
-            &self.name
+            "held-stop"
         }
         fn run<'a>(&'a self, _: Value, _: &'a Ctx<FakeNode>) -> ProviderFuture<'a> {
             unreachable!()
         }
-        fn stop(&self) -> peartube_native::mirror::close::Stop<'_> {
-            let first = {
-                let mut started = self.started.lock().unwrap();
-                let first = !started.contains(&self.name);
-                started.push(self.name.clone());
-                first
-            };
-            if self.name == "reenter" && first {
-                let close = self.host.upgrade().unwrap().close();
-                self.from_stop.lock().unwrap().early.push(close);
-            }
-            if self.name == "throw" {
-                panic!("not async");
-            }
+        fn stop<'a>(&'a self) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
             Box::pin(async move {
-                if matches!(
-                    self.name.as_str(),
-                    "slow" | "late failure" | "reenter" | "late capture"
-                ) {
-                    self.release.clone().wait_for(|open| *open).await.unwrap();
-                }
-                if self.name.starts_with("early ") {
-                    // close() in this stop's first poll must still see the calling plugin; the
-                    // original handle is awaited here and a clone is left for the test.
-                    let close = self.host.upgrade().unwrap().close();
-                    self.from_stop.lock().unwrap().early.push(close.clone());
-                    close
-                        .await
-                        .expect("close() inside a stop reports no failure to that stop");
-                }
-                if self.name == "late capture" {
-                    // A close after the first poll is an outside call: save its handle, but do not
-                    // await it, so this stop settles and the early stops can resume.
-                    let close = self.host.upgrade().unwrap().close();
-                    self.from_stop.lock().unwrap().late = Some(close);
-                }
-                self.finished.lock().unwrap().push(self.name.clone());
-                match self.name.as_str() {
-                    "fail" => Err(MirrorError::with_status("disk gone", 507)),
-                    "late failure" => Err(MirrorError::plain("late failure")),
-                    "slow" | "reenter" | "late capture" | "early one" | "early two" => Ok(()),
-                    other => panic!("unknown stop {other}"),
-                }
+                self.release.clone().wait_for(|open| *open).await.unwrap();
+                self.finished.lock().unwrap().push("held-stop");
             })
         }
     }
 
-    fn stop_reason(error: &CloseError) -> Value {
-        let one = |e: &MirrorError| json!({ "message": e.message, "status": e.status });
-        match error {
-            CloseError::Plugin(e) => one(e),
-            CloseError::Several(errors) => json!({
-                "message": error.to_string(),
-                "errors": errors.iter().map(one).collect::<Vec<_>>(),
-            }),
+    /// A plugin after the held one: its stop must start while the held stop still waits.
+    struct LaterStop {
+        started: Arc<tokio::sync::Notify>,
+        finished: Arc<std::sync::Mutex<Vec<&'static str>>>,
+    }
+
+    impl MirrorPlugin<FakeNode> for LaterStop {
+        fn name(&self) -> &str {
+            "later-stop"
+        }
+        fn run<'a>(&'a self, _: Value, _: &'a Ctx<FakeNode>) -> ProviderFuture<'a> {
+            unreachable!()
+        }
+        fn stop<'a>(&'a self) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
+            Box::pin(async move {
+                self.finished.lock().unwrap().push("later-stop");
+                self.started.notify_one();
+            })
         }
     }
 
-    /// The app's host under `mirror-close.mjs`, run once for the tests that compare with it.
-    fn close_oracle() -> &'static Value {
-        static ORACLE: std::sync::OnceLock<Value> = std::sync::OnceLock::new();
-        ORACLE.get_or_init(|| js_trace("mirror-close.mjs"))
+    /// Its stop yields once, then calls `close` again and waits for it. A guard stops the stop
+    /// that the second close starts from calling close a third time, so the two calls cannot wait
+    /// for each other.
+    struct YieldingClose {
+        host: std::sync::Weak<MirrorHost<FakeNode>>,
+        reentered: std::sync::atomic::AtomicBool,
+        suspended: std::sync::mpsc::Sender<()>,
+        finished: Arc<std::sync::atomic::AtomicBool>,
+    }
+
+    impl MirrorPlugin<FakeNode> for YieldingClose {
+        fn name(&self) -> &str {
+            "yielding-close"
+        }
+        fn run<'a>(&'a self, _: Value, _: &'a Ctx<FakeNode>) -> ProviderFuture<'a> {
+            unreachable!()
+        }
+        fn stop<'a>(&'a self) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
+            Box::pin(async move {
+                if self.reentered.swap(true, Ordering::SeqCst) {
+                    return;
+                }
+                // One real suspension, so the marker proves the nested close starts after it.
+                let mut polled = false;
+                std::future::poll_fn(|cx| {
+                    if std::mem::replace(&mut polled, true) {
+                        std::task::Poll::Ready(())
+                    } else {
+                        cx.waker().wake_by_ref();
+                        std::task::Poll::Pending
+                    }
+                })
+                .await;
+                self.suspended.send(()).unwrap();
+                self.host.upgrade().unwrap().close().await;
+                self.finished.store(true, Ordering::SeqCst);
+            })
+        }
+    }
+
+    /// Counts how often its stop ran, so a second `close` can be told from the first.
+    struct CountingStop {
+        calls: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    impl MirrorPlugin<FakeNode> for CountingStop {
+        fn name(&self) -> &str {
+            "counting-stop"
+        }
+        fn run<'a>(&'a self, _: Value, _: &'a Ctx<FakeNode>) -> ProviderFuture<'a> {
+            unreachable!()
+        }
+        fn stop<'a>(&'a self) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
+            Box::pin(async move {
+                self.calls.fetch_add(1, Ordering::SeqCst);
+            })
+        }
     }
 
     async fn host_for_close(
@@ -2446,202 +2457,133 @@ mod library {
         )
     }
 
-    /// Two stops call close() in their first poll and await it, a third calls close() after its
-    /// stop resumes and leaves that handle unawaited, and a sibling fails late. The two that
-    /// called close wait only for the other stops; every outside caller and the saved late
-    /// handle get the sibling's failure, and the traffic listener detaches last.
+    /// The merged host starts every plugin's stop before it awaits any (app #581,
+    /// `d4d7d69ef`): a later plugin's stop must run while an earlier stop is still held.
     #[tokio::test]
-    async fn a_plugin_that_awaits_its_own_host_close_finishes_its_cleanup() {
-        use futures_util::FutureExt;
-
+    async fn close_starts_every_stop_before_it_waits_for_one() {
         let storage = tempfile::tempdir().unwrap();
-        let (detach, mut detached) = tokio::sync::oneshot::channel();
-        let host = host_for_close(storage.path(), move || detach.send(()).unwrap()).await;
-        let started = Arc::new(std::sync::Mutex::new(Vec::new()));
-        let finished = Arc::new(std::sync::Mutex::new(Vec::new()));
-        let from_stop = Arc::new(std::sync::Mutex::new(SavedCloses::default()));
-        let (release, held) = tokio::sync::watch::channel(false);
-        for name in ["early one", "early two", "late capture", "late failure"] {
-            host.register(Arc::new(StopProbe {
-                name: name.into(),
-                release: held.clone(),
-                started: started.clone(),
-                finished: finished.clone(),
-                host: Arc::downgrade(&host),
-                from_stop: from_stop.clone(),
-            }));
-        }
-
-        // The first poll starts every stop. The early stops call close() in their own first poll
-        // and await it; the late stop waits for the release before it calls close().
-        let first = host.close();
-        let other = host.close();
-        assert!(
-            first.clone().now_or_never().is_none(),
-            "the first caller stays pending while the sibling is held"
-        );
-        let early = std::mem::take(&mut from_stop.lock().unwrap().early);
-        assert_eq!(
-            early.len(),
-            2,
-            "both early stops saved the close they await"
-        );
-        assert!(
-            other.clone().now_or_never().is_none(),
-            "the other caller stays pending while the sibling is held"
-        );
-        for handle in &early {
-            assert!(
-                (*handle).clone().now_or_never().is_none(),
-                "an early close waits for the siblings instead of returning success"
-            );
-        }
-        let mut starts = started.lock().unwrap().clone();
-        starts.sort();
-        assert_eq!(
-            starts,
-            ["early one", "early two", "late capture", "late failure"],
-            "every stop starts once"
-        );
-        let done = finished.lock().unwrap().clone();
-        assert!(
-            done.is_empty(),
-            "no stop finishes while the sibling is held: {done:?}"
-        );
-        assert!(
-            matches!(
-                detached.try_recv(),
-                Err(tokio::sync::oneshot::error::TryRecvError::Empty)
-            ),
-            "the listener detaches only after the close"
-        );
-
-        release.send_replace(true);
-        // One deadline for the whole wait: a stop that waits for itself must not hang the test.
-        let (first, other, late) = tokio::time::timeout(Duration::from_secs(2), async {
-            let (first, other) = tokio::join!(first, other);
-            let late = from_stop
-                .lock()
-                .unwrap()
-                .late
-                .take()
-                .expect("the late stop saved the outside close");
-            for handle in early {
-                handle
-                    .await
-                    .expect("the early close reports no failure to its stop");
+        let traffic = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let host = host_for_close(storage.path(), {
+            let traffic = traffic.clone();
+            move || {
+                traffic.fetch_add(1, Ordering::SeqCst);
             }
-            (first, other, late.await)
+        })
+        .await;
+        let (release, held) = tokio::sync::watch::channel(false);
+        let started = Arc::new(tokio::sync::Notify::new());
+        let finished = Arc::new(std::sync::Mutex::new(Vec::new()));
+        host.register(Arc::new(HeldStop {
+            release: held,
+            finished: finished.clone(),
+        }));
+        host.register(Arc::new(LaterStop {
+            started: started.clone(),
+            finished: finished.clone(),
+        }));
+        let closing = host.close();
+        tokio::pin!(closing);
+        let mut close_done = false;
+        tokio::time::timeout(Duration::from_secs(5), async {
+            tokio::select! {
+                _ = &mut closing => close_done = true,
+                _ = started.notified() => {}
+            }
         })
         .await
-        .expect("the close finishes once the sibling is released");
-        let expected = json!({ "message": "late failure", "status": null });
-        for (caller, result) in [("first", first), ("other", other), ("saved late", late)] {
-            let error = result.expect_err("the sibling's failure reaches every outside caller");
-            assert_eq!(stop_reason(&error), expected, "{caller} caller");
-        }
-        let mut done = finished.lock().unwrap();
-        assert_eq!(done.len(), 4, "every stop finishes once: {done:?}");
-        let (noncallers, cleanups) = done.split_at_mut(2);
-        noncallers.sort_unstable();
+        .expect("the later stop starts while the held stop waits");
+        assert!(!close_done, "the close waits for the held stop");
         assert_eq!(
-            noncallers,
-            ["late capture", "late failure"],
-            "the held stops finish before the stops that waited"
+            *finished.lock().unwrap(),
+            ["later-stop"],
+            "the later stop ran to its end; the held stop did not"
         );
-        cleanups.sort_unstable();
         assert_eq!(
-            cleanups,
-            ["early one", "early two"],
-            "the stops that waited clean up last"
+            traffic.load(Ordering::SeqCst),
+            0,
+            "the traffic gate waits for every stop"
         );
-        detached
-            .try_recv()
-            .expect("the host detached its traffic listener before the close returned");
+        release.send_replace(true);
+        tokio::time::timeout(Duration::from_secs(5), closing)
+            .await
+            .expect("the close ends once the held stop is released");
+        assert_eq!(
+            *finished.lock().unwrap(),
+            ["later-stop", "held-stop"],
+            "both stops finish"
+        );
+        assert_eq!(traffic.load(Ordering::SeqCst), 1, "the gate runs once");
+        host.close().await;
+        assert_eq!(
+            traffic.load(Ordering::SeqCst),
+            1,
+            "the gate was already taken; a later close does not run it again"
+        );
     }
 
-    /// Compare the host before the slow stop is released and once close returns. The app runs
-    /// its real gate; here the relay's detach/stop callback records when it releases that resource.
-    /// A promise settles with nobody awaiting it, so the Rust close must finish the same way.
-    #[tokio::test]
-    async fn shutdown_matches_all_settled_on_the_app() {
-        use futures_util::{FutureExt, future::join_all};
-        use std::sync::{Mutex, atomic::AtomicBool};
-        for case in close_oracle()["traces"].as_array().unwrap() {
-            let storage = tempfile::tempdir().unwrap();
-            let listening = Arc::new(AtomicBool::new(true));
-            let released = Arc::new(tokio::sync::Notify::new());
-            let host = host_for_close(storage.path(), {
-                let (live, released) = (listening.clone(), released.clone());
-                move || {
-                    live.store(false, Ordering::SeqCst);
-                    released.notify_one();
-                }
+    /// A stop that calls `close` again after it suspends still finishes: the second call runs
+    /// each plugin's stop anew, so it does not wait for the stop that called it. The plugin's
+    /// guard stops a third call. The runtime runs on its own thread, so a close that does not
+    /// settle fails by the wall clock instead of blocking the test thread.
+    #[test]
+    fn a_stop_that_calls_close_after_a_yield_finishes() {
+        let storage = tempfile::tempdir().unwrap();
+        let traffic = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let finished = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let (suspended, suspended_rx) = std::sync::mpsc::channel();
+        let (settled, settled_rx) = std::sync::mpsc::channel();
+        let path = storage.path().to_path_buf();
+        let closer = {
+            let traffic = traffic.clone();
+            let finished = finished.clone();
+            let calls = calls.clone();
+            std::thread::spawn(move || {
+                let runtime = tokio::runtime::Builder::new_current_thread()
+                    .enable_time()
+                    .build()
+                    .unwrap();
+                runtime.block_on(async move {
+                    let host = host_for_close(&path, move || {
+                        traffic.fetch_add(1, Ordering::SeqCst);
+                    })
+                    .await;
+                    host.register(Arc::new(YieldingClose {
+                        host: Arc::downgrade(&host),
+                        reentered: std::sync::atomic::AtomicBool::new(false),
+                        suspended,
+                        finished,
+                    }));
+                    host.register(Arc::new(CountingStop { calls }));
+                    host.close().await;
+                    settled.send(()).unwrap();
+                });
             })
-            .await;
-            let (release, gate) = tokio::sync::watch::channel(false);
-            let started = Arc::new(Mutex::new(Vec::new()));
-            let finished = Arc::new(Mutex::new(Vec::new()));
-            let from_stop = Arc::new(Mutex::new(SavedCloses::default()));
-            for n in case["stops"].as_array().unwrap() {
-                host.register(Arc::new(StopProbe {
-                    name: n.as_str().unwrap().into(),
-                    release: gate.clone(),
-                    started: started.clone(),
-                    finished: finished.clone(),
-                    host: Arc::downgrade(&host),
-                    from_stop: from_stop.clone(),
-                }));
-            }
-            let first = host.close();
-            let at_return = started.lock().unwrap().clone();
-            let mut calls = vec![first, host.close()];
-            calls.append(&mut from_stop.lock().unwrap().early);
-            let settled = calls
-                .iter()
-                .filter(|c| (**c).clone().now_or_never().is_some())
-                .count();
-            assert_eq!(
-                json!({ "settled": settled, "listening": listening.load(Ordering::SeqCst),
-                "started": *started.lock().unwrap(), "atReturn": at_return }),
-                case["before"],
-                "before release: {}",
-                case["stops"]
-            );
-            release.send_replace(true);
-            // No caller polls its handle between the release and the end of the close.
-            tokio::time::timeout(Duration::from_secs(5), released.notified())
-                .await
-                .expect("the close finishes with no caller waiting");
-            let mut results = tokio::time::timeout(Duration::from_secs(5), join_all(calls))
-                .await
-                .expect("every caller gets the result");
-            results.push(host.close().await);
-            let same = results.iter().all(|r| r == &results[0]);
-            assert_eq!(json!(same), case["same"]);
-            assert_eq!(json!(results.len()), case["callers"]);
-            assert_eq!(
-                json!(
-                    results
-                        .iter()
-                        .map(|result| result.as_ref().err().map(stop_reason))
-                        .collect::<Vec<_>>()
-                ),
-                case["results"],
-                "each caller's result: {}",
-                case["stops"]
-            );
-            assert_eq!(json!(*started.lock().unwrap()), case["started"]);
-            assert_eq!(json!(*finished.lock().unwrap()), case["finished"]);
-            assert_eq!(json!(listening.load(Ordering::SeqCst)), case["listening"]);
-        }
+        };
+        suspended_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("the plugin did not suspend before its nested close");
+        settled_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("outer close did not settle after the plugin awaited host.close()");
+        assert!(
+            finished.load(Ordering::SeqCst),
+            "the stop ran to its end after the second close"
+        );
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            2,
+            "the second close ran every stop again"
+        );
+        assert_eq!(traffic.load(Ordering::SeqCst), 1, "the gate runs once");
+        closer.join().unwrap();
     }
 
-    /// A host that is closed before its startup starts neither the backfill nor the folder
-    /// import, as the app's host that is closed inside `onstarting`. The relay closes a host this
-    /// way when a shutdown began while the node was opening.
+    /// Main runs the startup backfill even on a host that was closed before `startup`; the work
+    /// after it checks the closed host and does not start. (`src/mirror.js` at main: the
+    /// `channel-backfill` run is outside the `!closed` checks.)
     #[tokio::test]
-    async fn a_host_closed_before_its_startup_starts_nothing() {
+    async fn a_host_closed_before_startup_still_backfills() {
         let storage = tempfile::tempdir().unwrap();
         let import = tempfile::tempdir().unwrap();
         std::fs::write(import.path().join("Clip.mp4"), vec![1u8; 4096]).unwrap();
@@ -2662,7 +2604,7 @@ mod library {
                 ..MirrorOptions::default()
             },
         );
-        let closing = host.close();
+        host.close().await;
         host.startup().await;
         let rows = host.list();
         let runs = |name: &str| {
@@ -2670,11 +2612,13 @@ mod library {
                 .find(|row| row["name"] == name)
                 .map(|row| row["runs"].clone())
         };
+        assert_eq!(runs("channel-backfill"), Some(json!(1)), "the backfill ran");
         assert_eq!(
-            json!({ "backfill": runs("channel-backfill"), "folder": runs("watch-dir") }),
-            close_oracle()["closedAtStart"]
+            runs("watch-dir"),
+            Some(json!(0)),
+            "the folder import did not start on the closed host"
         );
-        closing.await.expect("no stop fails");
+        host.close().await;
     }
 
     /// One session of the scenario: the mirror host on real files in a temporary folder.
@@ -2857,13 +2801,13 @@ mod library {
                         .collect()
                 };
                 let mut closing = Box::pin(host.close());
-                let done =
-                    std::future::poll_fn(|cx| std::task::Poll::Ready(closing.as_mut().poll(cx)))
-                        .await;
+                let done = std::future::poll_fn(|cx| {
+                    std::task::Poll::Ready(closing.as_mut().poll(cx).is_ready())
+                })
+                .await;
                 let at_once = view();
-                match done {
-                    std::task::Poll::Ready(result) => result.unwrap(),
-                    std::task::Poll::Pending => closing.await.unwrap(),
+                if !done {
+                    closing.await;
                 }
                 closed = true;
                 json!({ "atOnce": at_once, "closed": view() })
@@ -2965,7 +2909,7 @@ mod library {
             put(json!(i), value);
         }
         if !closed {
-            host.close().await.unwrap();
+            host.close().await;
         }
         if read_only {
             set_mode(&import, 0o755);

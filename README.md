@@ -40,24 +40,16 @@ not contact the picture host. The `youtube` plugin uses `ubit` to search and to 
 audio. Both providers wait for a running import before placing any files. Cancelling a
 waiting save leaves the folder unchanged. The owner can see the outcome in `/v1/jobs`.
 
-An open, a restart, a settings change and the reopen of a recovery run one at a time. Each
-one runs to its end after it starts, also when the client that asked for it hangs up. A
-recovery claims its channel outside that order: a claim that no peer answers does not hold
-up a restart or a stop. The plugins start after the node answers. A restart or a stop
-during the import of a folder waits only for the file in the import, and the next open
-imports the rest. A stop signal during the open closes the plugins before they start any
-work, then the node, and the process exits with code 0. After the signal, a step that
-waited its turn does not begin. A live settings change that goes on after a wait ends
-there, and the saved value applies at the next start. A shutdown that takes more than
-3 s exits with code 1. The relay does not log a guard start that it refused. If it had
-already tried to start the guard, it logs the reason for failure even after the signal.
-
-When the relay restarts or shuts down, the first call to close starts every plugin's stop.
-A plugin that calls `close()` before its stop first yields waits for the plugins that did
-not make such a call. That handle returns no error, even if another plugin fails. All
-other callers wait for every stop and for the host to release its traffic gate. They get
-the original error for one failed stop, or all errors in registration order. A plugin
-must not await its host's `close()` after its first yield: it would wait for itself.
+An open, a restart, a settings change and the reopen of a recovery run one at a time. The
+plugins start after the node answers, on their own task, so a folder import does not hold the
+lifecycle lock. A restart or a stop closes the plugin host before the node. As app PR #581
+requires, the host marks itself closed and starts every built-in plugin's stop before it
+awaits any, so a save that waits for the import folder ends as a cancel instead of waiting
+out its limit. A startup import ends between files, as the app's does: a restart waits for the
+file in flight, and the next startup imports the rest. The startup backfill runs even when
+the host closed before it, as the app's does; the work after it checks the closed host. A
+guard step asked for after a shutdown signal refuses at once, and startup logs that refusal
+like any other; a step admitted before the signal can still run when its turn comes.
 
 `p2p-replicate` and `hiverelay-seed` share one `traffic` gate
 (`peartube/bulk-busy`, `hiverelayUploadMbps`). `hiverelay-seed`
@@ -71,9 +63,8 @@ The `privateGuard` setting runs the guard forwarder in-process on its own HyperD
 (JS spawns `bin/private-relay.js`); `PEARTUBE_PRIVATE_RELAY` (or
 `PEARTUBE_PRIVATE_RELAY_PORT`) makes the same binary the standalone Corestore-free guard
 of `bin/private-relay.js`: no storage folder, no Corestore, and channel or content flags
-are refused. A guard whose fixed port another socket holds does not start: the relay logs
-`private guard failed to start` and runs without it, and a restart starts it after the port
-is free. In that state the app's guard takes another port and reports the configured one.
+are refused. A guard whose fixed port another socket holds does not start at startup: the
+relay logs `private guard failed to start` and runs without it.
 The cast stack (the app's `createCastController`) opens with the node and
 answers `/v1/cast/*` from it, closing with a stop or reopen. `status.lan` reports
 `{host, port}`, as JS does. Not yet ported: JS plugins from `<storage>/plugins`.
@@ -152,7 +143,6 @@ identified below rather than presented as live network parity.
 - `tests/art_identify.rs`: JS artwork and identification results against scripted HTTP and fake `ubit`. An audio save through the embedded SDK must leave the relay's settings folder as it was.
 - `tests/http.rs`: responses from the app and Rust API, including owner-only pictures, search errors and exact event frames. A client must receive the fast source's event before it releases the slow source.
 - `tests/acquire_mirror.rs`: calls and results from both acquirers and mirror hosts. The library sessions compare album imports on real files, pinned names and artists, saved file hashes by relative path, cancellation during an import and each source's results before and after its deadline.
-  `tests/js/mirror-close.mjs` also runs the app with a real node and a held plugin stop. The comparison checks callers that close together, including a stop that calls close again. It checks when the traffic listener goes away and which failure reasons reach each caller.
 - `tests/soulseek_provider.rs`: the app's own `createSoulseekPlugin` beside the Rust provider on one scripted Soulseek client and clock, with real files: every call, job view and folder listing compared as JSON text.
 - `tests/youtube_provider.rs`: the app and Rust search, save, cancel and fetch pictures against the same scripted extractor and clock. The test compares jobs, skipped tracks and files on disk without depending on live YouTube availability.
 - `tests/apply.rs`: JS apply operations, host calls and view bytes on a real Hyperbee.
@@ -369,6 +359,9 @@ tested and rejected for lack of repeatable wins. No ACK, pacing or wire changes.
 - Soulseek search hits that tie on every other key are listed by name in the CLDR root collation (`providers/soulseek/rank.rs`): the order the app's `localeCompare` gives on a host with an English or no locale. The app takes the host's locale, so where that reorders letters (with `LC_ALL=sv_SE.UTF-8`, Node and Bare put `ä` after `z`) such ties come in another order, and `fixtures/soulseek-reference.json` does not regenerate equal on such a host.
 - `POST /v1/entries/remove` makes one pass over the entries it picked. The app's loop allows four, but each file is settled by its first try, so its later passes find nothing to do.
 - A saved source (`sources.json`) that is not a channel link or a 64-hex key stops the app's node from opening, with `Invalid PearTube URI or 64-hex key`: the app's relay does not start. The Rust node opens without that source and reports nothing.
+- Relay restart and shutdown: a restart reopens the node and applies the guard; an ordinary failure answers `400` with the reason. At shutdown the Rust relay stops the host visible at the signal before it waits for the lifecycle lock. A host that a queued open or reopen publishes later is stopped only on shutdown’s turn. A long import on that host can reach the 3 s deadline; the relay logs `relay shutdown timed out` and exits 1. The app gives lifecycle work up to 2 s before it stops the current host. A shutdown alone does not stop the same host twice, but a concurrent restart can also stop that host. A step that was already queued can still run; a new request is refused. Rust serializes the reopen of a recovery, while the app also serializes the claim.
+- App #586 keeps a node close failure. Later restarts answer `500`, a settings change that reopens the node reports the reason as a warning, and shutdown exits 1. The Rust channel close discards the Autobee error. `CoreNode::close()` finishes closing the store and returns `Ok(())`, so the relay has no corresponding error to report.
+- Plugin close: each call starts all stops again. The app’s `Promise.all` rejects on the first rejected stop and skips `traffic.stop()`; the relay discards that rejection. Rust does not run user JS plugins. Its built-in stops return `()`, so the host waits for all of them and releases the traffic gate once.
 
 ## License
 

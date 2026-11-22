@@ -205,10 +205,9 @@ impl MirrorPlugin<CoreNode> for MediaCheck {
         })
     }
 
-    fn stop(&self) -> crate::mirror::close::Stop<'_> {
+    fn stop<'a>(&'a self) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
         Box::pin(async move {
             self.closed.store(true, Ordering::Release);
-            Ok(())
         })
     }
 

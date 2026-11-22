@@ -731,21 +731,10 @@ async fn importing(
     tokio::task::JoinHandle<Result<Value, String>>,
     SocketAddr,
 ) {
-    importing_with(dir, films, env_importing(dir)).await
-}
-
-/// `importing`, for a relay with more settings than `env_importing` gives.
-async fn importing_with(
-    dir: &std::path::Path,
-    films: &[usize],
-    env: HashMap<String, String>,
-) -> (
-    Relay,
-    tokio::task::JoinHandle<Result<Value, String>>,
-    SocketAddr,
-) {
     import_folder(dir, films);
-    let relay = Relay::listen(env).await.expect("relay listens");
+    let relay = Relay::listen(env_importing(dir))
+        .await
+        .expect("relay listens");
     let addr = relay.addresses()[0];
     let opening = tokio::spawn({
         let relay = relay.clone();
@@ -753,29 +742,6 @@ async fn importing_with(
     });
     listed_at_least(addr, 1).await;
     (relay, opening, addr)
-}
-
-/// Waits until the relay has saved `key` as `value` in `<dir>/data/settings.json`, and a moment
-/// more. The relay saves a change and then puts it in line to apply, so from then on the change
-/// is applying or it waits its turn.
-async fn saved(dir: &std::path::Path, key: &str, value: Value) {
-    let file = dir.join("data").join("settings.json");
-    let asked = std::time::Instant::now();
-    loop {
-        let settings: Value = std::fs::read_to_string(&file)
-            .ok()
-            .and_then(|text| serde_json::from_str(&text).ok())
-            .unwrap_or(Value::Null);
-        if settings[key] == value {
-            break;
-        }
-        assert!(
-            asked.elapsed() < Duration::from_secs(20),
-            "the relay never saved {key}"
-        );
-        tokio::time::sleep(Duration::from_millis(2)).await;
-    }
-    tokio::time::sleep(Duration::from_millis(40)).await;
 }
 
 /// Opens `<dir>/data` again, without the import folder. It fails when a stopped relay still holds
@@ -904,57 +870,6 @@ async fn a_shutdown_ends_the_startup_import_under_a_setting_that_waits_for_the_p
     assert!(
         left.len() < FILMS.len(),
         "the shutdown waited for the whole import: {left:?}"
-    );
-}
-
-/// Once a shutdown has begun, a lifecycle step that waited its turn does not begin, as in
-/// `bin/relay.js` (`serial`). A live setting for the plugins holds the lifecycle while it waits
-/// for them, and a second change waits behind it. The second change turns the `directory`
-/// setting on, which lists the followed channel and records that in `directory.json`. After the
-/// shutdown that record is still empty: the saved value applies at the next start.
-#[tokio::test(flavor = "multi_thread")]
-async fn a_change_that_waited_its_turn_does_not_begin_after_a_shutdown() {
-    let dir = tempfile::tempdir().unwrap();
-    // A followed channel that no peer holds.
-    let mut env = env_importing(dir.path());
-    env.insert("PEARTUBE_SOURCES".into(), "ab".repeat(32));
-    let (relay, opening, addr) = importing_with(dir.path(), &FILMS, env).await;
-    let record = dir.path().join("data").join("directory.json");
-    let listed_by_the_relay = || -> Value {
-        serde_json::from_str(&std::fs::read_to_string(&record).unwrap_or_default())
-            .unwrap_or(Value::Null)
-    };
-    assert_eq!(
-        listed_by_the_relay(),
-        json!([]),
-        "the relay lists no channel while the setting is off"
-    );
-
-    let first = begin(addr, "PUT", "/v1/settings", r#"{"replicateMbps":5}"#);
-    saved(dir.path(), "replicateMbps", json!(5)).await;
-    let behind = begin(addr, "PUT", "/v1/settings", r#"{"directory":true}"#);
-    saved(dir.path(), "directory", json!(true)).await;
-
-    relay.shutdown().await;
-    assert_eq!(
-        relay.status().await,
-        None,
-        "no node is left after the shutdown"
-    );
-    let after_the_shutdown = listed_by_the_relay();
-    drop((first, behind));
-    let _ = opening.await.unwrap();
-    // The first change still waited for the plugins when the shutdown came: the import had not
-    // ended, so the second change did not have its turn before the shutdown.
-    let left = left_in(dir.path(), "a shutdown with a change in line").await;
-    assert!(
-        left.len() < FILMS.len(),
-        "the import ended before the shutdown, so the second change was not in line: {left:?}"
-    );
-    assert_eq!(
-        after_the_shutdown,
-        json!([]),
-        "the change that waited its turn began after the shutdown"
     );
 }
 
@@ -1094,37 +1009,8 @@ async fn a_stop_while_the_node_opens_closes_it() {
     }
 }
 
-/// A stop that arrives while the node opens closes the plugin host as soon as it exists, as
-/// `bin/relay.js` does in `onstarting`: the folder import never starts. The test runs on one
-/// thread and without the channel backfill, so that the task that starts the plugins reaches the
-/// folder import before the shutdown gets the node: a host that is still open then has its first
-/// film in the import before its close.
-#[tokio::test]
-async fn a_stop_while_the_node_opens_starts_no_import() {
-    let dir = tempfile::tempdir().unwrap();
-    import_folder(dir.path(), &TWO_FILMS);
-    let mut env = env_importing(dir.path());
-    env.insert("PEARTUBE_PUBLISH_CHANNEL".into(), "0".into());
-    let store = dir.path().join("data").join("corestore");
-    let stop = async {
-        while !store.exists() {
-            tokio::time::sleep(Duration::from_micros(200)).await;
-        }
-    };
-    let code = peartube_native::relay::run(env, stop).await;
-    assert_eq!(code, 0);
-    // The host saves a row here for every file it imports.
-    let ledger = std::fs::read_to_string(dir.path().join("data").join("mirror-watch.json"))
-        .unwrap_or_default();
-    let rows: Value = serde_json::from_str(&ledger).unwrap_or(Value::Null);
-    assert!(
-        rows.as_object().is_none_or(|rows| rows.is_empty()),
-        "the folder import started: {ledger}"
-    );
-}
-
 /// The process itself: a SIGTERM while the node opens ends it with exit code 0, as a clean stop,
-/// not by the signal. A relay that was told to stop starts no private guard.
+/// not by the signal.
 #[cfg(unix)]
 #[tokio::test(flavor = "multi_thread")]
 async fn the_relay_process_stops_cleanly_on_a_signal_while_its_node_opens() {
@@ -1166,95 +1052,6 @@ async fn the_relay_process_stops_cleanly_on_a_signal_while_its_node_opens() {
         "the relay ended with {:?}; it printed: {printed}",
         output.status
     );
-    assert!(
-        !printed.contains("private guard failed to start"),
-        "the relay tried to start its guard after the signal: {printed}"
-    );
-}
-
-/// A child process that is killed when the test ends before the process does.
-#[cfg(unix)]
-struct Running(Option<std::process::Child>);
-
-#[cfg(unix)]
-impl Drop for Running {
-    fn drop(&mut self) {
-        if let Some(mut child) = self.0.take() {
-            let _ = child.kill();
-            let _ = child.wait();
-        }
-    }
-}
-
-/// The process itself: the startup's guard step and several restarts wait their turn, and a
-/// SIGTERM refuses them there. The relay does not report a guard that failed to start, as
-/// `bin/relay.js` does not, nor a restart that failed, and it ends with exit code 0.
-///
-/// The first open waits for the plugins to start. The first restart closes the plugin host,
-/// which ends that wait, so the guard step gets in line behind the restarts that were asked for
-/// before. The signal comes when a restart has taken the node away.
-#[cfg(unix)]
-#[tokio::test(flavor = "multi_thread")]
-async fn the_relay_process_reports_no_failure_for_steps_that_a_signal_refused() {
-    use std::process::{Command, Stdio};
-
-    let dir = tempfile::tempdir().unwrap();
-    import_folder(dir.path(), &FILMS);
-    let port = free_port();
-    let mut env = env_importing(dir.path());
-    env.insert("PEARTUBE_API_PORT".into(), port.to_string());
-    let mut relay = Running(Some(
-        Command::new(env!("CARGO_BIN_EXE_peartube-relay"))
-            .envs(&env)
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn()
-            .expect("relay process"),
-    ));
-    let pid = relay.0.as_ref().expect("the relay runs").id();
-    let addr = SocketAddr::from(([127, 0, 0, 1], port));
-    // The startup import is in a large film.
-    listed_at_least(addr, 1).await;
-
-    let restarts: Vec<TcpStream> = (0..8)
-        .map(|_| begin(addr, "POST", "/v1/restart", ""))
-        .collect();
-    // Between the close of a restart and its open the relay has no node, and it lists nothing.
-    let asked = std::time::Instant::now();
-    while tokio::task::spawn_blocking(move || listed(addr))
-        .await
-        .unwrap()
-        .is_none_or(|titles| !titles.is_empty())
-    {
-        assert!(
-            asked.elapsed() < Duration::from_secs(20),
-            "the first restart never took the node away"
-        );
-    }
-    let _ = Command::new("kill")
-        .arg("-TERM")
-        .arg(pid.to_string())
-        .status();
-    let process = relay.0.take().expect("the relay runs");
-    let output = tokio::task::spawn_blocking(move || process.wait_with_output())
-        .await
-        .unwrap()
-        .expect("the relay exits");
-    drop(restarts);
-    let printed = String::from_utf8_lossy(&output.stdout);
-    assert_eq!(
-        output.status.code(),
-        Some(0),
-        "the relay ended with {:?}; it printed: {printed}",
-        output.status
-    );
-    for report in ["private guard failed to start", "restart failed"] {
-        assert!(
-            !printed.contains(report),
-            "the relay reported a step that the signal refused ({report}): {printed}"
-        );
-    }
 }
 
 // ---------------------------------------------------------------- cast routes
