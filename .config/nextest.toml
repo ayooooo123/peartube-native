@@ -23,6 +23,14 @@ filter = '''
 '''
 test-group = "lan"
 
+# The pinned JS receiver advertises on the host LAN even with a private DHT.
+# It allows 3 s to stop. Run it last in the LAN group and verify that its pipes close.
+[[profile.ci.overrides]]
+filter = 'test(=this_controller_casts_to_the_apps_receiver_fixture)'
+test-group = "lan"
+priority = -10
+leak-timeout = { period = "5s", result = "fail" }
+
 # These tests check 150 ms timing windows. The live transfer failed even on the
 # old serial runner; the RPC returned before its deadline in a parallel run.
 # Reserve the runner for each one. Do not retry either assertion.
