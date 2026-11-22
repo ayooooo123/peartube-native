@@ -197,6 +197,21 @@ struct ContentState {
     lookups: Vec<HeldTopic>,
 }
 
+/// One DHT topic operation for the ordered worker. The swarm actor handles its own command
+/// channel in send order, but two detached tasks would be polled in any order; this queue sends
+/// in the order `Network` committed the state change, so a release's leave reaches the actor
+/// before the next announce's join of the same topic.
+enum TopicCommand {
+    Join {
+        topic: [u8; 32],
+        server: bool,
+        client: bool,
+    },
+    Leave {
+        topic: [u8; 32],
+    },
+}
+
 /// The frames one connection carried, as its route counts them.
 ///
 /// peeroxide's DHT counters never see established UDX streams, so nothing else would; every
@@ -695,6 +710,8 @@ pub struct Network {
     disconnects: Mutex<Vec<(u64, DisconnectListener)>>,
     next_listener: AtomicU64,
     wakeups: Mutex<Vec<Arc<dyn WakeupSink>>>,
+    /// Content DHT joins and leaves, drained in commit order by the worker `open` starts.
+    topic_commands: tokio::sync::mpsc::UnboundedSender<TopicCommand>,
     content: Mutex<ContentState>,
     content_index: Mutex<Option<Arc<dyn ContentIndex>>>,
     /// A relay's job: announce the complete copies this node caches, not only what it published.
@@ -806,6 +823,8 @@ impl Network {
                     .collect::<HashSet<_>>()
             });
         let dht = swarm.dht().clone();
+        let (topic_commands, mut topic_worker) =
+            tokio::sync::mpsc::unbounded_channel::<TopicCommand>();
         let network: Arc<Self> = Arc::new_cyclic(|weak| Self {
             weak: weak.clone(),
             swarm,
@@ -822,6 +841,7 @@ impl Network {
             disconnects: Mutex::new(Vec::new()),
             next_listener: AtomicU64::new(0),
             wakeups: Mutex::new(Vec::new()),
+            topic_commands,
             content: Mutex::new(ContentState::default()),
             content_index: Mutex::new(None),
             announce_cache,
@@ -854,6 +874,31 @@ impl Network {
                     break;
                 }
                 network.accept(connection);
+            }
+        });
+        // One worker drains content topic commands in the order their state changes committed.
+        let worker_swarm = network.swarm.clone();
+        let worker_closing = network.closing.clone();
+        tokio::spawn(async move {
+            while let Some(command) = topic_worker.recv().await {
+                match command {
+                    TopicCommand::Join {
+                        topic,
+                        server,
+                        client,
+                    } => {
+                        if worker_closing.load(Ordering::Acquire) {
+                            continue;
+                        }
+                        let mut opts = JoinOpts::default();
+                        opts.server = server;
+                        opts.client = client;
+                        let _ = worker_swarm.join(topic, opts).await;
+                    }
+                    TopicCommand::Leave { topic } => {
+                        let _ = worker_swarm.leave(topic).await;
+                    }
+                }
             }
         });
         #[cfg(feature = "peeroxide-dht")]
@@ -1198,34 +1243,34 @@ impl Network {
         self.can_announce() && !self.closing.load(Ordering::Acquire)
     }
 
-    /// `joinTopic`: the topic's LAN join is immediate; the DHT join runs detached.
+    /// `joinTopic`: the topic's LAN join is immediate; the DHT join is queued on the ordered
+    /// worker, because two detached `join`/`leave` tasks could otherwise reach the swarm in
+    /// either order.
     fn join_topic(&self, key: [u8; 32], server: bool, client: bool) -> HeldTopic {
         let topic = hypercore::crypto::discovery_key(&key);
         if let Some(lan) = lock(&self.lan).as_ref().map(|state| state.binding.clone()) {
             lan.join(topic);
         }
-        let swarm = self.swarm.clone();
-        let closing = self.closing.clone();
-        tokio::spawn(async move {
-            if closing.load(Ordering::Acquire) {
-                return;
-            }
-            let mut opts = JoinOpts::default();
-            opts.server = server;
-            opts.client = client;
-            let _ = swarm.join(topic, opts).await;
+        // Callers hold the content lock, so the join is queued before another caller can commit
+        // a state change that depends on this topic not yet being joined.
+        let _ = self.topic_commands.send(TopicCommand::Join {
+            topic,
+            server,
+            client,
         });
         HeldTopic { key, topic }
     }
 
-    /// `dropTopic`: leave the DHT topic and the LAN one.
-    fn drop_topic(&self, held: HeldTopic) {
-        let swarm = self.swarm.clone();
-        tokio::spawn(async move {
-            let _ = swarm.leave(held.topic).await;
-        });
+    /// `dropTopic`'s DHT half: queue the leave in commit order. Callers that still hold the
+    /// content lock queue it there, so a concurrent join of the same topic lands behind it.
+    fn queue_topic_leave(&self, topic: [u8; 32]) {
+        let _ = self.topic_commands.send(TopicCommand::Leave { topic });
+    }
+
+    /// `dropTopic`'s LAN half.
+    fn leave_lan_topic(&self, topic: [u8; 32]) {
         if let Some(lan) = lock(&self.lan).as_ref().map(|state| state.binding.clone()) {
-            lan.leave(held.topic);
+            lan.leave(topic);
         }
     }
 
@@ -1260,25 +1305,18 @@ impl Network {
                 return;
             }
             let victim = state.announced.remove(0);
-            drop(state);
-            self.drop_topic(victim);
-            state = lock(&self.content);
+            self.queue_topic_leave(victim.topic);
+            self.leave_lan_topic(victim.topic);
         }
         // A lookup of this title becomes its announcement: the swarm has no in-place refresh, so
         // the topic is rejoined as a server (the LAN join never left).
         if let Some(position) = state.lookups.iter().position(|held| held.key == key) {
             let held = state.lookups.remove(position);
-            let swarm = self.swarm.clone();
-            let closing = self.closing.clone();
-            tokio::spawn(async move {
-                if closing.load(Ordering::Acquire) {
-                    return;
-                }
-                let _ = swarm.leave(held.topic).await;
-                let mut opts = JoinOpts::default();
-                opts.server = true;
-                opts.client = false;
-                let _ = swarm.join(held.topic, opts).await;
+            self.queue_topic_leave(held.topic);
+            let _ = self.topic_commands.send(TopicCommand::Join {
+                topic: held.topic,
+                server: true,
+                client: false,
             });
             state.announced.push(held);
             return;
@@ -1300,9 +1338,8 @@ impl Network {
         }
         if state.lookups.len() >= MAX_LOOKUPS {
             let victim = state.lookups.remove(0);
-            drop(state);
-            self.drop_topic(victim);
-            state = lock(&self.content);
+            self.queue_topic_leave(victim.topic);
+            self.leave_lan_topic(victim.topic);
         }
         let held = self.join_topic(key, false, true);
         state.lookups.push(held);
@@ -1343,20 +1380,32 @@ impl Network {
 
     /// `leaveContent`: forget both holds of a video's topic.
     pub fn leave_content(&self, key: &[u8; 32]) {
-        let dropped: Vec<HeldTopic> = {
-            let mut state = lock(&self.content);
-            let mut dropped = Vec::new();
-            if let Some(position) = state.announced.iter().position(|held| &held.key == key) {
-                dropped.push(state.announced.remove(position));
-            }
-            if let Some(position) = state.lookups.iter().position(|held| &held.key == key) {
-                dropped.push(state.lookups.remove(position));
-            }
-            dropped
-        };
-        for held in dropped {
-            self.drop_topic(held);
+        let mut state = lock(&self.content);
+        if let Some(position) = state.announced.iter().position(|held| &held.key == key) {
+            let held = state.announced.remove(position);
+            self.queue_topic_leave(held.topic);
+            self.leave_lan_topic(held.topic);
         }
+        if let Some(position) = state.lookups.iter().position(|held| &held.key == key) {
+            let held = state.lookups.remove(position);
+            self.queue_topic_leave(held.topic);
+            self.leave_lan_topic(held.topic);
+        }
+    }
+
+    /// `releaseContent`: a reader that looked a title up itself has finished with it, so only the
+    /// lookup ends. What this node announces stays announced, and a lookup already promoted to an
+    /// announcement is not a lookup any more. Both leaves are issued under the content lock (the
+    /// DHT leave is queued there, the LAN leave runs there), so an announce of the same title that
+    /// follows joins after them instead of before.
+    pub fn release_content(&self, key: &[u8; 32]) {
+        let mut state = lock(&self.content);
+        let Some(position) = state.lookups.iter().position(|held| &held.key == key) else {
+            return;
+        };
+        let held = state.lookups.remove(position);
+        self.queue_topic_leave(held.topic);
+        self.leave_lan_topic(held.topic);
     }
 
     /// `rotateTimer`: one video past the cap gets its turn.
@@ -1427,12 +1476,6 @@ impl Network {
             binding.destroy().await;
             return Ok(());
         }
-        {
-            let state = lock(&self.content);
-            for held in state.announced.iter().chain(state.lookups.iter()) {
-                binding.join(held.topic);
-            }
-        }
         for key in lock(&self.overlay_topics).values() {
             binding.join(hypercore::crypto::discovery_key(key));
         }
@@ -1464,6 +1507,12 @@ impl Network {
                 Vec::new(),
             );
         }));
+        // Replay and install under the content lock: a slice that ends during the swap must
+        // not leave its topic on the new binding.
+        let state = lock(&self.content);
+        for held in state.announced.iter().chain(state.lookups.iter()) {
+            binding.join(held.topic);
+        }
         *lock(&self.lan) = Some(LanState { binding, closer });
         Ok(())
     }
@@ -1898,6 +1947,157 @@ mod tests {
 
         app.close().await.unwrap();
         publisher.close().await.unwrap();
+    }
+
+    /// Records the LAN joins and leaves a release dispatches, in order, so the test can see that
+    /// an announcement's hold is never left and that a later announce joins after the release.
+    struct RecordingLan {
+        /// `(topic, joined)`, in call order.
+        events: Mutex<Vec<([u8; 32], bool)>>,
+    }
+
+    impl RecordingLan {
+        fn leaves(&self) -> Vec<[u8; 32]> {
+            lock(&self.events)
+                .iter()
+                .filter(|(_, joined)| !*joined)
+                .map(|(topic, _)| *topic)
+                .collect()
+        }
+    }
+
+    impl LanBinding for RecordingLan {
+        fn join(&self, topic: [u8; 32]) {
+            lock(&self.events).push((topic, true));
+        }
+
+        fn leave(&self, topic: [u8; 32]) {
+            lock(&self.events).push((topic, false));
+        }
+
+        fn destroy(&self) -> BoxFuture<'_, ()> {
+            Box::pin(async {})
+        }
+
+        fn host(&self) -> Option<String> {
+            None
+        }
+
+        fn port(&self) -> Option<u16> {
+            None
+        }
+
+        fn stats(&self) -> Option<Value> {
+            None
+        }
+
+        fn dial_direct(&self, _public_key: &str, _host: &str, _port: u16) {}
+
+        fn on_connection(
+            &self,
+            _callback: Arc<dyn Fn(LanConnection) + Send + Sync>,
+        ) -> Box<dyn Fn() + Send + Sync> {
+            Box::new(|| {})
+        }
+    }
+
+    /// Checks the topic lists and LAN events: release ends a lookup, not a direct or promoted
+    /// announcement. It does not inspect the swarm's internal topic list.
+    #[tokio::test]
+    async fn release_ends_only_the_lookup_it_committed() {
+        let storage = tempfile::tempdir().unwrap();
+        let blackhole = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let network = Network::open(
+            Corestore::open(storage.path()).unwrap(),
+            vec![blackhole.local_addr().unwrap().to_string()],
+            None,
+            0,
+            None,
+            None,
+            false,
+            false,
+            Arc::new(AtomicBool::new(false)),
+        )
+        .await
+        .unwrap();
+        let lan = Arc::new(RecordingLan {
+            events: Mutex::new(Vec::new()),
+        });
+        let lan_binding: Arc<dyn LanBinding> = lan.clone();
+        network.set_lan(Some(lan_binding)).await.unwrap();
+        lock(&lan.events).clear();
+
+        let existing = [11u8; 32];
+        let promoted = [22u8; 32];
+        let announced = [33u8; 32];
+        let unrelated = [44u8; 32];
+        let existing_topic = hypercore::crypto::discovery_key(&existing);
+        let unrelated_topic = hypercore::crypto::discovery_key(&unrelated);
+
+        network.lookup_content(existing);
+        network.lookup_content(promoted);
+        network.announce_content(promoted);
+        network.announce_content(announced);
+        network.lookup_content(unrelated);
+        assert_eq!(network.lookup_topics(), vec![existing, unrelated]);
+        assert_eq!(network.content_topics(), vec![promoted, announced]);
+
+        network.release_content(&existing);
+        assert_eq!(
+            network.lookup_topics(),
+            vec![unrelated],
+            "the released lookup ends"
+        );
+        assert_eq!(
+            lan.leaves(),
+            vec![existing_topic],
+            "the released lookup leaves its LAN topic"
+        );
+
+        network.release_content(&promoted);
+        assert_eq!(
+            network.content_topics(),
+            vec![promoted, announced],
+            "a lookup that became an announcement survives its release"
+        );
+        assert!(!network.lookup_topics().contains(&promoted));
+        assert_eq!(
+            lan.leaves(),
+            vec![existing_topic],
+            "releasing a promoted lookup leaves no hold of its announcement"
+        );
+
+        network.release_content(&announced);
+        assert!(
+            network.has_content_topic(&announced),
+            "an own announcement is not a lookup and survives"
+        );
+        assert_eq!(lan.leaves(), vec![existing_topic]);
+
+        network.release_content(&[55u8; 32]);
+        assert_eq!(network.lookup_topics(), vec![unrelated]);
+        assert_eq!(network.content_topics(), vec![promoted, announced]);
+        assert_eq!(lan.leaves(), vec![existing_topic]);
+
+        network.release_content(&unrelated);
+        assert!(network.lookup_topics().is_empty());
+        assert_eq!(
+            lan.leaves(),
+            vec![existing_topic, unrelated_topic],
+            "each release leaves only the lookup it removed"
+        );
+        network.announce_content(unrelated);
+        assert!(
+            network.has_content_topic(&unrelated),
+            "an announce after a release of the same topic ends announced"
+        );
+        assert!(!network.lookup_topics().contains(&unrelated));
+        assert!(
+            lock(&lan.events).ends_with(&[(unrelated_topic, false), (unrelated_topic, true)]),
+            "the announce joins the LAN topic after the release left it"
+        );
+
+        network.close().await;
     }
 
     #[tokio::test]

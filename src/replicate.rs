@@ -17,6 +17,7 @@ use crate::mirror::{Ctx, MirrorError, MirrorPlugin};
 use crate::node::Node;
 use crate::node::api::SearchOptions;
 use crate::node::core::CoreNode;
+use crate::node::network::Network;
 use crate::protocol::{ParsedUri, parse_uri};
 use crate::traffic::TrafficGate;
 
@@ -47,10 +48,11 @@ impl ReplicateConfig {
 }
 
 const STALL: Duration = Duration::from_secs(20);
+/// A slice with no arriving blocks waits this long before the pass asks the network for peers.
+const LOOKUP_AFTER: Duration = Duration::from_secs(5);
 const POLL: Duration = Duration::from_millis(250);
 
 /// One catalog title's block range in a blob core.
-#[derive(Clone)]
 struct Slice {
     id: String,
     title: String,
@@ -254,62 +256,56 @@ impl Replicator {
             .as_u64()
             .map_or(STALL, Duration::from_millis);
         let mut slices = self.slices().await;
-        let mut cores: HashMap<String, Arc<Session>> = HashMap::new();
-        for hex in slices
-            .iter()
-            .map(|s| s.blobs.clone())
-            .collect::<HashSet<_>>()
-        {
-            if let Ok(core) = self.0.node.blob_core(&hex).await {
-                cores.insert(hex, core);
-            }
-        }
-        // Channel titles first, then ones a peer can already serve, then by core and offset.
-        slices.sort_by(|a, b| {
-            let served = |s: &Slice| {
-                cores
-                    .get(&s.blobs)
-                    .is_some_and(|c| c.length() >= s.offset + s.length)
-            };
-            b.in_channel
-                .cmp(&a.in_channel)
-                .then(served(b).cmp(&served(a)))
-                .then(a.blobs.cmp(&b.blobs))
-                .then(a.offset.cmp(&b.offset))
-        });
+        let total = slices.len();
         let target: u64 = slices.iter().map(|s| s.size).sum();
-        self.set("totalEntries", json!(slices.len()));
+        self.set("totalEntries", json!(total));
         self.set("targetBytes", json!(target));
         let (mut done_entries, mut done_bytes, mut skipped_full, mut skipped_dead) =
             (0u64, 0u64, 0u64, 0u64);
+        // The node keeps a capped number of blob cores open (24 on a relay) and closes the oldest
+        // session, even while this pass still holds an Arc to it. Count each core's slices under
+        // one short-lived session and keep only scalars and slices for the worker.
+        slices.sort_by(|a, b| a.blobs.cmp(&b.blobs));
         let mut pending = Vec::new();
-        for slice in slices.iter() {
-            let Some(core) = cores.get(&slice.blobs) else {
-                skipped_dead += 1;
+        for group in slices.chunk_by(|a, b| a.blobs == b.blobs) {
+            if self.0.closed.load(Ordering::SeqCst) {
+                break;
+            }
+            let Ok(core) = self.0.node.blob_core(&group[0].blobs).await else {
+                skipped_dead += group.len() as u64;
                 continue;
             };
-            let have = slice.held(core);
-            if have >= slice.length {
-                done_entries += 1;
-                done_bytes += slice.size;
-            } else {
-                done_bytes += partial(slice, have);
-                pending.push(slice.clone());
+            let length = core.length();
+            for slice in group {
+                let have = slice.held(&core);
+                if have >= slice.length {
+                    done_entries += 1;
+                    done_bytes += slice.size;
+                } else {
+                    done_bytes += partial(slice, have);
+                    // Hypercore exposes the signed tree length but not each peer's remote length.
+                    pending.push((slice, length >= slice.offset.saturating_add(slice.length)));
+                }
             }
         }
         self.set("replicatedEntries", json!(done_entries));
         self.set("replicatedBytes", json!(done_bytes));
         self.set("skippedDiskFull", json!(0));
         self.set("skippedUnavailable", json!(skipped_dead));
+        // Channel titles first, then ones a core already covers, then by core and offset.
+        pending.sort_by(|(a, a_known), (b, b_known)| {
+            b.in_channel
+                .cmp(&a.in_channel)
+                .then(b_known.cmp(a_known))
+                .then(a.blobs.cmp(&b.blobs))
+                .then(a.offset.cmp(&b.offset))
+        });
 
         let mut pruned = false;
-        for slice in pending {
+        for (slice, _) in pending {
             if !self.running() {
                 break;
             }
-            let Some(core) = cores.get(&slice.blobs).cloned() else {
-                continue;
-            };
             if self
                 .0
                 .dead
@@ -322,20 +318,44 @@ impl Replicator {
                 self.set("skippedUnavailable", json!(skipped_dead));
                 continue;
             }
+            // The count session may have been evicted: take the core again after the dead check.
+            let mut core = match self.0.node.blob_core(&slice.blobs).await {
+                Ok(core) => core,
+                Err(_) => {
+                    skipped_dead += 1;
+                    self.set("skippedUnavailable", json!(skipped_dead));
+                    continue;
+                }
+            };
             let have = slice.held(&core);
             if have >= slice.length {
                 done_entries += 1;
                 self.set("replicatedEntries", json!(done_entries));
                 continue;
             }
-            let prior = partial(&slice, have);
+            let prior = partial(slice, have);
             let missing = slice.size.saturating_sub(prior);
-            if self.free_disk().saturating_sub(missing) < min_free {
+            let short_of_disk = || {
+                self.free_disk()
+                    .checked_sub(missing)
+                    .is_none_or(|free| free < min_free)
+            };
+            if short_of_disk() {
                 if !pruned {
                     pruned = true;
                     self.prune_unreferenced().await;
+                    // The prune opens every listed core, so take this one again even when the
+                    // disk now has room.
+                    core = match self.0.node.blob_core(&slice.blobs).await {
+                        Ok(core) => core,
+                        Err(_) => {
+                            skipped_dead += 1;
+                            self.set("skippedUnavailable", json!(skipped_dead));
+                            continue;
+                        }
+                    };
                 }
-                if self.free_disk().saturating_sub(missing) < min_free {
+                if short_of_disk() {
                     skipped_full += 1;
                     self.set("skippedDiskFull", json!(skipped_full));
                     continue;
@@ -346,8 +366,8 @@ impl Replicator {
                 "activeTitles",
                 json!([format!("{} · {}", slice.id, slice.title)]),
             );
-            let outcome = self.download_slice(&core, &slice, min_free, stall).await;
-            let after = partial(&slice, slice.held(&core));
+            let outcome = self.download_slice(&core, slice, min_free, stall).await;
+            let after = partial(slice, slice.held(&core));
             done_bytes += after.saturating_sub(prior);
             self.set("replicatedBytes", json!(done_bytes));
             self.set("activeSlices", json!(0));
@@ -383,7 +403,7 @@ impl Replicator {
             }
         }
         json!({
-            "totalEntries": slices.len(),
+            "totalEntries": total,
             "replicatedEntries": done_entries,
             "replicatedBytes": done_bytes,
             "targetBytes": target,
@@ -418,6 +438,7 @@ impl Replicator {
             Some(w) if w.end < end => self.open_window(core, w.end, end, window, avg).await,
             _ => None,
         };
+        let mut lookup = None;
         let mut progress_at = Instant::now();
         while let Some(mut window_now) = cur.take() {
             if !self.running() {
@@ -461,8 +482,21 @@ impl Replicator {
                     if self.free_disk() < (min_free / 2).max(4 * 1024 * 1024 * 1024) {
                         return Outcome::DiskFull;
                     }
-                } else if progress_at.elapsed() >= stall {
-                    return Outcome::Stalled;
+                } else {
+                    let quiet = progress_at.elapsed();
+                    if quiet >= stall {
+                        return Outcome::Stalled;
+                    }
+                    if quiet >= LOOKUP_AFTER {
+                        // Nothing arrived from this node's peers: ask the network once. The guard
+                        // keeps the lookup until the slice ends, even if blocks arrive later.
+                        lookup.get_or_insert_with(|| {
+                            let net = self.0.node.net();
+                            let key = *core.key();
+                            net.lookup_content(key);
+                            SliceLookup { net, key }
+                        });
+                    }
                 }
             }
             let have = slice.held(core);
@@ -606,6 +640,18 @@ impl Drop for Window {
     /// `range.destroy()`: an abandoned window stops requesting its blocks.
     fn drop(&mut self) {
         self.task.abort();
+    }
+}
+
+/// The slice owns its lookup, including when the task that runs it is cancelled.
+struct SliceLookup {
+    net: Arc<Network>,
+    key: [u8; 32],
+}
+
+impl Drop for SliceLookup {
+    fn drop(&mut self) {
+        self.net.release_content(&self.key);
     }
 }
 

@@ -52,8 +52,13 @@ guard step asked for after a shutdown signal refuses at once, and startup logs t
 like any other; a step admitted before the signal can still run when its turn comes.
 
 `p2p-replicate` and `hiverelay-seed` share one `traffic` gate
-(`peartube/bulk-busy`, `hiverelayUploadMbps`). `hiverelay-seed`
-recruits existing HiveRelays for this relay's own cores: `POST /seed-core` on the
+(`peartube/bulk-busy`, `hiverelayUploadMbps`). The replica counts the blocks on disk
+one core at a time. It opens the current core again for the download, including after
+it prunes the cache. Connected peers get the first chance to serve the file. If no
+block arrives for five seconds, the replica looks for peers on the core's topic until
+that download ends. It does not announce the file to find peers.
+
+`hiverelay-seed` recruits existing HiveRelays for this relay's own cores: `POST /seed-core` on the
 `hiverelays` list (`=TOKEN` per relay, `hiverelayApiKey` as its default), and the
 zero-key `hiverelay-discovery-v1` DHT (`hiverelayDiscover`, `PEARTUBE_HIVERELAY=1`)
 with a wire-exact 2-core Hyperdrive v11/v13 beacon and signed
