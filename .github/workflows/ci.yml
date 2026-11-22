@@ -196,7 +196,8 @@ jobs:
           workspaces: peartube-native
           # The transfer tests can read the full test cache, but must not save a partial one.
           key: ${{ matrix.check == 'clippy' && 'clippy' || 'test' }}-${{ hashFiles('peartube-native/Cargo.lock', 'peartube-native/STACK.lock') }}
-          save-if: ${{ matrix.check != 'transfers' }}
+          # Both cold comparison arms are read-only, so neither can evict a developer's cache.
+          save-if: 'false'
           cache-bin: false
       - run: cargo fmt --check -p peartube-native -p peartube-native-ffi
         if: matrix.check == 'clippy'
