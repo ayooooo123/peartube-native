@@ -43,11 +43,15 @@ filter = '''
 '''
 threads-required = "num-test-threads"
 
-# On macOS this 16 MiB request stalled after it overlapped another transfer.
-# Keep the real request and deadline. Do not share the runner for this case.
+# On macOS the 16 MiB HTTP request stalled during a transfer. The offline-founder
+# case twice missed the final JS entry after starting beside other peer tests.
+# Reserve the runner from startup through shutdown; keep both original deadlines.
 [[profile.ci.overrides]]
 platform = { host = 'cfg(target_os = "macos")' }
-filter = 'test(=rust_viewer_clear_cache_shrinks_the_disk_immediately)'
+filter = '''
+    test(=rust_viewer_clear_cache_shrinks_the_disk_immediately)
+  | test(=relays_converge_after_a_js_founder_goes_offline)
+'''
 threads-required = "num-test-threads"
 
 # On Linux the second watch-dir scan twice missed the first while the C host
