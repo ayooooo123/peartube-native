@@ -40,13 +40,12 @@ jobs:
               paths = [os.fsdecode(p) for p in diff.split(b"\0") if p]
               full = ("src/", "fixtures/", "tests/js/", "tests/support/", ".github/workflows/")
               if paths and all(p.endswith(".md") and not p.startswith(full) for p in paths):
-                  # The crate includes README.md. A deletion or a Rust example is not prose only.
-                  if "README.md" not in paths or (
-                      Path("README.md").is_file() and
-                      "0 tests, 0 benchmarks" in subprocess.check_output(
-                          ["rustdoc", "--test", "README.md", "--test-args=--list"], text=True
-                      ).splitlines()
-                  ):
+                  # src/lib.rs includes README.md. It must still exist after a prose-only change.
+                  if not Path("README.md").is_file():
+                      raise SystemExit("Missing README.md, which src/lib.rs includes.")
+                  if "README.md" not in paths or "0 tests, 0 benchmarks" in subprocess.check_output(
+                      ["rustdoc", "--test", "README.md", "--test-args=--list"], text=True
+                  ).splitlines():
                       scope = "docs"
               elif paths and all(re.fullmatch(r"tests/[A-Za-z_][A-Za-z_0-9]*\.rs", p)
                                  and Path(p).is_file() and not Path(p).is_symlink() for p in paths):
@@ -292,9 +291,10 @@ jobs:
               # All three runners together run every test. A new target stays in the general job.
               # Assign heavy binaries before Cargo compiles them, not only when nextest runs them.
               groups = {
-                  "transfers": {"peartube-native::" + n for n in ("blobs", "network_mixed_c")},
+                  "transfers": {"peartube-native::blobs"},
                   "interop": {"peartube-native-ffi::abi"} | {"peartube-native::" + n for n in (
-                      "node_mixed", "network_mixed_a", "network_mixed_b", "search_mixed", "soulseek_provider")},
+                      "node_mixed", "network_mixed_a", "network_mixed_b", "network_mixed_c",
+                      "search_mixed", "soulseek_provider")},
               }
               meta = json.loads(subprocess.check_output(["cargo", "metadata", "--no-deps", "--format-version=1"]))
               flags, moved = set(), set()
