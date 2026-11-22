@@ -933,8 +933,37 @@ async fn a_stop_while_the_node_opens_closes_it() {
     }
 }
 
+/// A stop that arrives while the node opens closes the plugin host as soon as it exists, as
+/// `bin/relay.js` does in `onstarting`: the folder import never starts. The test runs on one
+/// thread and without the channel backfill, so that the task that starts the plugins reaches the
+/// folder import before the shutdown gets the node: a host that is still open then has its first
+/// film in the import before its close.
+#[tokio::test]
+async fn a_stop_while_the_node_opens_starts_no_import() {
+    let dir = tempfile::tempdir().unwrap();
+    import_folder(dir.path(), &TWO_FILMS);
+    let mut env = env_importing(dir.path());
+    env.insert("PEARTUBE_PUBLISH_CHANNEL".into(), "0".into());
+    let store = dir.path().join("data").join("corestore");
+    let stop = async {
+        while !store.exists() {
+            tokio::time::sleep(Duration::from_micros(200)).await;
+        }
+    };
+    let code = peartube_native::relay::run(env, stop).await;
+    assert_eq!(code, 0);
+    // The host saves a row here for every file it imports.
+    let ledger = std::fs::read_to_string(dir.path().join("data").join("mirror-watch.json"))
+        .unwrap_or_default();
+    let rows: Value = serde_json::from_str(&ledger).unwrap_or(Value::Null);
+    assert!(
+        rows.as_object().is_none_or(|rows| rows.is_empty()),
+        "the folder import started: {ledger}"
+    );
+}
+
 /// The process itself: a SIGTERM while the node opens ends it with exit code 0, as a clean stop,
-/// not by the signal.
+/// not by the signal. A relay that was told to stop starts no private guard.
 #[cfg(unix)]
 #[tokio::test(flavor = "multi_thread")]
 async fn the_relay_process_stops_cleanly_on_a_signal_while_its_node_opens() {
@@ -969,12 +998,16 @@ async fn the_relay_process_stops_cleanly_on_a_signal_while_its_node_opens() {
         .await
         .unwrap()
         .expect("the relay exits");
+    let printed = String::from_utf8_lossy(&output.stdout);
     assert_eq!(
         output.status.code(),
         Some(0),
-        "the relay ended with {:?}; it printed: {}",
-        output.status,
-        String::from_utf8_lossy(&output.stdout)
+        "the relay ended with {:?}; it printed: {printed}",
+        output.status
+    );
+    assert!(
+        !printed.contains("private guard failed to start"),
+        "the relay tried to start its guard after the signal: {printed}"
     );
 }
 

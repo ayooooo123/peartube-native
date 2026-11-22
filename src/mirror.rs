@@ -1576,13 +1576,13 @@ where
     }
 
     /// The rest of `createMirrorHost`: the startup backfill, the folder import, the feeds, the
-    /// start runs and the poll timer. A closed host starts nothing more, and its folder import
-    /// ends between files. Only the first call does the work.
+    /// start runs and the poll timer. A closed host starts nothing, also when it was closed before
+    /// this call, and its folder import ends between files. Only the first call does the work.
     pub async fn startup(&self) {
         let Some(startup) = self.startup.lock().expect("mirror startup").take() else {
             return;
         };
-        if startup.mirror_channel {
+        if startup.mirror_channel && !self.is_closed() {
             let _ = self.run("channel-backfill", Value::Null).await;
         }
         if startup.rechunk && !self.is_closed() {

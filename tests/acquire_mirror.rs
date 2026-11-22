@@ -2391,6 +2391,12 @@ mod library {
         }
     }
 
+    /// The app's host under `mirror-close.mjs`, run once for the tests that compare with it.
+    fn close_oracle() -> &'static Value {
+        static ORACLE: std::sync::OnceLock<Value> = std::sync::OnceLock::new();
+        ORACLE.get_or_init(|| js_trace("mirror-close.mjs"))
+    }
+
     /// Compare the host before the slow stop is released and once close returns. The app runs
     /// its real gate; here the relay's detach/stop callback records when it releases that resource.
     /// A promise settles with nobody awaiting it, so the Rust close must finish the same way.
@@ -2398,8 +2404,7 @@ mod library {
     async fn shutdown_matches_all_settled_on_the_app() {
         use futures_util::{FutureExt, future::join_all};
         use std::sync::{Mutex, atomic::AtomicBool};
-        let oracle = js_trace("mirror-close.mjs");
-        for case in oracle.as_array().unwrap() {
+        for case in close_oracle()["traces"].as_array().unwrap() {
             let storage = tempfile::tempdir().unwrap();
             let listening = Arc::new(AtomicBool::new(true));
             let released = Arc::new(tokio::sync::Notify::new());
@@ -2478,6 +2483,46 @@ mod library {
             assert_eq!(json!(*finished.lock().unwrap()), case["finished"]);
             assert_eq!(json!(listening.load(Ordering::SeqCst)), case["listening"]);
         }
+    }
+
+    /// A host that is closed before its startup starts neither the backfill nor the folder
+    /// import, as the app's host that is closed inside `onstarting`. The relay closes a host this
+    /// way when a shutdown began while the node was opening.
+    #[tokio::test]
+    async fn a_host_closed_before_its_startup_starts_nothing() {
+        let storage = tempfile::tempdir().unwrap();
+        let import = tempfile::tempdir().unwrap();
+        std::fs::write(import.path().join("Clip.mp4"), vec![1u8; 4096]).unwrap();
+        let host = MirrorHost::open(
+            FakeNode::new(),
+            None,
+            Arc::new(LocalMirrorFiles),
+            Arc::new(Factory),
+            Arc::new(RechunkFactory),
+            Feeds::new(),
+            Vec::new(),
+            MirrorOptions {
+                storage: storage.path().display().to_string(),
+                poll_interval_ms: 0,
+                mirror_channel: true,
+                rechunk: false,
+                watch_dir: Some(import.path().display().to_string()),
+                ..MirrorOptions::default()
+            },
+        );
+        let closing = host.close();
+        host.startup().await;
+        let rows = host.list();
+        let runs = |name: &str| {
+            rows.iter()
+                .find(|row| row["name"] == name)
+                .map(|row| row["runs"].clone())
+        };
+        assert_eq!(
+            json!({ "backfill": runs("channel-backfill"), "folder": runs("watch-dir") }),
+            close_oracle()["closedAtStart"]
+        );
+        closing.await.expect("no stop fails");
     }
 
     /// One session of the scenario: the mirror host on real files in a temporary folder.

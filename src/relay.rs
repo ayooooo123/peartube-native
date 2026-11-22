@@ -314,7 +314,8 @@ impl Relay {
             if let Some(started) = started {
                 wait_started(started).await;
             }
-            {
+            // After a shutdown signal the relay starts no guard.
+            if !relay.0.shutting_down.load(Ordering::SeqCst) {
                 let _serial = relay.0.open.lock().await;
                 if let Err(error) = relay.apply_guard().await {
                     log("private guard failed to start", json!({ "error": error }));
@@ -676,6 +677,13 @@ impl Relay {
         ));
         // `onstarting`: from here on a stop can close the host, also while it starts.
         *self.0.host.lock().unwrap() = Some(mirror.clone());
+        // `if (stopping) host.close()`: a shutdown that began during this open closes the host
+        // before it starts the backfill or the folder import. The shutdown reads the host after
+        // it sets its flag, so one of the two always closes it. `close_locked` reports a stop
+        // that failed: it gets this same close.
+        if self.0.shutting_down.load(Ordering::SeqCst) {
+            let _ = mirror.close().await;
+        }
         node.serve_search(search_serve(&media_check, global_search));
         let (done, started) = tokio::sync::watch::channel(false);
         let replication = self

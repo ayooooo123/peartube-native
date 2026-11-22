@@ -44,8 +44,8 @@ An open, a restart, a settings change and a recovery run one at a time. Each one
 its end after it starts, also when the client that asked for it hangs up. The plugins start
 after the node answers. A restart or a stop during the import of a folder waits only for
 the file in the import, and the next open imports the rest. A stop signal during the open
-closes the node, and the process exits with code 0. A shutdown that takes more than 3 s
-exits with code 1.
+closes the plugins before they start any work, then the node, and the process exits with
+code 0. A shutdown that takes more than 3 s exits with code 1.
 
 When the relay restarts or shuts down, the first call to close starts every plugin's stop.
 Other callers wait for that same operation. The host releases its traffic gate after all

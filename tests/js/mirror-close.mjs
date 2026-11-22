@@ -1,6 +1,6 @@
 // Run the app's host and its real traffic gate on a local DHT. Hold one stop until after the
 // caller has had a turn: it is then possible to tell whether close returned or detached early.
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
@@ -19,6 +19,7 @@ const reason = e => e instanceof AggregateError
 const result = p => p.then(() => null, e => e)
 
 const storage = mkdtempSync(join(tmpdir(), 'pt-close-oracle-'))
+const watchDir = mkdtempSync(join(tmpdir(), 'pt-close-oracle-import-'))
 const testnet = await createTestnet(3)
 let node
 try {
@@ -66,9 +67,18 @@ try {
     traces.push({ stops, before, callers: results.length, same: results.every(e => e === results[0]),
       started, finished, listening: listeners.size > 0, error: reason(results[0]) })
   }
-  process.stdout.write(JSON.stringify(traces))
+  // A host that is closed as soon as it can be closed: the relay does this when a stop began
+  // before the host existed. Such a host starts neither the backfill nor the folder import.
+  writeFileSync(join(watchDir, 'Clip.mp4'), Buffer.alloc(4096, 1))
+  const early = await createMirrorHost({ node, storage, acquirer: null, pollIntervalMs: 0,
+    mirrorChannel: true, watchDir, onstarting: host => { host.close() } })
+  const runs = Object.fromEntries(early.list().map(plugin => [plugin.name, plugin.runs]))
+  await early.close()
+  const closedAtStart = { backfill: runs['channel-backfill'], folder: runs['watch-dir'] }
+  process.stdout.write(JSON.stringify({ traces, closedAtStart }))
 } finally {
   await node?.close()
   await testnet.destroy()
   rmSync(storage, { recursive: true, force: true })
+  rmSync(watchDir, { recursive: true, force: true })
 }
