@@ -209,6 +209,7 @@ jobs:
         shell: python
         run: |
           import os, re
+          from functools import cache
           from pathlib import Path
 
           scope = os.environ["SCOPE"] if os.environ["CHECK"] == "test" else "none"
@@ -216,13 +217,16 @@ jobs:
               # Clippy checks all targets. Read rustc's input lists, not a map of source files.
               # If a different target includes a changed file, run the full suite on this runner.
               names = set(os.environ["TARGETS"].split())
-              sources = {p: n for n in names for p in (Path("tests", n + ".rs"), Path.cwd() / "tests" / (n + ".rs"))}
+              sources = {(Path("tests") / (n + ".rs")).resolve(): n for n in names}
+              @cache
+              def consumer_input(token):
+                  return sources.get(Path(os.fsdecode(token)).resolve())
               seen = set()
               for dep in Path("target/debug").rglob("*.d"):
                   with dep.open("rb") as f:
-                      inputs = f.readline().partition(b": ")[2].split()
+                      inputs = re.findall(rb"(?:\\.|[^\s\\])+", f.readline().partition(b": ")[2])
                   for i, token in enumerate(inputs):
-                      name = sources.get(Path(os.fsdecode(token)))
+                      name = consumer_input(re.sub(rb"\\(.)", rb"\1", token))
                       if name is None:
                           continue
                       seen.add(name)
