@@ -50,6 +50,13 @@ platform = { host = 'cfg(target_os = "macos")' }
 filter = 'test(=rust_viewer_clear_cache_shrinks_the_disk_immediately)'
 threads-required = "num-test-threads"
 
+# On Linux the second watch-dir scan twice missed the first while the C host
+# was linking. Keep the original comparison and run this fixture alone.
+[[profile.ci.overrides]]
+platform = { host = 'cfg(target_os = "linux")' }
+filter = 'test(=library::the_library_matches_the_app)'
+threads-required = "num-test-threads"
+
 # Start long transfers and the C link test early. This changes order, not coverage.
 [[profile.ci.overrides]]
 filter = '''
