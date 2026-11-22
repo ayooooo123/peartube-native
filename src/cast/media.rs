@@ -410,41 +410,42 @@ impl Media {
             .is_some_and(|window| window.short)
     }
 
-    /// Whether this stream's window runs to its blob's last block: a finishing tail.
-    fn window_reaches_end(&self) -> bool {
-        let Some(blob) = self.blob else {
-            return false;
-        };
-        let last = blob.block_offset + blob.block_length;
+    /// The permits this stream's window holds from the memory budget.
+    fn window_permits(&self) -> usize {
         self.window
             .lock()
             .expect("cast window")
             .as_ref()
-            .is_some_and(|window| window.end == last)
+            .and_then(|window| window.permit.as_ref())
+            .map_or(0, |permit| permit.num_permits())
     }
 }
 
 /// The receiver's steering pass, newest stream first. The newest has first claim on the shared
-/// budget: once a newer stream's window is short of what it planned, every older window that does
-/// not reach its blob's end lets go of its range and permits and is not steered this pass, so the
-/// newer one takes them on the next. Without this an old title's reader near its start kept the
-/// whole pool and a new title got one block. A window that reaches its end keeps its blocks: it
-/// is bounded, and it lets go at the end of the file. `live` runs for every stream, in order; a
-/// stream that is not live loses its window.
+/// budget: once a newer stream's window is short of what it planned, every older window that holds
+/// more permits than that newer one lets go of its range and permits and is not steered this pass,
+/// so the newer one takes them on the next. Without this an old title's reader kept the whole pool
+/// and a new title got one block. An older window that holds less keeps its blocks, so an old
+/// title near its end keeps its last few while the new title takes the rest. `live` runs for every
+/// stream, in order; a stream that is not live loses its window.
 pub async fn steer_newest_first<L, S, F>(streams: &[Arc<Media>], mut live: L, mut steer: S)
 where
     L: FnMut(&Arc<Media>) -> bool,
     S: FnMut(Arc<Media>) -> F,
     F: Future<Output = ()>,
 {
-    let mut newer_short = false;
+    // The fewest permits any newer short window holds.
+    let mut short_held: Option<usize> = None;
     for media in streams {
-        if !live(media) || (newer_short && !media.window_reaches_end()) {
+        if !live(media) || short_held.is_some_and(|held| media.window_permits() > held) {
             media.clear_window();
             continue;
         }
         steer(media.clone()).await;
-        newer_short |= media.window_short();
+        if media.window_short() {
+            let held = media.window_permits();
+            short_held = Some(short_held.map_or(held, |least| least.min(held)));
+        }
     }
 }
 
@@ -1231,32 +1232,38 @@ mod tests {
         assert_eq!((new.window_range(), held_blocks(&new)), (Some((0, 75)), 75));
     }
 
-    /// An old title's reader is still open near its start, so its window holds the whole pool,
-    /// when a new title starts. In the receiver's newest-first pass the old window lets go once
-    /// the new one is short, and the new title then holds the whole pool on every later tick.
+    /// An old title's reader is still open when a new title starts, and its window holds more of
+    /// the pool than the new title can get: near its start (0..75), at the last 75 blocks
+    /// (325..400, all of it to the end), and at 360..400 (40 blocks, against 35 left for the new
+    /// title). In the receiver's newest-first pass the old window lets go once the new one is
+    /// short, and the new title then holds the whole pool on every later tick.
     #[tokio::test]
-    async fn an_old_reader_near_its_start_yields_to_a_new_title() {
-        let old_film = peers(0).await;
-        let new_film = peers(0).await;
-        let peer = budget_peer();
-        let old = Arc::new(budget_media(old_film.reader.clone(), peer.clone()));
-        let new = Arc::new(budget_media(new_film.reader.clone(), peer.clone()));
-        assert!(old.steer_window(64 << 30, 8.0e6, 0));
-        assert_eq!(held_blocks(&old), 75);
-        let streams = [new.clone(), old.clone()];
-        for tick in 1..=5u64 {
-            steer_newest_first(
-                &streams,
-                |_| true,
-                |media| async move {
-                    media.steer_window(64 << 30, 8.0e6, 0);
-                },
-            )
-            .await;
-            assert_funded(&[&new, &old], 75, tick);
-            if tick >= 2 {
-                assert_eq!(new.window_range(), Some((0, 75)), "tick {tick}");
-                assert_eq!(held_blocks(&new), 75, "tick {tick}");
+    async fn an_old_reader_holding_more_yields_to_a_new_title() {
+        for old_at in [0u64, 325, 360] {
+            let old_film = peers(0).await;
+            let new_film = peers(0).await;
+            let peer = budget_peer();
+            let old = Arc::new(budget_media(old_film.reader.clone(), peer.clone()));
+            let new = Arc::new(budget_media(new_film.reader.clone(), peer.clone()));
+            assert!(old.steer_window(64 << 30, 8.0e6, old_at * BS as u64));
+            let streams = [new.clone(), old.clone()];
+            for tick in 1..=5u64 {
+                steer_newest_first(
+                    &streams,
+                    |_| true,
+                    |media| {
+                        let at = if Arc::ptr_eq(&media, &new) { 0 } else { old_at } * BS as u64;
+                        async move {
+                            media.steer_window(64 << 30, 8.0e6, at);
+                        }
+                    },
+                )
+                .await;
+                assert_funded(&[&new, &old], 75, tick);
+                if tick >= 2 {
+                    let got = (new.window_range(), held_blocks(&new));
+                    assert_eq!(got, (Some((0, 75)), 75), "old at {old_at}, tick {tick}");
+                }
             }
         }
     }
