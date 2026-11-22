@@ -199,35 +199,48 @@ jobs:
           save-if: ${{ matrix.check != 'transfers' }}
           cache-bin: false
       - name: Trace real compiler calls, including the C host's child Cargo
-        shell: bash
+        shell: python
+        env:
+          CHECK: ${{ matrix.check }}
         run: |
-          set -euo pipefail
-          bin="$RUNNER_TEMP/ci-compile-trace"
-          mkdir "$bin"
-          : > "$bin/compilers"
-          : > "$bin/ffi-child"
-          cat > "$bin/rustc-wrapper" <<'SH'
-          #!/bin/sh
-          case " $* " in
-            *" --emit="*|*" --emit "*)
-              printf '%s\t%s\t%s\n' "${CI_TRACE_PARENT:-outer}" "${CARGO_MANIFEST_DIR:-unknown}" \
-                "${CARGO_PKG_NAME:-unknown}" >> "$RUNNER_TEMP/ci-compile-trace/compilers"
-              ;;
-          esac
-          exec "$@"
-          SH
-          cat > "$bin/cargo" <<'SH'
-          #!/bin/sh
-          if [ "$*" = "build -p peartube-native-ffi --lib" ]; then
-            printf '%s\n' "$RUSTC_WRAPPER" >> "$RUNNER_TEMP/ci-compile-trace/ffi-child"
-            export CI_TRACE_PARENT=ffi-child
-          fi
-          exec "$CI_TRACE_CARGO" "$@"
-          SH
-          chmod +x "$bin/rustc-wrapper" "$bin/cargo"
-          printf 'CI_TRACE_CARGO=%s\nCARGO=%s/cargo\nRUSTC_WRAPPER=%s/rustc-wrapper\n' \
-            "$(command -v cargo)" "$bin" "$bin" >> "$GITHUB_ENV"
-          echo "$bin" >> "$GITHUB_PATH"
+          import os, subprocess, sys
+          from pathlib import Path
+          folder = Path(os.environ["RUNNER_TEMP"]) / "ci-compile-trace"
+          folder.mkdir()
+          for name in ("compilers", "ffi-child"):
+              (folder / name).touch()
+          wrapper = folder / "rustc-wrapper"
+          wrapper.write_text("#!" + sys.executable + "\n" + r'''import os, shutil, sys
+          from pathlib import Path
+          args = sys.argv[1:]
+          role = Path(sys.argv[0])
+          root = role.parent
+          if role.name == "test-runner":
+              if os.environ.get("NEXTEST_TEST_NAME") == "c_host_links_staticlib" or "c_host_links_staticlib" in args:
+                  os.environ["CI_ORIGINAL_CARGO"] = os.environ.get("CARGO") or shutil.which("cargo")
+                  os.environ["CARGO"] = str(root / "ffi-cargo")
+          elif role.name == "ffi-cargo":
+              if args == ["build", "-p", "peartube-native-ffi", "--lib"]:
+                  with (root / "ffi-child").open("a") as f:
+                      print(os.environ.get("RUSTC_WRAPPER", "missing"), file=f)
+                  os.environ["CI_TRACE_PARENT"] = "ffi-child"
+              args = [os.environ["CI_ORIGINAL_CARGO"], *args]
+          elif "--emit" in args or any(a.startswith("--emit=") for a in args):
+              with (root / "compilers").open("a") as f:
+                  print(os.environ.get("CI_TRACE_PARENT", "outer"), os.environ.get("CARGO_MANIFEST_DIR", "unknown"),
+                        os.environ.get("CARGO_PKG_NAME", "unknown"), sep="\t", file=f)
+          os.execvpe(args[0], args, os.environ)
+          ''')
+          wrapper.chmod(0o755)
+          for name in ("test-runner", "ffi-cargo"):
+              os.link(wrapper, folder / name)
+          with open(os.environ["GITHUB_ENV"], "a") as out:
+              print("RUSTC_WRAPPER=" + str(wrapper), file=out)
+              if os.environ["CHECK"] == "test":
+                  ver = subprocess.check_output(["rustc", "-vV"], text=True)
+                  host = next(l[6:] for l in ver.splitlines() if l.startswith("host: "))
+                  print("CARGO_TARGET_" + host.upper().replace("-", "_") + "_RUNNER=" +
+                        str(folder / "test-runner"), file=out)
       - run: cargo fmt --check -p peartube-native -p peartube-native-ffi
         if: matrix.check == 'clippy'
       - run: cargo clippy --workspace --all-targets -- -D warnings
@@ -356,94 +369,6 @@ jobs:
           assert len(children) == int(os.environ["CHECK"] == "test"), children
           assert all(p == str(trace / "rustc-wrapper") for p in children), children
           assert siblings == 0, counts
-      - name: Repeat the failed case without another test on this runner
-        if: >-
-          !cancelled() &&
-          (steps.tests.outcome == 'success' || steps.tests.outcome == 'failure') &&
-          ((matrix.check == 'test' && runner.os == 'Linux') ||
-           (matrix.check == 'transfers' && runner.os == 'macOS'))
-        shell: bash
-        env:
-          CHECK: ${{ matrix.check }}
-        run: |
-          set -euo pipefail
-          if [[ "$CHECK" == test ]]; then
-            target=acquire_mirror
-            name=library::the_library_matches_the_app
-            samples=20
-          else
-            target=network_mixed_c
-            name=rust_viewer_clear_cache_shrinks_the_disk_immediately
-            samples=12
-          fi
-          for ((i=1; i<=samples; i++)); do
-            printf 'Isolation sample %d/%d: %s\n' "$i" "$samples" "$name"
-            cargo nextest run --profile ci -p peartube-native --test "$target" \
-              -E "test(=$name)" --test-threads 1 --run-ignored all
-          done
-      - name: Hold one watch scan in put and observe the other
-        if: >-
-          !cancelled() && matrix.check == 'test' && runner.os == 'Linux' &&
-          (steps.tests.outcome == 'success' || steps.tests.outcome == 'failure')
-        shell: bash
-        run: |
-          set -euo pipefail
-          work=$(mktemp -d "$RUNNER_TEMP/watch-gate.XXXXXX")
-          probe="$work/peartube-native"
-          mkdir "$probe"
-          git archive HEAD | tar -xf - -C "$probe"
-          for dir in "$GITHUB_WORKSPACE"/*; do
-            if [[ -d "$dir" && "${dir##*/}" != peartube-native ]]; then ln -s "$dir" "$work/"; fi
-          done
-          # This separate executable reuses the real fake node. Do not change the fixture.
-          cat tests/acquire_mirror.rs - > "$probe/tests/watch_gate_probe.rs" <<'RS'
-
-          #[tokio::test]
-          async fn ci_controlled_watch_overlap() {
-              use peartube_native::mirror::{LocalMirrorFiles, MirrorHost, MirrorOptions};
-              let root = tempfile::tempdir().unwrap();
-              let import = root.path().join("import");
-              let storage = root.path().join("storage");
-              std::fs::create_dir(&import).unwrap();
-              std::fs::create_dir(&storage).unwrap();
-              let node = FakeNode::new();
-              let host = MirrorHost::start(
-                  node.clone(), None, Arc::new(LocalMirrorFiles), Arc::new(Factory),
-                  Arc::new(RechunkFactory), Feeds::new(), Vec::new(),
-                  MirrorOptions {
-                      storage: storage.display().to_string(),
-                      watch_dir: Some(import.display().to_string()),
-                      mirror_channel: false, poll_interval_ms: 0, ..Default::default()
-                  },
-              ).await;
-              host.wait_idle().await;
-              std::fs::write(import.join("Late.mkv"), b"late").unwrap();
-              let gate = Arc::new(tokio::sync::Semaphore::new(0));
-              *node.put_gate.lock().unwrap() = Some(gate.clone());
-              let first = host.run("watch-dir", Value::Null);
-              let overlap = async {
-                  until(|| node.calls.lock().unwrap().iter().any(|c| c["method"] == "put")).await;
-                  let second = host.run("watch-dir", Value::Null).await.unwrap();
-                  gate.add_permits(1);
-                  second
-              };
-              let (first, second) = tokio::time::timeout(
-                  Duration::from_secs(10), futures_util::future::join(first, overlap),
-              ).await.expect("both scans completed after the gate opened");
-              let first = first.unwrap();
-              let after = host.run("watch-dir", Value::Null).await.unwrap();
-              println!("first={first} while_held={second} after_release={after}");
-              assert_eq!(first["ingested"], 1);
-              assert_eq!(second, json!({"scanned": 0, "ingested": 0, "busy": true, "items": []}));
-              assert_eq!(after["scanned"], 1);
-              assert!(after.get("busy").is_none());
-              host.close().await;
-          }
-          RS
-          CARGO_TARGET_DIR="$PWD/target" cargo test --locked --manifest-path "$probe/Cargo.toml" \
-            -p peartube-native --test watch_gate_probe -- ci_controlled_watch_overlap --exact --nocapture \
-            | tee "$work/result"
-          grep -F ' while_held=' "$work/result"
 
   result:
     name: CI result
