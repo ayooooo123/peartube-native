@@ -642,6 +642,12 @@ fn free_port() -> u16 {
 const FILMS: [usize; 5] = [1, 8, 8, 8, 8];
 /// An import that ends with its first large film, so that a reopened relay has none left.
 const TWO_FILMS: [usize; 2] = [1, 8];
+/// An import of many 1 MiB films, for a stop under the 3 s kill timer of `relay::run`. The film in
+/// the import must end inside that time on a slow test machine too: in a debug build on an Intel
+/// i7-10710U, a 1 MiB film took 0.55 s to import and an 8 MiB film about 4.4 s, most of it in
+/// hashing (SHA-256 and BLAKE2b). The whole import still lasts longer than the stop takes to
+/// arrive.
+const SMALL_FILMS: [usize; 24] = [1; 24];
 
 /// An import folder that keeps the folder import busy for a known time. The import takes the
 /// films in name order: when the first one is listed, the import is in the large films, about
@@ -827,11 +833,12 @@ async fn a_restart_during_the_startup_import_waits_for_one_film_and_imports_each
 
 /// A stop during the startup import (`relay::run`'s `stop`, a signal in the process) ends the
 /// import between films and closes the node: the flow ends with exit code 0, and the films after
-/// the one in the import are not imported.
+/// the one in the import are not imported. The films are small, so that the film in the import
+/// ends inside the kill timer on any test machine (see `SMALL_FILMS`).
 #[tokio::test(flavor = "multi_thread")]
 async fn a_stop_during_the_startup_import_ends_it_between_films() {
     let dir = tempfile::tempdir().unwrap();
-    import_folder(dir.path(), &FILMS);
+    import_folder(dir.path(), &SMALL_FILMS);
     let port = free_port();
     let mut env = env_importing(dir.path());
     env.insert("PEARTUBE_API_PORT".into(), port.to_string());
@@ -843,7 +850,7 @@ async fn a_stop_during_the_startup_import_ends_it_between_films() {
     assert_eq!(code, 0, "a stop during the startup import");
     let left = left_in(dir.path(), "a stop during the startup import").await;
     assert!(
-        left.len() < FILMS.len(),
+        left.len() < SMALL_FILMS.len(),
         "the import went on after the stop: {left:?}"
     );
 }
