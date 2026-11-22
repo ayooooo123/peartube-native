@@ -305,7 +305,7 @@ impl Relay {
         let relay = self.clone();
         run_to_end(async move {
             let started = {
-                let mut open = relay.0.open.lock().await;
+                let mut open = relay.turn().await?;
                 relay.open_locked(&mut open).await?;
                 open.as_ref().map(|open| open.started.clone())
             };
@@ -314,12 +314,17 @@ impl Relay {
             if let Some(started) = started {
                 wait_started(started).await;
             }
-            // After a shutdown signal the relay starts no guard.
-            if !relay.0.shutting_down.load(Ordering::SeqCst) {
-                let _serial = relay.0.open.lock().await;
-                if let Err(error) = relay.apply_guard().await {
-                    log("private guard failed to start", json!({ "error": error }));
-                }
+            // After a shutdown signal the relay starts no guard. A guard step that waited its
+            // turn and that the signal then refused is not a guard that failed to start.
+            let guard = async {
+                let _turn = relay.turn().await?;
+                relay.apply_guard().await
+            };
+            if relay.running().is_ok()
+                && let Err(error) = guard.await
+                && relay.running().is_ok()
+            {
+                log("private guard failed to start", json!({ "error": error }));
             }
             Ok(relay.status().await.unwrap_or(Value::Null))
         })
@@ -367,10 +372,8 @@ impl Relay {
     /// `applyGuard()`: the guard runs on its own HyperDHT and port with a fresh key each
     /// start, and opens no Corestore. JS runs it as a child process; here it is in-process.
     async fn apply_guard(&self) -> Result<(), String> {
-        // `serial(applyGuard)`: no new work once the relay is shutting down.
-        if self.0.shutting_down.load(Ordering::SeqCst) {
-            return Err("The relay is shutting down".into());
-        }
+        // No guard starts once the relay is shutting down.
+        self.running()?;
         let port = self.cfg("privateGuardPort").await.as_u64().unwrap_or(0) as u16;
         let bootstrap = strings(&self.cfg("bootstrap").await);
         let want = js_truthy(&self.cfg("privateGuard").await)
@@ -434,10 +437,25 @@ impl Relay {
         self.0.settings.lock().await.get(key)
     }
 
-    async fn open_locked(&self, open: &mut Option<Open>) -> Result<(), String> {
-        if self.0.shutting_down.load(Ordering::SeqCst) {
-            return Err("The relay is shutting down".into());
+    /// `assertRunning()`: once a shutdown has begun, a lifecycle step starts nothing more.
+    fn running(&self) -> Result<(), String> {
+        match self.0.shutting_down.load(Ordering::SeqCst) {
+            true => Err("The relay is shutting down".into()),
+            false => Ok(()),
         }
+    }
+
+    /// `serial(fn)`: the lifecycle steps run one at a time, in the order they were asked for. A
+    /// step that waited its turn does not begin once a shutdown has begun.
+    async fn turn(&self) -> Result<tokio::sync::MutexGuard<'_, Option<Open>>, String> {
+        let open = self.0.open.lock().await;
+        self.running()?;
+        Ok(open)
+    }
+
+    async fn open_locked(&self, open: &mut Option<Open>) -> Result<(), String> {
+        // A reopen whose stop ended after a shutdown signal gets no replacement node.
+        self.running()?;
         let snapshot = self.0.settings.lock().await.snapshot();
         // The snapshot holds each value JSON-encoded, the form `markApplied` compares.
         let cfg = |key: &str| {
@@ -831,15 +849,16 @@ impl Relay {
     }
 
     async fn reopen(&self) -> Result<(), String> {
-        let mut open = self.0.open.lock().await;
+        let mut open = self.turn().await?;
         self.reopen_locked(&mut open).await
     }
 
     async fn reopen_locked(&self, open: &mut Option<Open>) -> Result<(), String> {
         self.close_locked(open).await;
         let result = self.open_locked(open).await;
+        // A reopen that a shutdown refused is not a reopen that failed.
         if let Err(error) = &result
-            && !self.0.shutting_down.load(Ordering::SeqCst)
+            && self.running().is_ok()
         {
             log("restart failed", json!({ "error": error }));
             if !self.0.retry_pending.swap(true, Ordering::Relaxed) {
@@ -856,19 +875,27 @@ impl Relay {
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
         let mut open = self.0.open.lock().await;
         self.0.retry_pending.store(false, Ordering::Relaxed);
-        if open.is_some() || self.0.shutting_down.load(Ordering::SeqCst) {
+        if open.is_some() || self.running().is_err() {
             return;
         }
+        // A step that a shutdown signal refused is not a step that failed.
         if let Err(error) = self.open_locked(&mut open).await {
-            log("restart recovery failed", json!({ "error": error }));
-        } else if let Err(error) = self.apply_guard().await {
+            if self.running().is_ok() {
+                log("restart recovery failed", json!({ "error": error }));
+            }
+        } else if let Err(error) = self.apply_guard().await
+            && self.running().is_ok()
+        {
             log("private guard failed to start", json!({ "error": error }));
         }
     }
 
     /// `state.applySettings(changed)`: live settings apply in place; any other change reopens.
+    /// A live change that had to wait (for the directory, for the plugins, for the cast
+    /// controller) and goes on after a shutdown signal ends there: it starts no plugin run and
+    /// nothing else, and the saved value applies at the next start.
     async fn apply_settings(&self, changed: Vec<String>) -> Result<(), String> {
-        let mut open = self.0.open.lock().await;
+        let mut open = self.turn().await?;
         let live = {
             let settings = self.0.settings.lock().await;
             changed.iter().all(|key| settings.is_live(key))
@@ -911,6 +938,7 @@ impl Relay {
         if has(&["directory"]) {
             let sources = node.list_sources().await;
             self.sync_directory(&node, &sources).await?;
+            self.running()?;
         }
         // `await mirrorStarting`: these changes go to the plugins, which must have started.
         let convert = has(&["rechunk"]) && js_truthy(&self.cfg("rechunk").await);
@@ -928,10 +956,8 @@ impl Relay {
             ])
         {
             wait_started(started).await;
-            // Only a shutdown closes the host under a step.
-            if mirror.is_closed() {
-                return Err("The relay is shutting down".into());
-            }
+            // A shutdown closes the host under this wait.
+            self.running()?;
         }
         if convert {
             let mirror = mirror.clone();
@@ -969,6 +995,7 @@ impl Relay {
         }
         if has(&["lan", "lanHost"]) {
             self.refresh_cast_lan().await;
+            self.running()?;
             let lan = match js_truthy(&self.cfg("lan").await) {
                 true => match self.lan_host(&self.cfg("lanHost").await) {
                     Some(host) => Some(
