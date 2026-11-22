@@ -5,12 +5,60 @@ on:
     branches: [main]
   pull_request:
 
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 # The app commit in JS_REF is the reference for every fixture and every ignored interop test.
 env:
   PEARTUBE_APP: ${{ github.workspace }}/peartube
+  # Keep file and line information in failures without linking full debug data into every test.
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
 
 jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      scope: ${{ steps.select.outputs.scope }}
+      targets: ${{ steps.select.outputs.targets }}
+    steps:
+      - uses: actions/checkout@v4
+        if: github.event_name == 'pull_request'
+        with:
+          fetch-depth: 2
+      - id: select
+        name: Select tests for the merge result
+        shell: python
+        run: |
+          import os, re, subprocess
+          from pathlib import Path
+
+          scope, targets = "full", []
+          if os.environ["GITHUB_EVENT_NAME"] == "pull_request":
+              # Compare the tree that CI will test with its base parent. No API file limit.
+              diff = subprocess.check_output(["git", "diff", "--no-renames", "--name-only", "-z", "HEAD^1", "HEAD"])
+              paths = [os.fsdecode(p) for p in diff.split(b"\0") if p]
+              full = ("src/", "fixtures/", "tests/js/", "tests/support/", ".github/workflows/")
+              if paths and all(p.endswith(".md") and not p.startswith(full) for p in paths):
+                  # The crate includes README.md. A deletion or a Rust example is not prose only.
+                  if "README.md" not in paths or (
+                      Path("README.md").is_file() and
+                      "0 tests, 0 benchmarks" in subprocess.check_output(
+                          ["rustdoc", "--test", "README.md", "--test-args=--list"], text=True
+                      ).splitlines()
+                  ):
+                      scope = "docs"
+              elif paths and all(re.fullmatch(r"tests/[A-Za-z_][A-Za-z_0-9]*\.rs", p)
+                                 and Path(p).is_file() and not Path(p).is_symlink() for p in paths):
+                  scope, targets = "targets", [Path(p).stem for p in paths]
+          print("Test scope:", scope, *targets)
+          with open(os.environ["GITHUB_OUTPUT"], "a") as out:
+              print("scope=" + scope, "targets=" + " ".join(targets), sep="\n", file=out)
+
   rust:
+    name: ${{ matrix.check }} (${{ matrix.os }})
+    needs: changes
+    if: needs.changes.outputs.scope != 'docs'
     strategy:
       # One OS failing must not hide the other's result.
       fail-fast: false
@@ -18,6 +66,8 @@ jobs:
       # record in `mdns_interop_with_bonjour_service` (also on Linux, where JS/Rust LAN discovery itself passes),
       # and macOS runners deliver no LAN multicast, so every test that discovers a peer over mDNS fails there.
       matrix:
+        os: [ubuntu-latest, macos-latest]
+        check: [clippy, test]
         include:
           - os: ubuntu-latest
             skip: --skip mdns_interop_with_bonjour_service
@@ -144,20 +194,101 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: peartube-native
-          key: ${{ hashFiles('peartube-native/Cargo.lock', 'peartube-native/STACK.lock') }}
+          key: ${{ matrix.check }}-${{ hashFiles('peartube-native/Cargo.lock', 'peartube-native/STACK.lock') }}
           cache-bin: false
+      - run: cargo fmt --check -p peartube-native -p peartube-native-ffi
+        if: matrix.check == 'clippy'
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+        if: matrix.check == 'clippy'
+      - id: suite
+        name: Check which targets read the changed files
+        env:
+          CHECK: ${{ matrix.check }}
+          SCOPE: ${{ needs.changes.outputs.scope }}
+          TARGETS: ${{ needs.changes.outputs.targets }}
+        shell: python
+        run: |
+          import os, re
+          from pathlib import Path
+
+          scope = os.environ["SCOPE"] if os.environ["CHECK"] == "test" else "none"
+          if os.environ["CHECK"] == "clippy" and os.environ["SCOPE"] == "targets":
+              # Clippy checks all targets. Read rustc's input lists, not a map of source files.
+              # If a different target includes a changed file, run the full suite on this runner.
+              names = set(os.environ["TARGETS"].split())
+              sources = {p: n for n in names for p in (Path("tests", n + ".rs"), Path.cwd() / "tests" / (n + ".rs"))}
+              seen = set()
+              for dep in Path("target/debug").rglob("*.d"):
+                  with dep.open("rb") as f:
+                      inputs = f.readline().partition(b": ")[2].split()
+                  for i, token in enumerate(inputs):
+                      name = sources.get(Path(os.fsdecode(token)))
+                      if name is None:
+                          continue
+                      seen.add(name)
+                      if i != 0 or not re.fullmatch(re.escape(name) + r"(?:-[0-9a-f]+)?", dep.stem):
+                          print(f"{dep} also reads tests/{name}.rs")
+                          scope = "full"
+              if seen != names:
+                  print("Could not verify the consumers of:", *sorted(names - seen))
+                  scope = "full"
+          print("Suite on this runner:", scope)
+          with open(os.environ["GITHUB_OUTPUT"], "a") as out:
+              print("scope=" + scope, file=out)
+      - uses: taiki-e/install-action@fe3acb53a98b62c772db35de75ce0e4595e7ca8c # v2.90.8
+        if: steps.suite.outputs.scope != 'none'
+        with:
+          tool: nextest@0.9.152
+          fallback: none
       - uses: actions/setup-node@v4
+        if: steps.suite.outputs.scope != 'none'
         with:
           node-version: 22
       # The app imports its own bare/holepunch libraries, so its checkout needs its dependencies.
       - run: npm ci --no-audit --no-fund
+        if: steps.suite.outputs.scope != 'none'
         working-directory: peartube
       # The interop harnesses import Protomux, compact-encoding and Bonjour themselves.
       - run: npm ci --no-audit --no-fund
+        if: steps.suite.outputs.scope != 'none'
         working-directory: peartube-native/tests/js
       # Fails when a committed reference is not what the app at JS_REF produces.
       - run: node fixtures/gen/check.mjs
-      - run: cargo fmt --check -p peartube-native -p peartube-native-ffi
-      - run: cargo clippy --workspace --all-targets -- -D warnings
-      # The ignored tests drive the app's own JS: they run here, against the JS_REF checkout.
-      - run: cargo test --workspace --no-fail-fast -- --include-ignored --test-threads=1 ${{ matrix.skip }}
+        if: steps.suite.outputs.scope != 'none'
+      - id: tests
+        name: Run Rust tests, including ignored interop tests
+        if: steps.suite.outputs.scope != 'none'
+        shell: bash
+        env:
+          SCOPE: ${{ steps.suite.outputs.scope }}
+          TARGETS: ${{ needs.changes.outputs.targets }}
+        run: |
+          args=(--workspace)
+          if [[ "$SCOPE" == targets ]]; then
+            args=(-p peartube-native)
+            for target in $TARGETS; do args+=(--test "$target"); done
+          fi
+          cargo nextest run --profile ci "${args[@]}" --run-ignored all --no-fail-fast -- ${{ matrix.skip }}
+      # nextest does not run doctests. Keep both crates' doctests even if a Rust test failed.
+      - run: cargo test --workspace --doc --no-fail-fast -- --include-ignored ${{ matrix.skip }}
+        if: >-
+          !cancelled() && steps.suite.outputs.scope == 'full' &&
+          (steps.tests.outcome == 'success' || steps.tests.outcome == 'failure')
+
+  result:
+    name: CI result
+    needs: [changes, rust]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every selected job to pass
+        env:
+          PLAN: ${{ needs.changes.result }}
+          SCOPE: ${{ needs.changes.outputs.scope }}
+          RUST: ${{ needs.rust.result }}
+        run: |
+          test "$PLAN" = success
+          case "$SCOPE:$RUST" in
+            docs:skipped|targets:success|full:success) echo "Passed: $SCOPE" ;;
+            *) echo "::error::Unexpected CI result: $SCOPE:$RUST"; exit 1 ;;
+          esac
