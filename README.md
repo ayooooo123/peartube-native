@@ -49,12 +49,15 @@ imports the rest. A stop signal during the open closes the plugins before they s
 work, then the node, and the process exits with code 0. After the signal, a step that
 waited its turn does not begin. A live settings change that goes on after a wait ends
 there, and the saved value applies at the next start. A shutdown that takes more than
-3 s exits with code 1.
+3 s exits with code 1. The relay does not log a guard start that it refused. If it had
+already tried to start the guard, it logs the reason for failure even after the signal.
 
 When the relay restarts or shuts down, the first call to close starts every plugin's stop.
-Other callers wait for that same operation. The host releases its traffic gate after all
-stops finish, even if one fails. A single failure keeps its original reason. When several
-stops fail, the caller gets their reasons in plugin registration order.
+A plugin that calls `close()` before its stop first yields waits for the plugins that did
+not make such a call. That handle returns no error, even if another plugin fails. All
+other callers wait for every stop and for the host to release its traffic gate. They get
+the original error for one failed stop, or all errors in registration order. A plugin
+must not await its host's `close()` after its first yield: it would wait for itself.
 
 `p2p-replicate` and `hiverelay-seed` share one `traffic` gate
 (`peartube/bulk-busy`, `hiverelayUploadMbps`). `hiverelay-seed`

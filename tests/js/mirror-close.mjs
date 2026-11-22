@@ -64,8 +64,10 @@ try {
     release()
     const results = await Promise.all(done)
     results.push(await result(host.close()))
+    // Every caller's own result, normalized. `same` stays for identity: whether every handle
+    // settles with the very same value, error object included.
     traces.push({ stops, before, callers: results.length, same: results.every(e => e === results[0]),
-      started, finished, listening: listeners.size > 0, error: reason(results[0]) })
+      results: results.map(reason), started, finished, listening: listeners.size > 0 })
   }
   // A host that is closed as soon as it can be closed: the relay does this when a stop began
   // before the host existed. Such a host starts neither the backfill nor the folder import.

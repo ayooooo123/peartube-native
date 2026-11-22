@@ -314,18 +314,10 @@ impl Relay {
             if let Some(started) = started {
                 wait_started(started).await;
             }
-            // After a shutdown signal the relay starts no guard. A guard step that waited its
-            // turn and that the signal then refused is not a guard that failed to start.
-            let guard = async {
-                let _turn = relay.turn().await?;
-                relay.apply_guard().await
-            };
-            if relay.running().is_ok()
-                && let Err(error) = guard.await
-                && relay.running().is_ok()
-            {
-                log("private guard failed to start", json!({ "error": error }));
-            }
+            // After a shutdown signal the relay starts no guard. A step the signal refused never
+            // started, so it logs no failure; a step admitted before the signal reports a failure
+            // through `log`, even when the signal arrives meanwhile.
+            relay.start_guard(log).await;
             Ok(relay.status().await.unwrap_or(Value::Null))
         })
         .await
@@ -369,11 +361,37 @@ impl Relay {
         self.stop_guard().await;
     }
 
+    /// The first optional guard step: after the plugins start, the guard opens when the settings
+    /// want one. A shutdown that has begun when the step is asked refuses at once, without waiting
+    /// for the turn that a step in flight holds; a step that waits its turn refuses it when the
+    /// turn comes. Either way it starts no guard, is not a failure and calls no reporter. Once
+    /// admitted, the step holds the turn until the configuration ends and reports a failure
+    /// through `report`, whatever a shutdown does meanwhile.
+    async fn start_guard(&self, report: impl FnOnce(&str, Value)) {
+        // No wait behind the step in flight once the shutdown is known.
+        if self.running().is_err() {
+            return;
+        }
+        let Ok(_turn) = self.turn().await else {
+            return;
+        };
+        if let Err(error) = self.configure_guard().await {
+            report("private guard failed to start", json!({ "error": error }));
+        }
+    }
+
     /// `applyGuard()`: the guard runs on its own HyperDHT and port with a fresh key each
     /// start, and opens no Corestore. JS runs it as a child process; here it is in-process.
     async fn apply_guard(&self) -> Result<(), String> {
         // No guard starts once the relay is shutting down.
         self.running()?;
+        self.configure_guard().await
+    }
+
+    /// The guard configuration behind `apply_guard`: the wanted guard opens, and a guard that
+    /// the settings no longer want closes. It runs to its end once the step is admitted, so a
+    /// shutdown that begins meanwhile does not turn its settings failure into a refusal.
+    async fn configure_guard(&self) -> Result<(), String> {
         let port = self.cfg("privateGuardPort").await.as_u64().unwrap_or(0) as u16;
         let bootstrap = strings(&self.cfg("bootstrap").await);
         let want = js_truthy(&self.cfg("privateGuard").await)
@@ -1891,4 +1909,81 @@ pub fn log(msg: &str, fields: Value) {
         line.extend(fields.clone());
     }
     println!("{line}");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use futures_util::FutureExt;
+
+    /// An admitted guard step keeps the lifecycle turn through its settings wait and reports the
+    /// settings error it then finds, even though a shutdown has begun. Only the refusal at
+    /// admission is the quiet, successful no-attempt.
+    #[tokio::test]
+    async fn an_admitted_guard_step_reports_its_error_after_a_shutdown_starts() {
+        let storage = tempfile::tempdir().expect("a temporary storage folder");
+        let env = HashMap::from([
+            ("PEARTUBE_API_HOST".to_owned(), "127.0.0.1".to_owned()),
+            ("PEARTUBE_API_PORT".to_owned(), "0".to_owned()),
+            ("PEARTUBE_HTTPS_PORT".to_owned(), "0".to_owned()),
+            (
+                "PEARTUBE_STORAGE".to_owned(),
+                storage.path().display().to_string(),
+            ),
+            ("PEARTUBE_PRIVATE_GUARD".to_owned(), "1".to_owned()),
+            ("PEARTUBE_PRIVATE_GUARD_PORT".to_owned(), "49001".to_owned()),
+            ("PEARTUBE_DHT_PORT".to_owned(), "49001".to_owned()),
+        ]);
+        let relay = Relay::listen(env)
+            .await
+            .expect("the API listens on loopback");
+
+        let reports: Arc<Mutex<Vec<(String, Value)>>> = Arc::new(Mutex::new(Vec::new()));
+        // Hold the settings without changing them: the admitted guard step stops at its first
+        // setting read, with the lifecycle turn still in hand.
+        let settings = relay.0.settings.lock().await;
+        let sink = reports.clone();
+        let mut admitted = std::pin::pin!(relay.start_guard(move |message, fields| {
+            sink.lock().unwrap().push((message.to_owned(), fields));
+        }));
+        assert!(admitted.as_mut().now_or_never().is_none());
+        assert!(
+            relay.0.open.try_lock().is_err(),
+            "the admitted step holds the lifecycle turn"
+        );
+
+        // One poll sets the shutdown flag, then waits for the turn that the step holds.
+        let mut shutdown = std::pin::pin!(relay.shutdown());
+        assert!(shutdown.as_mut().now_or_never().is_none());
+        assert!(relay.running().is_err());
+
+        // A new step refuses at once while the turn is held: it does not wait, and it reports
+        // nothing.
+        let mut refused = std::pin::pin!(
+            relay.start_guard(|_, _| { panic!("a refused guard startup must not report") })
+        );
+        assert!(
+            refused.as_mut().now_or_never().is_some(),
+            "a refused guard startup completes without waiting"
+        );
+        assert!(relay.0.open.try_lock().is_err());
+
+        // Released settings let the admitted step read the equal guard and peer ports and report
+        // the configuration error, not a refusal.
+        drop(settings);
+        tokio::time::timeout(std::time::Duration::from_secs(5), admitted.as_mut())
+            .await
+            .expect("the admitted guard step completes");
+        tokio::time::timeout(std::time::Duration::from_secs(5), shutdown.as_mut())
+            .await
+            .expect("the shutdown completes");
+        let reports = reports.lock().unwrap();
+        assert_eq!(reports.len(), 1, "the admitted step reports exactly once");
+        let (message, fields) = &reports[0];
+        assert_eq!(message.as_str(), "private guard failed to start");
+        assert_eq!(
+            *fields,
+            serde_json::json!({ "error": "privateGuardPort: use a different port from the peer port" })
+        );
+    }
 }
