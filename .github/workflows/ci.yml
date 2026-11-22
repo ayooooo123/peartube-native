@@ -88,94 +88,46 @@ jobs:
           repository: ${{ github.repository_owner }}/peartube
           ref: ${{ steps.jsref.outputs.ref }}
           path: peartube
-      # The sibling crates build at the commits STACK.lock names, as release-ffi.yml does: a red run
-      # then comes from this repo's change, and a sibling change is tested here once the lock names it.
-      - id: stack
-        run: while read -r repo sha; do echo "$repo=$sha" >> "$GITHUB_OUTPUT"; done < STACK.lock
-      - uses: actions/checkout@v4
-        with:
-          repository: ${{ github.repository_owner }}/compact-encoding-rs
-          ref: ${{ steps.stack.outputs['compact-encoding-rs'] }}
-          path: compact-encoding-rs
-      - uses: actions/checkout@v4
-        with:
-          repository: ${{ github.repository_owner }}/protomux-rs
-          ref: ${{ steps.stack.outputs['protomux-rs'] }}
-          path: protomux-rs
-      - uses: actions/checkout@v4
-        with:
-          repository: ${{ github.repository_owner }}/protomux-wakeup-rs
-          ref: ${{ steps.stack.outputs['protomux-wakeup-rs'] }}
-          path: protomux-wakeup-rs
-      - uses: actions/checkout@v4
-        with:
-          repository: ${{ github.repository_owner }}/hyperschema-rs
-          ref: ${{ steps.stack.outputs['hyperschema-rs'] }}
-          path: hyperschema-rs
-      - uses: actions/checkout@v4
-        with:
-          repository: ${{ github.repository_owner }}/hypercore-id-encoding-rs
-          ref: ${{ steps.stack.outputs['hypercore-id-encoding-rs'] }}
-          path: hypercore-id-encoding-rs
-      - uses: actions/checkout@v4
-        with:
-          repository: ${{ github.repository_owner }}/hypercore-storage-rs
-          ref: ${{ steps.stack.outputs['hypercore-storage-rs'] }}
-          path: hypercore-storage-rs
-      - uses: actions/checkout@v4
-        with:
-          repository: ${{ github.repository_owner }}/hypercore-rs
-          ref: ${{ steps.stack.outputs['hypercore-rs'] }}
-          path: hypercore-rs
-      - uses: actions/checkout@v4
-        with:
-          repository: ${{ github.repository_owner }}/corestore-rs
-          ref: ${{ steps.stack.outputs['corestore-rs'] }}
-          path: corestore-rs
-      - uses: actions/checkout@v4
-        with:
-          repository: ${{ github.repository_owner }}/hyperbee-rs
-          ref: ${{ steps.stack.outputs['hyperbee-rs'] }}
-          path: hyperbee-rs
-      - uses: actions/checkout@v4
-        with:
-          repository: ${{ github.repository_owner }}/hyperblobs-rs
-          ref: ${{ steps.stack.outputs['hyperblobs-rs'] }}
-          path: hyperblobs-rs
-      - uses: actions/checkout@v4
-        with:
-          repository: ${{ github.repository_owner }}/byte-stream-rs
-          ref: ${{ steps.stack.outputs['byte-stream-rs'] }}
-          path: byte-stream-rs
-      - uses: actions/checkout@v4
-        with:
-          repository: ${{ github.repository_owner }}/autobee-rs
-          ref: ${{ steps.stack.outputs['autobee-rs'] }}
-          path: autobee-rs
-      - uses: actions/checkout@v4
-        with:
-          repository: ${{ github.repository_owner }}/peeroxide
-          ref: ${{ steps.stack.outputs['peeroxide'] }}
-          path: peeroxide
-      - uses: actions/checkout@v4
-        with:
-          repository: ${{ github.repository_owner }}/mdns-sd
-          ref: ${{ steps.stack.outputs['mdns-sd'] }}
-          path: mdns-sd
-      # A sibling missing from STACK.lock would check out its default branch without a word: fail instead.
-      - name: Siblings are at their STACK.lock commits
+      - name: Check out and verify the pinned sibling commits
+        shell: python
+        env:
+          GIT_TERMINAL_PROMPT: "0"
         run: |
-          bad=0
-          while read -r repo sha; do
-            head=$(git -C "../$repo" rev-parse HEAD)
-            if [ "$head" = "$sha" ]; then echo "ok   $repo $head"; else echo "DIFF $repo is at $head, STACK.lock names $sha"; bad=1; fi
-          done < STACK.lock
-          for dir in ../*/; do
-            repo=$(basename "$dir")
-            case "$repo" in peartube-native|peartube) continue ;; esac
-            grep -q "^$repo " STACK.lock || { echo "DIFF $repo is checked out but STACK.lock does not name it"; bad=1; }
-          done
-          exit $bad
+          import os, re, subprocess
+          from concurrent.futures import ThreadPoolExecutor
+          from pathlib import Path
+
+          expected = set("""compact-encoding-rs protomux-rs protomux-wakeup-rs hyperschema-rs
+              hypercore-id-encoding-rs hypercore-storage-rs hypercore-rs corestore-rs hyperbee-rs
+              hyperblobs-rs byte-stream-rs autobee-rs peeroxide mdns-sd""".split())
+          pins = {}
+          for line in Path("STACK.lock").read_text().splitlines():
+              name, sha = line.split()
+              if name not in expected or name in pins or not re.fullmatch("[0-9a-f]{40}", sha):
+                  raise SystemExit(f"Invalid or duplicate STACK.lock entry: {name!r}")
+              pins[name] = sha
+          if expected != pins.keys():
+              raise SystemExit(f"Missing pins: {sorted(expected - pins.keys())}")
+
+          owner = os.environ["GITHUB_REPOSITORY_OWNER"]
+          def checkout(pin):
+              name, sha = pin
+              dest = Path("..") / name
+              url = f"{os.environ['GITHUB_SERVER_URL']}/{owner}/{name}.git"
+              subprocess.run(["git", "clone", "--quiet", "--no-tags", "--depth=1",
+                              f"--revision={sha}", url, dest], check=True)
+              head = subprocess.check_output(["git", "-C", dest, "rev-parse", "HEAD"], text=True).strip()
+              if head != sha:
+                  raise SystemExit(f"{name}: expected {sha}, checked out {head}")
+              return f"ok   {name} {head}"
+
+          # Fetch only the public repos named above, without sharing credentials or a working tree.
+          with ThreadPoolExecutor(max_workers=4) as pool:
+              for verified in pool.map(checkout, pins.items()):
+                  print(verified)
+          extra = {p.name for p in Path("..").iterdir() if p.is_dir()} - expected - {"peartube", "peartube-native"}
+          if extra:
+              raise SystemExit(f"Unexpected checkout directories: {sorted(extra)}")
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
