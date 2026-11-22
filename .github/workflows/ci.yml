@@ -66,8 +66,9 @@ jobs:
       # record in `mdns_interop_with_bonjour_service` (also on Linux, where JS/Rust LAN discovery itself passes),
       # and macOS runners deliver no LAN multicast, so every test that discovers a peer over mDNS fails there.
       matrix:
-        os: [ubuntu-latest, macos-latest]
-        check: ${{ fromJSON(needs.changes.outputs.scope == 'full' && '["clippy","test","transfers"]' || '["clippy","test"]') }}
+        # Create the longest cold job first. All jobs remain eligible to run at once.
+        check: ${{ fromJSON(needs.changes.outputs.scope == 'full' && '["test","transfers","clippy"]' || '["test","clippy"]') }}
+        os: [macos-latest, ubuntu-latest]
         include:
           - os: ubuntu-latest
             skip: --skip mdns_interop_with_bonjour_service

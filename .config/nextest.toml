@@ -43,6 +43,13 @@ filter = '''
 '''
 threads-required = "num-test-threads"
 
+# On macOS this 16 MiB request stalled after it overlapped another transfer.
+# Keep the real request and deadline. Do not share the runner for this case.
+[[profile.ci.overrides]]
+platform = { host = 'cfg(target_os = "macos")' }
+filter = 'test(=rust_viewer_clear_cache_shrinks_the_disk_immediately)'
+threads-required = "num-test-threads"
+
 # Start long transfers and the C link test early. This changes order, not coverage.
 [[profile.ci.overrides]]
 filter = '''
