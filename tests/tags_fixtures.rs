@@ -72,6 +72,7 @@ fn tags_fixtures() {
     let fixtures: Fixtures =
         serde_json::from_str(include_str!("../fixtures/tags-reference.json")).unwrap();
     assert!(fixtures.parse.len() >= 50 && fixtures.cuts.len() >= 8);
+    assert!(!fixtures.album_key.is_empty(), "missing album key cases");
     for case in fixtures.parse {
         assert_eq!(
             view(parse_tags(&bytes(&case.hex))),
