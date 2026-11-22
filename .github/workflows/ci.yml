@@ -198,6 +198,49 @@ jobs:
           key: ${{ matrix.check == 'clippy' && 'clippy' || 'test' }}-${{ hashFiles('peartube-native/Cargo.lock', 'peartube-native/STACK.lock') }}
           save-if: ${{ matrix.check != 'transfers' }}
           cache-bin: false
+      - name: Trace actual compiler calls and the nested C host build
+        shell: python
+        env:
+          CHECK: ${{ matrix.check }}
+        run: |
+          import os, subprocess, sys
+          from pathlib import Path
+          folder = Path(os.environ["RUNNER_TEMP"]) / "ci-compile-trace"
+          folder.mkdir()
+          for name in ("compilers", "ffi-child"):
+              (folder / name).touch()
+          wrapper = folder / "rustc-wrapper"
+          wrapper.write_text("#!" + sys.executable + "\n" + r'''import os, shutil, sys
+          from pathlib import Path
+          args = sys.argv[1:]
+          role = Path(sys.argv[0])
+          root = role.parent
+          if role.name == "test-runner":
+              if os.environ.get("NEXTEST_TEST_NAME") == "c_host_links_staticlib" or "c_host_links_staticlib" in args:
+                  os.environ["CI_ORIGINAL_CARGO"] = os.environ.get("CARGO") or shutil.which("cargo")
+                  os.environ["CARGO"] = str(root / "ffi-cargo")
+          elif role.name == "ffi-cargo":
+              if args == ["build", "-p", "peartube-native-ffi", "--lib"]:
+                  with (root / "ffi-child").open("a") as f:
+                      print(os.environ.get("RUSTC_WRAPPER", "missing"), file=f)
+                  os.environ["CI_TRACE_PARENT"] = "ffi-child"
+              args = [os.environ["CI_ORIGINAL_CARGO"], *args]
+          elif "--emit" in args or any(a.startswith("--emit=") for a in args):
+              with (root / "compilers").open("a") as f:
+                  print(os.environ.get("CI_TRACE_PARENT", "outer"), os.environ.get("CARGO_MANIFEST_DIR", "unknown"),
+                        os.environ.get("CARGO_PKG_NAME", "unknown"), sep="\t", file=f)
+          os.execvpe(args[0], args, os.environ)
+          ''')
+          wrapper.chmod(0o755)
+          for name in ("test-runner", "ffi-cargo"):
+              os.link(wrapper, folder / name)
+          with open(os.environ["GITHUB_ENV"], "a") as out:
+              print("RUSTC_WRAPPER=" + str(wrapper), file=out)
+              if os.environ["CHECK"] == "test":
+                  ver = subprocess.check_output(["rustc", "-vV"], text=True)
+                  host = next(l[6:] for l in ver.splitlines() if l.startswith("host: "))
+                  print("CARGO_TARGET_" + host.upper().replace("-", "_") + "_RUNNER=" +
+                        str(folder / "test-runner"), file=out)
       - run: cargo fmt --check -p peartube-native -p peartube-native-ffi
         if: matrix.check == 'clippy'
       - run: cargo clippy --workspace --all-targets -- -D warnings
@@ -300,6 +343,41 @@ jobs:
         run: |
           cargo build --workspace --examples --profile test --message-format=json-render-diagnostics |
             jq -r 'select(.reason == "compiler-artifact" and .target.kind == ["example"] and .executable != null) | "Linked example: \(.target.name)"'
+      - name: Check the actual compilers after tests, doctests and example links
+        if: ${{ !cancelled() }}
+        shell: python
+        env:
+          CHECK: ${{ matrix.check }}
+        run: |
+          import json, os
+          from collections import Counter
+          from pathlib import Path
+          trace = Path(os.environ["RUNNER_TEMP"]) / "ci-compile-trace"
+          bins = {name: (Path("..") / name).resolve() for name, sha in
+                  (line.split() for line in Path("STACK.lock").read_text().splitlines())}
+          crates = Counter()
+          workspace = Path.cwd().resolve()
+          home = Path(os.environ.get("CARGO_HOME", Path.home() / ".cargo")).resolve()
+          for line in (trace / "compilers").read_text().splitlines():
+              parent, path, crate = line.split("\t")
+              assert path != "unknown" and crate != "unknown", line
+              loc = Path(path).resolve()
+              if loc.is_relative_to(workspace):
+                  group = "workspace"
+              elif loc.is_relative_to(home):
+                  group = "external"
+              else:
+                  group = next((n for n, root in bins.items() if loc.is_relative_to(root)), None)
+                  assert group is not None, line
+              crates[parent, group, crate] += 1
+          children = (trace / "ffi-child").read_text().splitlines()
+          siblings = sum(n for (parent, group, crate), n in crates.items() if group in bins)
+          counts = {":".join(k): v for k, v in sorted(crates.items())}
+          print("COMPILE_TRACE", json.dumps({"ffi_children": len(children), "siblings": siblings, "counts": counts}))
+          assert any(g == "workspace" and c == "peartube-native" for _, g, c in crates), counts
+          assert len(children) == int(os.environ["CHECK"] == "test"), children
+          assert all(p == str(trace / "rustc-wrapper") for p in children), children
+          assert siblings == 0, counts
 
   result:
     name: CI result
