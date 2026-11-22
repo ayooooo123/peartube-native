@@ -98,8 +98,10 @@ struct Inner {
     storage: PathBuf,
     saved: Mutex<SavedReceivers>,
     discovered: Mutex<Vec<DiscoveredReceiver>>,
-    /// mDNS fullname → discovered id, for `ServiceRemoved`.
-    down_index: Mutex<HashMap<String, String>>,
+    /// Discovered id → mDNS fullname of the advertisement heard last for it. Only that
+    /// advertisement going down removes the receiver: an older one (from before a restart or a
+    /// new address) can expire or say goodbye while the receiver is live.
+    heard_last: Mutex<HashMap<String, String>>,
     browse: Mutex<Option<super::mdns::BrowseHandle>>,
     browse_host: Mutex<Option<Option<String>>>,
     local_receiver: Mutex<Option<Arc<Receiver>>>,
@@ -148,7 +150,7 @@ impl Inner {
         *lock(&self.browse_host) = Some(host.clone());
         if self.closing.load(Ordering::Acquire) || (host.is_none() && !self.mdns) {
             lock(&self.discovered).clear();
-            lock(&self.down_index).clear();
+            lock(&self.heard_last).clear();
             self.emit_change();
             return;
         }
@@ -156,15 +158,8 @@ impl Inner {
         let up: Arc<dyn Fn(super::mdns::BrowsedService) + Send + Sync> =
             Arc::new(move |service| inner.on_service(service));
         let inner = self.clone();
-        let down: Arc<dyn Fn(String) + Send + Sync> = Arc::new(move |fullname| {
-            let id = lock(&inner.down_index).remove(&fullname);
-            if let Some(id) = id
-                && inner.discovered().iter().any(|item| item.id == id)
-            {
-                lock(&inner.discovered).retain(|item| item.id != id);
-                inner.emit_change();
-            }
-        });
+        let down: Arc<dyn Fn(String) + Send + Sync> =
+            Arc::new(move |fullname| inner.on_service_down(&fullname));
         if let Ok(handle) = super::mdns::browse(up, Some(down)) {
             *lock(&self.browse) = Some(handle);
         }
@@ -189,7 +184,29 @@ impl Inner {
                 None => discovered.push(record),
             }
         }
-        lock(&self.down_index).insert(fullname, id);
+        lock(&self.heard_last).insert(id, fullname);
+        self.emit_change();
+    }
+
+    /// `onServiceDown`: `ServiceRemoved` names one advertisement by its fullname. Only the
+    /// advertisement heard last for an id removes the receiver; an older one belongs to a name
+    /// the receiver no longer advertises, so its expiry says nothing about the live receiver.
+    fn on_service_down(&self, fullname: &str) {
+        let id = {
+            let mut heard_last = lock(&self.heard_last);
+            let id = heard_last
+                .iter()
+                .find(|(_, heard)| heard.as_str() == fullname)
+                .map(|(id, _)| id.clone());
+            if let Some(id) = id.as_ref() {
+                heard_last.remove(id);
+            }
+            id
+        };
+        let Some(id) = id else {
+            return;
+        };
+        lock(&self.discovered).retain(|item| item.id != id);
         self.emit_change();
     }
 
@@ -749,7 +766,7 @@ impl CastController {
                 storage: options.storage,
                 saved: Mutex::new(saved),
                 discovered: Mutex::new(Vec::new()),
-                down_index: Mutex::new(HashMap::new()),
+                heard_last: Mutex::new(HashMap::new()),
                 browse: Mutex::new(None),
                 browse_host: Mutex::new(None),
                 local_receiver: Mutex::new(None),
@@ -925,5 +942,57 @@ mod tests {
             Some("ABC123")
         ));
         assert_eq!(random_hex(16).len(), 32);
+    }
+
+    #[tokio::test]
+    async fn a_restarted_receiver_stays_listed_when_its_old_advertisement_goes_down() {
+        use crate::cast::mdns::{BrowsedService, advertisement_txt, instance_name, service_type};
+
+        const ID: &str = "0123456789abcdef0123456789abcdef";
+
+        fn browsed(id: &str, nonce: &str, port: u16) -> BrowsedService {
+            let name = instance_name("Kitchen TV", id, nonce);
+            BrowsedService {
+                fullname: format!("{name}.{}", service_type()),
+                name,
+                port,
+                addresses: Vec::new(),
+                txt: advertisement_txt(
+                    id,
+                    "Kitchen TV",
+                    Some("192.168.1.9"),
+                    &"ab".repeat(32),
+                    port,
+                    false,
+                ),
+            }
+        }
+
+        let storage = tempfile::tempdir().expect("tempdir");
+        let controller = CastController::start(ControllerOptions {
+            storage: storage.path().to_owned(),
+            ..ControllerOptions::default()
+        })
+        .await
+        .expect("start cast controller");
+        let first = browsed(ID, "aaa", 40_000);
+        let second = browsed(ID, "bbb", 40_001);
+        assert_ne!(first.fullname, second.fullname);
+        controller.inner.on_service(first.clone());
+        controller.inner.on_service(second.clone());
+        controller.inner.on_service_down(&first.fullname);
+        let discovered = controller.inner.discovered();
+        assert_eq!(discovered.len(), 1);
+        assert_eq!(discovered[0].id, ID);
+        assert_eq!(
+            discovered[0].lan,
+            Some(LanAddress {
+                host: "192.168.1.9".to_owned(),
+                port: 40_001
+            })
+        );
+        controller.inner.on_service_down(&second.fullname);
+        assert!(controller.inner.discovered().is_empty());
+        controller.close().await;
     }
 }

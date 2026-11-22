@@ -145,7 +145,7 @@ fn advertise_info(
 ) -> Option<AdvertiseInfo> {
     let host = host.filter(|host| !host.is_empty())?;
     Some(AdvertiseInfo {
-        name: mdns::instance_name(&identity.name, &identity.device_id),
+        name: mdns::instance_name(&identity.name, &identity.device_id, &crate::lan::ad_nonce()),
         host: host.parse().ok()?,
         port: if lan_port > 0 {
             lan_port
@@ -1104,6 +1104,59 @@ mod tests {
         let txt: std::collections::HashMap<_, _> = info.txt.into_iter().collect();
         assert_eq!(info.port, RECEIVER_PORT);
         assert_eq!(txt["lp"], "0");
+    }
+
+    fn identity(name: &str) -> ReceiverIdentity {
+        ReceiverIdentity {
+            device_id: "0123456789abcdef0123456789abcdef".into(),
+            name: name.into(),
+            seed: "ab".repeat(32),
+            pair_token: "cd".repeat(16),
+            pair_code: "ABC123".into(),
+        }
+    }
+
+    /// A receiver that restarts, or moves to another address, advertises again. The app's
+    /// responder silently drops an advertisement whose name is taken, and a sender removes a
+    /// receiver when the name that it heard last goes down, so no two advertisements share a name.
+    #[test]
+    fn every_advertisement_goes_out_under_a_new_name() {
+        let identity = identity("Kitchen TV");
+        let key = "ee".repeat(32);
+        let names: std::collections::HashSet<String> = (0..4)
+            .map(|_| {
+                advertise_info(&identity, &key, Some("192.168.1.9"), 40_000, false)
+                    .expect("a LAN host is advertised")
+                    .name
+            })
+            .collect();
+        // The nonce is random: four equal draws happen once in 46,656³ runs.
+        assert!(
+            names.len() > 1,
+            "four advertisements shared a name: {names:?}"
+        );
+        assert!(
+            names
+                .iter()
+                .all(|name| name.starts_with("Kitchen TV (012345-"))
+        );
+    }
+
+    #[test]
+    fn a_sixteen_emoji_name_is_advertised_under_a_label_that_fits() {
+        let identity = identity(&"📺".repeat(16));
+        let key = "ee".repeat(32);
+        let info = advertise_info(&identity, &key, Some("192.168.1.9"), 40_000, false)
+            .expect("a LAN host is advertised");
+        assert!(
+            info.name.len() <= 63,
+            "the instance label takes {} bytes",
+            info.name.len()
+        );
+        assert!(info.name.starts_with("📺"));
+        assert!(info.name.ends_with(')'));
+        let txt: std::collections::HashMap<_, _> = info.txt.into_iter().collect();
+        assert_eq!(txt["name"], identity.name);
     }
 
     #[test]
