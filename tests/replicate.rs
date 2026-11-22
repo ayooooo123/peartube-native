@@ -35,6 +35,11 @@ async fn node(dir: &std::path::Path, bootstrap: &Value, tracker: Option<&str>) -
     .expect("node opens")
 }
 
+/// The follower copies a title from the seeder of its channel, which is connected and serves it,
+/// so the pass never looks up the title's topic: as in the app's `src/mirror.js`, only a slice
+/// that gets no block for 5 s is looked up. The title is two blocks, so that the seeder serves it
+/// well inside those 5 s on a slow test machine too. A debug build on an Intel i7-10710U took 5.2
+/// to 5.4 s to copy a title of 3 MB between two nodes in one process, on native main as well.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_follower_replicates_a_title_and_respects_the_disk_reserve() {
     let udx = libudx::UdxRuntime::new().expect("udx");
@@ -42,7 +47,7 @@ async fn a_follower_replicates_a_title_and_respects_the_disk_reserve() {
     let (seed_dir, replica_dir) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
 
     let seeder = node(seed_dir.path(), &bootstrap, None).await;
-    let bytes: Vec<u8> = (0..3_000_001u64)
+    let bytes: Vec<u8> = (0..(700 * 1024 + 13u64))
         .map(|i| (i.wrapping_mul(2_654_435_761) >> 7) as u8)
         .collect();
     let published = seeder
@@ -60,6 +65,10 @@ async fn a_follower_replicates_a_title_and_respects_the_disk_reserve() {
         )
         .await
         .expect("publish");
+    assert_eq!(
+        published.announce.blob.block_length, 2,
+        "premise: the title spans two blocks"
+    );
 
     let replica = node(replica_dir.path(), &bootstrap, Some(&published.channel)).await;
     let topics = record_topics(&replica).await;
@@ -97,7 +106,9 @@ async fn a_follower_replicates_a_title_and_respects_the_disk_reserve() {
     assert_eq!(full["skippedDiskFull"], 1, "{full}");
     assert_eq!(full["replicatedEntries"], 0, "{full}");
 
+    let copying = Instant::now();
     let done = replicator.replicate(json!({ "once": true })).await;
+    let copy_time = copying.elapsed();
     assert_eq!(done["totalEntries"], 1, "{done}");
     assert_eq!(done["replicatedEntries"], 1, "{done}");
     assert_eq!(done["replicatedBytes"], bytes.len() as u64, "{done}");
@@ -107,12 +118,23 @@ async fn a_follower_replicates_a_title_and_respects_the_disk_reserve() {
     assert_eq!(again["replicatedEntries"], 1, "{again}");
     assert_eq!(again["skippedUnavailable"], 0, "{again}");
 
+    // The premise of the next check: the whole pass ended before a slice with no block is looked
+    // up.
+    assert!(
+        copy_time < Duration::from_secs(5),
+        "premise: the connected seeder served the title in {copy_time:?}"
+    );
     assert!(
         topics.changes(&topic).is_empty(),
         "a serving peer needs no content lookup"
     );
+    assert_eq!(
+        local_bytes(&replica, &published.announce).await.as_deref(),
+        Some(bytes.as_slice()),
+        "the follower holds the title's bytes"
+    );
     eprintln!(
-        "replicate-connected: {} bytes copied; 0 content-topic joins",
+        "replicate-connected: {} bytes copied in {copy_time:?}; 0 content-topic joins",
         done["replicatedBytes"]
     );
 
