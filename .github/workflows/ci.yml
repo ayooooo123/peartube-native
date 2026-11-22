@@ -291,6 +291,31 @@ jobs:
         if: >-
           !cancelled() && steps.suite.outputs.scope == 'full' &&
           (steps.tests.outcome == 'success' || steps.tests.outcome == 'failure')
+      - name: Repeat the failed case without another test on this runner
+        if: >-
+          !cancelled() &&
+          (steps.tests.outcome == 'success' || steps.tests.outcome == 'failure') &&
+          ((matrix.check == 'test' && runner.os == 'Linux') ||
+           (matrix.check == 'transfers' && runner.os == 'macOS'))
+        shell: bash
+        env:
+          CHECK: ${{ matrix.check }}
+        run: |
+          set -euo pipefail
+          if [[ "$CHECK" == test ]]; then
+            target=acquire_mirror
+            name=library::the_library_matches_the_app
+            samples=20
+          else
+            target=network_mixed_c
+            name=rust_viewer_clear_cache_shrinks_the_disk_immediately
+            samples=12
+          fi
+          for ((i=1; i<=samples; i++)); do
+            printf 'Isolation sample %d/%d: %s\n' "$i" "$samples" "$name"
+            cargo nextest run --profile ci -p peartube-native --test "$target" \
+              -E "test(=$name)" --test-threads 1 --run-ignored all
+          done
 
   result:
     name: CI result
