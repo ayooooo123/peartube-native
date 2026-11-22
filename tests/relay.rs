@@ -530,6 +530,454 @@ async fn an_album_is_imported_listed_and_removed_and_soulseek_follows_its_settin
     relay.shutdown().await;
 }
 
+/// Sends one request and returns its connection without reading the answer.
+fn begin(addr: SocketAddr, method: &str, path: &str, body: &str) -> TcpStream {
+    let mut stream = TcpStream::connect(addr).expect("api listens");
+    write!(
+        stream,
+        "{method} {path} HTTP/1.1\r\nHost: {addr}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    )
+    .unwrap();
+    stream
+}
+
+/// Waits until a reopen has taken the node away. From then until the new node is open the relay
+/// has none, so a step that is cut now is cut in the middle.
+async fn node_taken_away(relay: &Relay) {
+    let asked = std::time::Instant::now();
+    while relay.status().await.is_some() {
+        assert!(
+            asked.elapsed() < Duration::from_secs(20),
+            "the reopen never took the node away"
+        );
+        tokio::time::sleep(Duration::from_micros(200)).await;
+    }
+}
+
+/// A port that was free a moment ago.
+fn free_port() -> u16 {
+    std::net::TcpListener::bind("127.0.0.1:0")
+        .and_then(|listener| listener.local_addr())
+        .expect("a free port")
+        .port()
+}
+
+/// The films of an import folder, in MiB and in the order the import takes them.
+const FILMS: [usize; 5] = [1, 8, 8, 8, 8];
+/// An import that ends with its first large film, so that a reopened relay has none left.
+const TWO_FILMS: [usize; 2] = [1, 8];
+
+/// An import folder that keeps the folder import busy for a known time. The import takes the
+/// films in name order: when the first one is listed, the import is in the large films, about
+/// 0.3 s each in a debug build. A close of the plugin host waits for the film in the import and
+/// for no other, so the tests below act in that wait and count the films that were left.
+fn import_folder(dir: &std::path::Path, films: &[usize]) -> std::path::PathBuf {
+    let folder = dir.join("import");
+    std::fs::create_dir_all(&folder).unwrap();
+    for (index, mib) in films.iter().enumerate() {
+        // Each film has its own bytes: two equal files are one entry.
+        let mut state = 0x9E37_79B9_7F4A_7C15u64 + index as u64;
+        let mut bytes = vec![0u8; mib << 20];
+        for chunk in bytes.chunks_mut(8) {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            chunk.copy_from_slice(&state.to_le_bytes()[..chunk.len()]);
+        }
+        std::fs::write(folder.join(format!("Film {index}.mp4")), bytes).unwrap();
+    }
+    folder
+}
+
+/// The settings of a relay on `<dir>/data` that imports `<dir>/import`.
+fn env_importing(dir: &std::path::Path) -> HashMap<String, String> {
+    let mut env = env(&dir.join("data"));
+    env.insert(
+        "PEARTUBE_WATCH_DIR".into(),
+        dir.join("import").display().to_string(),
+    );
+    env
+}
+
+/// The titles the relay lists. `None`: the API does not listen yet, or the relay has no node.
+fn listed(addr: SocketAddr) -> Option<Vec<String>> {
+    let mut stream = TcpStream::connect(addr).ok()?;
+    stream
+        .set_read_timeout(Some(Duration::from_secs(40)))
+        .ok()?;
+    write!(
+        stream,
+        "GET /v1/entries?limit=100 HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n"
+    )
+    .ok()?;
+    let mut raw = String::new();
+    stream.read_to_string(&mut raw).ok()?;
+    let (head, body) = raw.split_once("\r\n\r\n")?;
+    if !head.starts_with("HTTP/1.1 200") {
+        return None;
+    }
+    let answer: Value = serde_json::from_str(body).ok()?;
+    Some(
+        answer["results"]
+            .as_array()?
+            .iter()
+            .map(|entry| entry["title"].as_str().unwrap_or_default().to_owned())
+            .collect(),
+    )
+}
+
+/// Waits until the relay lists at least `count` films, and returns their titles.
+async fn listed_at_least(addr: SocketAddr, count: usize) -> Vec<String> {
+    let asked = std::time::Instant::now();
+    loop {
+        let titles = tokio::task::spawn_blocking(move || listed(addr))
+            .await
+            .unwrap();
+        if let Some(titles) = titles.filter(|titles| titles.len() >= count) {
+            return titles;
+        }
+        assert!(
+            asked.elapsed() < Duration::from_secs(60),
+            "the relay never listed {count} films"
+        );
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+}
+
+/// A relay in its startup import: the first film is listed and a large one is in the import.
+/// Returns the relay, its first open (which waits for the plugins to start) and its API.
+async fn importing(
+    dir: &std::path::Path,
+    films: &[usize],
+) -> (
+    Relay,
+    tokio::task::JoinHandle<Result<Value, String>>,
+    SocketAddr,
+) {
+    import_folder(dir, films);
+    let relay = Relay::listen(env_importing(dir))
+        .await
+        .expect("relay listens");
+    let addr = relay.addresses()[0];
+    let opening = tokio::spawn({
+        let relay = relay.clone();
+        async move { relay.start().await }
+    });
+    listed_at_least(addr, 1).await;
+    (relay, opening, addr)
+}
+
+/// Opens `<dir>/data` again, without the import folder. It fails when a stopped relay still holds
+/// the storage.
+async fn opened_again(dir: &std::path::Path, when: &str) -> Relay {
+    let relay = Relay::listen(env(&dir.join("data")))
+        .await
+        .expect("relay listens again");
+    relay
+        .start()
+        .await
+        .unwrap_or_else(|error| panic!("{when}: the storage is still held: {error}"));
+    relay
+}
+
+/// What a stopped relay left in `<dir>/data`: the films that a relay without the import folder
+/// lists there.
+async fn left_in(dir: &std::path::Path, when: &str) -> Vec<String> {
+    let relay = opened_again(dir, when).await;
+    let left = listed_at_least(relay.addresses()[0], 1).await;
+    relay.shutdown().await;
+    left
+}
+
+/// Plugins start after the node answers, as in `bin/relay.js`: a restart during the startup
+/// import waits for the film in the import, not for the whole import. The import then goes on
+/// where it stopped, and every film is imported once.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_restart_during_the_startup_import_waits_for_one_film_and_imports_each_film_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let (relay, opening, addr) = importing(dir.path(), &FILMS).await;
+
+    tokio::task::spawn_blocking(move || request_json(addr, "POST", "/v1/restart", ""))
+        .await
+        .unwrap();
+    let at_the_answer = listed_at_least(addr, 1).await;
+    assert!(
+        at_the_answer.len() < FILMS.len(),
+        "the restart waited for the whole import: {at_the_answer:?}"
+    );
+
+    // The plugins are listed once they have started, which is after the import.
+    let asked = std::time::Instant::now();
+    let import = loop {
+        let plugins = tokio::task::spawn_blocking(move || get_json(addr, "/v1/plugins"))
+            .await
+            .unwrap();
+        let import = plugins["plugins"]
+            .as_array()
+            .and_then(|plugins| plugins.iter().find(|plugin| plugin["name"] == "watch-dir"))
+            .cloned();
+        if let Some(import) = import {
+            break import;
+        }
+        assert!(
+            asked.elapsed() < Duration::from_secs(60),
+            "the plugins never started after the restart"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    };
+    let mut titles = listed_at_least(addr, FILMS.len()).await;
+    titles.sort();
+    let every_film: Vec<String> = (0..FILMS.len())
+        .map(|film| format!("Film {film}"))
+        .collect();
+    assert_eq!(titles, every_film, "every film is listed once");
+    // The second import took only the films that the first one had not reached.
+    assert_eq!(
+        import["lastResult"]["scanned"],
+        json!(FILMS.len()),
+        "{import}"
+    );
+    assert_eq!(
+        import["lastResult"]["ingested"],
+        json!(FILMS.len() - at_the_answer.len()),
+        "{import}"
+    );
+
+    opening.await.unwrap().expect("the first open");
+    relay.shutdown().await;
+    assert_eq!(relay.status().await, None);
+}
+
+/// A stop during the startup import (`relay::run`'s `stop`, a signal in the process) ends the
+/// import between films and closes the node: the flow ends with exit code 0, and the films after
+/// the one in the import are not imported.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_stop_during_the_startup_import_ends_it_between_films() {
+    let dir = tempfile::tempdir().unwrap();
+    import_folder(dir.path(), &FILMS);
+    let port = free_port();
+    let mut env = env_importing(dir.path());
+    env.insert("PEARTUBE_API_PORT".into(), port.to_string());
+    // The stop arrives when the first film is listed.
+    let stop = async move {
+        listed_at_least(SocketAddr::from(([127, 0, 0, 1], port)), 1).await;
+    };
+    let code = peartube_native::relay::run(env, stop).await;
+    assert_eq!(code, 0, "a stop during the startup import");
+    let left = left_in(dir.path(), "a stop during the startup import").await;
+    assert!(
+        left.len() < FILMS.len(),
+        "the import went on after the stop: {left:?}"
+    );
+}
+
+/// A live setting for the plugins waits until they have started, and it holds the lifecycle
+/// while it waits. A shutdown still ends the startup import between films: it closes the plugin
+/// host before it waits for the step in flight.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_shutdown_ends_the_startup_import_under_a_setting_that_waits_for_the_plugins() {
+    let dir = tempfile::tempdir().unwrap();
+    let (relay, opening, addr) = importing(dir.path(), &FILMS).await;
+    let waiting = begin(addr, "PUT", "/v1/settings", r#"{"replicateMbps":5}"#);
+    tokio::time::sleep(Duration::from_millis(40)).await;
+
+    relay.shutdown().await;
+    assert_eq!(
+        relay.status().await,
+        None,
+        "no node is left after the shutdown"
+    );
+    drop(waiting);
+    let _ = opening.await.unwrap();
+    let left = left_in(dir.path(), "a shutdown under a waiting setting").await;
+    assert!(
+        left.len() < FILMS.len(),
+        "the shutdown waited for the whole import: {left:?}"
+    );
+}
+
+/// A lifecycle step that started always finishes, as a promise does in `bin/relay.js`. The client
+/// that asked for a restart, for a setting that reopens the node, or for a recovery onto another
+/// channel hangs up while the reopen waits for the film in the import, which is in the middle of
+/// its close. The relay still comes back whole, and its shutdown closes the node, so the same
+/// storage opens again.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_reopen_finishes_when_its_client_hangs_up() {
+    // The phrase of all-zero entropy: a channel that is not this relay's, so the relay reopens on
+    // it. The request is never answered here, because no peer holds that channel.
+    let recovery = r#"{"mnemonic":"abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"}"#;
+    for (method, path, body, same_channel) in [
+        ("POST", "/v1/restart", "", true),
+        (
+            "PUT",
+            "/v1/settings",
+            r#"{"bootstrap":["127.0.0.1:10"]}"#,
+            true,
+        ),
+        ("POST", "/v1/identity/recover", recovery, false),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let (relay, opening, addr) = importing(dir.path(), &TWO_FILMS).await;
+        let channel = relay.status().await.expect("a node is open")["tracker"].clone();
+
+        let asking = begin(addr, method, path, body);
+        tokio::time::sleep(Duration::from_millis(40)).await;
+        drop(asking);
+        // A restart waits for the reopen before it, so its answer comes after both.
+        tokio::task::spawn_blocking(move || request_json(addr, "POST", "/v1/restart", ""))
+            .await
+            .unwrap();
+        let now = relay.status().await.expect("a node is open again")["tracker"].clone();
+        assert_eq!(
+            now == channel,
+            same_channel,
+            "{method} {path}: the relay came back on {now}, from {channel}"
+        );
+
+        relay.shutdown().await;
+        assert_eq!(
+            relay.status().await,
+            None,
+            "{method} {path}: no node is left after a shutdown"
+        );
+        let _ = opening.await.unwrap();
+        opened_again(dir.path(), &format!("{method} {path}"))
+            .await
+            .shutdown()
+            .await;
+    }
+}
+
+/// A shutdown that arrives while a restart is in flight waits for the whole stop: when it returns,
+/// no node is left and the storage is free. `bin/relay.js` exited with its store open here when a
+/// plugin took long to stop.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_shutdown_during_a_restart_closes_the_node() {
+    // First with the startup import in flight: the restart waits for the film in the import, so
+    // the shutdown arrives in the middle of its close on a machine of any speed.
+    {
+        let dir = tempfile::tempdir().unwrap();
+        let (relay, opening, addr) = importing(dir.path(), &TWO_FILMS).await;
+        let waiting = begin(addr, "POST", "/v1/restart", "");
+        tokio::time::sleep(Duration::from_millis(40)).await;
+        relay.shutdown().await;
+        assert_eq!(
+            relay.status().await,
+            None,
+            "a node is left after a shutdown during a restart that waits for the import"
+        );
+        drop(waiting);
+        let _ = opening.await.unwrap();
+        opened_again(dir.path(), "a shutdown during a restart")
+            .await
+            .shutdown()
+            .await;
+    }
+
+    // Then without an import, where the moment depends on the machine: the shutdown arrives as
+    // the restart is asked for, and at three moments (ms) after the restart took the node away.
+    let dir = tempfile::tempdir().unwrap();
+    // Kept to the end: a relay that is dropped lets go of a node it failed to close.
+    let mut relays = Vec::new();
+    for moment in [None, Some(0), Some(4), Some(9)] {
+        let relay = Relay::listen(env(dir.path())).await.expect("relay listens");
+        relay.start().await.unwrap_or_else(|error| {
+            panic!("the storage is not free before the {moment:?} round: {error}")
+        });
+        let waiting = begin(relay.addresses()[0], "POST", "/v1/restart", "");
+        if let Some(later) = moment {
+            node_taken_away(&relay).await;
+            tokio::time::sleep(Duration::from_millis(later)).await;
+        }
+        relay.shutdown().await;
+        assert_eq!(
+            relay.status().await,
+            None,
+            "a node is left after a shutdown at {moment:?} of a restart"
+        );
+        drop(waiting);
+        relays.push(relay);
+    }
+    let relay = Relay::listen(env(dir.path())).await.expect("relay listens");
+    relay
+        .start()
+        .await
+        .expect("the last shutdown closed its node");
+    relay.shutdown().await;
+}
+
+/// A stop that arrives while the node opens (`relay::run`'s `stop`, a signal in the process): the
+/// open finishes on its own task, the shutdown closes its node, and the flow ends with exit code
+/// 0. The storage opens again at once.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_stop_while_the_node_opens_closes_it() {
+    // The stop arrives before the open, then at three moments (ms) after the open made its store.
+    for moment in [None, Some(0), Some(4), Some(9)] {
+        let dir = tempfile::tempdir().unwrap();
+        let store = dir.path().join("corestore");
+        let stop = async {
+            let Some(later) = moment else { return };
+            while !store.exists() {
+                tokio::time::sleep(Duration::from_micros(200)).await;
+            }
+            tokio::time::sleep(Duration::from_millis(later)).await;
+        };
+        let code = peartube_native::relay::run(env(dir.path()), stop).await;
+        assert_eq!(code, 0, "a stop at {moment:?} of the open");
+        let relay = Relay::listen(env(dir.path())).await.expect("relay listens");
+        relay.start().await.unwrap_or_else(|error| {
+            panic!("a stop at {moment:?} of the open left the storage open: {error}")
+        });
+        relay.shutdown().await;
+    }
+}
+
+/// The process itself: a SIGTERM while the node opens ends it with exit code 0, as a clean stop,
+/// not by the signal.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn the_relay_process_stops_cleanly_on_a_signal_while_its_node_opens() {
+    use std::process::{Command, Stdio};
+
+    let dir = tempfile::tempdir().unwrap();
+    // The API accepting on its port says the open is next.
+    let port = free_port();
+    let mut env = env(dir.path());
+    env.insert("PEARTUBE_API_PORT".into(), port.to_string());
+    let mut relay = Command::new(env!("CARGO_BIN_EXE_peartube-relay"))
+        .envs(&env)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("relay process");
+    let addr = SocketAddr::from(([127, 0, 0, 1], port));
+    let spawned = std::time::Instant::now();
+    while TcpStream::connect(addr).is_err() {
+        if spawned.elapsed() > Duration::from_secs(20) {
+            let _ = relay.kill();
+            panic!("the API never listened");
+        }
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    let _ = Command::new("kill")
+        .arg("-TERM")
+        .arg(relay.id().to_string())
+        .status();
+    let output = tokio::task::spawn_blocking(move || relay.wait_with_output())
+        .await
+        .unwrap()
+        .expect("the relay exits");
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "the relay ended with {:?}; it printed: {}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout)
+    );
+}
+
 // ---------------------------------------------------------------- cast routes
 
 const DEVICE_ID: &str = "0123456789abcdef0123456789abcdef";

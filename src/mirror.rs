@@ -640,7 +640,6 @@ pub struct MirrorOptions {
     /// Plugins to run once the host is up, by name, as `relay.js` runs `hiverelay-seed`.
     pub start_runs: Vec<String>,
     pub onchange: Option<Arc<dyn Fn() + Send + Sync>>,
-    pub onstarting: Option<Arc<dyn Fn() + Send + Sync>>,
     /// Runs once, after every plugin has stopped: detach the relay's traffic listener and stop
     /// its gate.
     pub stop_traffic: Option<Box<dyn FnOnce() + Send + Sync>>,
@@ -662,7 +661,6 @@ impl Default for MirrorOptions {
             import_wait_ms: 120_000,
             start_runs: Vec::new(),
             onchange: None,
-            onstarting: None,
             stop_traffic: None,
             now_ms: Arc::new(system_now_ms),
         }
@@ -1380,6 +1378,18 @@ pub struct MirrorConfig {
 /// One registered mirror plugin, with the name it was registered under.
 pub type Plugin<N> = Arc<dyn MirrorPlugin<N>>;
 
+/// What the start runs read: [`MirrorHost::open`] keeps it for [`MirrorHost::startup`].
+struct Startup<N: Node> {
+    mirror_channel: bool,
+    rechunk: bool,
+    watch_dir: Option<String>,
+    staging_dir: String,
+    start_runs: Vec<String>,
+    poll_interval_ms: u64,
+    files: Arc<dyn MirrorFiles>,
+    rechunk_factory: Arc<dyn RechunkOptionsFactory<N>>,
+}
+
 /// `createMirrorHost`'s returned handle.
 pub struct MirrorHost<N: Node> {
     pub node: Arc<N>,
@@ -1398,6 +1408,7 @@ pub struct MirrorHost<N: Node> {
     tasks: Arc<Mutex<Vec<JoinHandle<()>>>>,
     poll_task: Mutex<Option<JoinHandle<()>>>,
     stop_traffic: Mutex<Option<Box<dyn FnOnce() + Send + Sync>>>,
+    startup: Mutex<Option<Startup<N>>>,
     ctx: Ctx<N>,
 }
 
@@ -1405,9 +1416,10 @@ impl<N: Node + 'static> MirrorHost<N>
 where
     N::Error: From<AcquireError>,
 {
-    /// `createMirrorHost`: register the built-ins, then run the startup backfill, folder import, feeds and timer.
+    /// `createMirrorHost` up to `onstarting`: the host with its plugins registered. It runs
+    /// nothing until [`MirrorHost::startup`], and it can be closed before that or while that runs.
     #[allow(clippy::too_many_arguments)] // the reference's host arguments, plus the relay's plugins
-    pub async fn start(
+    pub fn open(
         node: Arc<N>,
         acquirer: Option<Acquirer<N>>,
         files: Arc<dyn MirrorFiles>,
@@ -1519,6 +1531,16 @@ where
             tasks: Arc::new(Mutex::new(Vec::new())),
             poll_task: Mutex::new(None),
             stop_traffic: Mutex::new(opts.stop_traffic),
+            startup: Mutex::new(Some(Startup {
+                mirror_channel: opts.mirror_channel,
+                rechunk: opts.rechunk,
+                watch_dir: opts.watch_dir,
+                staging_dir,
+                start_runs: opts.start_runs,
+                poll_interval_ms: opts.poll_interval_ms,
+                files,
+                rechunk_factory: rechunk_factory.clone(),
+            })),
             ctx,
         };
         host.register(Arc::new(HttpAcquirePlugin {
@@ -1528,7 +1550,7 @@ where
         host.register(Arc::new(BlobRechunkPlugin {
             acquirer,
             progress: host.rechunk_progress.clone(),
-            factory: rechunk_factory.clone(),
+            factory: rechunk_factory,
         }));
         host.register(Arc::new(WatchDirPlugin {
             state: host.watch_state.clone(),
@@ -1550,27 +1572,33 @@ where
             watch: host.watch_state.clone(),
             staging_root,
         }));
+        host
+    }
 
-        if let Some(onstarting) = &opts.onstarting {
-            onstarting();
+    /// The rest of `createMirrorHost`: the startup backfill, the folder import, the feeds, the
+    /// start runs and the poll timer. A closed host starts nothing more, and its folder import
+    /// ends between files. Only the first call does the work.
+    pub async fn startup(&self) {
+        let Some(startup) = self.startup.lock().expect("mirror startup").take() else {
+            return;
+        };
+        if startup.mirror_channel {
+            let _ = self.run("channel-backfill", Value::Null).await;
         }
-        if opts.mirror_channel {
-            let _ = host.run("channel-backfill", Value::Null).await;
-        }
-        if opts.rechunk {
-            host.spawn_run("blob-rechunk", Value::Null);
-        } else if !host.is_closed() {
+        if startup.rechunk && !self.is_closed() {
+            self.spawn_run("blob-rechunk", Value::Null);
+        } else if !self.is_closed() {
             // Count legacy blobs without moving any, so the UI offers the migration only when there is something.
-            let progress = host.rechunk_progress.clone();
-            let node = host.node.clone();
-            let options = rechunk_factory.make(RechunkOptions {
+            let progress = self.rechunk_progress.clone();
+            let node = self.node.clone();
+            let options = startup.rechunk_factory.make(RechunkOptions {
                 id: None,
                 foreground: false,
                 limit: Some(0),
                 on_migrate: Box::new(|_, _| {}),
                 on_progress: Box::new(|_| {}),
             });
-            let handle = tokio::spawn(async move {
+            self.background(async move {
                 if let Ok(Value::Object(result)) = node
                     .rechunk_legacy_blobs(options)
                     .await
@@ -1588,35 +1616,69 @@ where
                     }
                 }
             });
-            host.tasks.lock().expect("mirror tasks").push(handle);
         }
-        if let Some(dir) = opts.watch_dir.clone().filter(|_| !host.is_closed()) {
-            files.mkdirs(&dir);
-            let _ = host.run("watch-dir", Value::Null).await;
+        if let Some(dir) = startup.watch_dir.as_deref().filter(|_| !self.is_closed()) {
+            startup.files.mkdirs(dir);
+            let _ = self.run("watch-dir", Value::Null).await;
         }
-        let own_staging = opts
+        let own_staging = startup
             .watch_dir
             .as_deref()
-            .is_none_or(|dir| watch::resolved(dir) != watch::resolved(&staging_dir));
-        if files.exists(&staging_dir) && own_staging && !host.is_closed() {
-            host.watch_state
-                .scan(Some(&staging_dir), &host.ctx, "staging:")
+            .is_none_or(|dir| watch::resolved(dir) != watch::resolved(&startup.staging_dir));
+        if startup.files.exists(&startup.staging_dir) && own_staging && !self.is_closed() {
+            self.watch_state
+                .scan(Some(&startup.staging_dir), &self.ctx, "staging:")
                 .await;
         }
-        if !host.feeds.lock().expect("feeds").is_empty() && !host.is_closed() {
-            host.spawn_run("feed-mirror", Value::Null);
+        if !self.feeds.lock().expect("feeds").is_empty() && !self.is_closed() {
+            self.spawn_run("feed-mirror", Value::Null);
         }
-        for name in &opts.start_runs {
-            if !host.is_closed() {
-                host.spawn_run(name, Value::Null);
+        for name in &startup.start_runs {
+            if !self.is_closed() {
+                self.spawn_run(name, Value::Null);
             }
         }
-        host.start_poll_timer(opts.poll_interval_ms);
+        self.start_poll_timer(startup.poll_interval_ms);
+    }
+
+    /// `createMirrorHost`: [`MirrorHost::open`], then [`MirrorHost::startup`].
+    #[allow(clippy::too_many_arguments)] // as `open`
+    pub async fn start(
+        node: Arc<N>,
+        acquirer: Option<Acquirer<N>>,
+        files: Arc<dyn MirrorFiles>,
+        factory: Arc<dyn PutStreamFactory<N>>,
+        rechunk_factory: Arc<dyn RechunkOptionsFactory<N>>,
+        feed: Arc<dyn FeedFetch>,
+        extra: Vec<Arc<dyn MirrorPlugin<N>>>,
+        opts: MirrorOptions,
+    ) -> Self {
+        let host = Self::open(
+            node,
+            acquirer,
+            files,
+            factory,
+            rechunk_factory,
+            feed,
+            extra,
+            opts,
+        );
+        host.startup().await;
         host
     }
 
-    fn is_closed(&self) -> bool {
+    /// Closed hosts start no new work; a caller checks this before work of its own on the host.
+    pub fn is_closed(&self) -> bool {
         self.closed.load(Ordering::SeqCst)
+    }
+
+    /// Starts a background task that a close ends. A closed host starts none: its close may
+    /// already have ended the tasks it knew.
+    fn background(&self, task: impl Future<Output = ()> + Send + 'static) {
+        let mut tasks = self.tasks.lock().expect("mirror tasks");
+        if !self.is_closed() {
+            tasks.push(tokio::spawn(task));
+        }
     }
 
     /// `register`: the name must be non-empty; a re-registration replaces the plugin and keeps its stats.
@@ -1694,7 +1756,7 @@ where
         let ctx = self.ctx.clone();
         let now_ms = self.now_ms.clone();
         let name = name.to_owned();
-        let handle = tokio::spawn(async move {
+        self.background(async move {
             {
                 let mut stats = stats.lock().expect("mirror stats");
                 let stat = stats.entry(name.clone()).or_default();
@@ -1710,10 +1772,12 @@ where
                 Err(error) => stat.last_error = Some(error.message),
             }
         });
-        self.tasks.lock().expect("mirror tasks").push(handle);
     }
 
     fn start_poll_timer(&self, poll_interval_ms: u64) {
+        // Checked under the lock a close takes the timer from: the close then finds the timer,
+        // or this finds the host closed.
+        let mut timer = self.poll_task.lock().expect("poll task");
         if poll_interval_ms == 0 || self.is_closed() {
             return;
         }
@@ -1723,7 +1787,7 @@ where
         let now_ms = self.now_ms.clone();
         let ctx = self.ctx.clone();
         // Keep the app's polling interval: the plugin list is small and each poll is cheap.
-        let handle = tokio::spawn(async move {
+        *timer = Some(tokio::spawn(async move {
             loop {
                 tokio::time::sleep(Duration::from_millis(poll_interval_ms)).await;
                 if closed.load(Ordering::SeqCst) {
@@ -1749,8 +1813,7 @@ where
                     }
                 }
             }
-        });
-        *self.poll_task.lock().expect("poll task") = Some(handle);
+        }));
     }
 
     /// `/v1/plugins`: name, description, live info and run stats for every registered plugin.

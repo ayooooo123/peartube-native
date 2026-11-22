@@ -3,7 +3,10 @@
 //!
 //! The API stays up for the whole process. The node, acquirer and plugins open from the current
 //! settings and reopen in this process when a setting that shapes the node changes; live settings
-//! apply in place. Opens, reopens and live changes run one at a time.
+//! apply in place. Opens, reopens and live changes run one at a time, and each runs to its end once
+//! it has started, whatever happens to the request that asked for it. The plugins start after the
+//! node answers, outside those steps: a reopen or a stop closes their host and waits for one file
+//! of a folder import, not for the whole import.
 
 use std::collections::HashMap;
 use std::net::{Ipv4Addr, SocketAddr};
@@ -46,7 +49,10 @@ type Shared<T> = Arc<Mutex<Option<T>>>;
 struct Open {
     node: Arc<CoreNode>,
     acquirer: Acquirer<CoreNode>,
+    /// `mirrorHost`: the plugin host, from the moment its plugins are registered.
     mirror: Arc<MirrorHost<CoreNode>>,
+    /// `mirrorStarting`: true once the host's start runs have ended, or a close has ended them.
+    started: tokio::sync::watch::Receiver<bool>,
     changes: tokio::task::JoinHandle<()>,
     replication: Replication,
     /// The files global search may offer.
@@ -70,7 +76,11 @@ struct Inner {
     /// The serial lifecycle: `Some` while a node is open.
     open: tokio::sync::Mutex<Option<Open>>,
     acquirer: Shared<Acquirer<CoreNode>>,
+    /// `state.mirror`: the plugin host once it has started; the API reaches the plugins through it.
     mirror: Shared<Arc<MirrorHost<CoreNode>>>,
+    /// `mirrorHost`: the same host from the moment it exists, so that a shutdown can close it
+    /// while it starts.
+    host: Shared<Arc<MirrorHost<CoreNode>>>,
     /// `state.cast`: the cast stack, open with the node (`null` between opens).
     cast: Shared<Arc<CastController>>,
     /// `lanHost()` as the cast stack reads it: the setting, else the detected LAN address.
@@ -248,6 +258,7 @@ impl Relay {
                 open: tokio::sync::Mutex::new(None),
                 acquirer: Arc::new(Mutex::new(None)),
                 mirror: Arc::new(Mutex::new(None)),
+                host: Arc::new(Mutex::new(None)),
                 cast: Arc::new(Mutex::new(None)),
                 cast_host: cast_host.clone(),
                 extra: extra.clone(),
@@ -291,16 +302,27 @@ impl Relay {
 
     /// The first open; the process logs `relay ready` once it returns.
     pub async fn start(&self) -> Result<Value, String> {
-        let mut open = self.0.open.lock().await;
-        self.open_locked(&mut open).await?;
-        if let Err(error) = self.apply_guard().await {
-            log("private guard failed to start", json!({ "error": error }));
-        }
-        let status = match open.as_ref() {
-            Some(open) => serde_json::to_value(open.node.status().await).unwrap_or(Value::Null),
-            None => Value::Null,
-        };
-        Ok(status)
+        let relay = self.clone();
+        run_to_end(async move {
+            let started = {
+                let mut open = relay.0.open.lock().await;
+                relay.open_locked(&mut open).await?;
+                open.as_ref().map(|open| open.started.clone())
+            };
+            // `await mirrorStarting`, outside the serial lifecycle: the relay is ready once its
+            // plugins have started, and a restart or a stop can end the start runs before that.
+            if let Some(started) = started {
+                wait_started(started).await;
+            }
+            {
+                let _serial = relay.0.open.lock().await;
+                if let Err(error) = relay.apply_guard().await {
+                    log("private guard failed to start", json!({ "error": error }));
+                }
+            }
+            Ok(relay.status().await.unwrap_or(Value::Null))
+        })
+        .await
     }
 
     /// Where the API listens: HTTP first, then HTTPS when a certificate is configured.
@@ -329,6 +351,13 @@ impl Relay {
         for server in servers {
             server.close().await;
         }
+        // The plugins stop first, without a wait for the step in flight: a step that waits for the
+        // start runs (a live setting for the plugins) then ends with them, between files.
+        let host = self.0.host.lock().unwrap().clone();
+        if let Some(host) = host {
+            // `close_locked` reports a stop that failed: it gets this same close.
+            let _ = host.close().await;
+        }
         let mut open = self.0.open.lock().await;
         self.close_locked(&mut open).await;
         self.stop_guard().await;
@@ -337,6 +366,10 @@ impl Relay {
     /// `applyGuard()`: the guard runs on its own HyperDHT and port with a fresh key each
     /// start, and opens no Corestore. JS runs it as a child process; here it is in-process.
     async fn apply_guard(&self) -> Result<(), String> {
+        // `serial(applyGuard)`: no new work once the relay is shutting down.
+        if self.0.shutting_down.load(Ordering::SeqCst) {
+            return Err("The relay is shutting down".into());
+        }
         let port = self.cfg("privateGuardPort").await.as_u64().unwrap_or(0) as u16;
         let bootstrap = strings(&self.cfg("bootstrap").await);
         let want = js_truthy(&self.cfg("privateGuard").await)
@@ -581,80 +614,98 @@ impl Relay {
                 .map(String::as_str),
             Some("1" | "true")
         );
-        let mirror = Arc::new(
-            MirrorHost::start(
-                node.clone(),
-                Some(acquirer.clone()),
-                Arc::new(LocalMirrorFiles),
-                Arc::new(NodeStreams),
-                Arc::new(NodeStreams),
-                Arc::new(ArtFeed { allow_private_urls }),
-                vec![seeder, media_check.clone()],
-                MirrorOptions {
-                    storage: self.0.storage.display().to_string(),
-                    mirror_channel: js_truthy(&cfg("publishChannel")),
-                    rechunk: js_truthy(&cfg("rechunk")),
-                    watch_dir: self
-                        .0
-                        .env
-                        .get("PEARTUBE_WATCH_DIR")
-                        .cloned()
-                        .and_then(non_empty),
-                    feeds: strings(&cfg("feeds")),
-                    soulseek: SoulseekSettings {
-                        user: text(&cfg("slskUser")),
-                        pass: text(&cfg("slskPass")),
-                        server: text(&cfg("slskServer")),
-                        listen_port: cfg("slskListenPort")
-                            .as_u64()
-                            .and_then(|port| u16::try_from(port).ok())
-                            .unwrap_or(soulseek::DEFAULT_LISTEN_PORT),
-                        share: js_truthy(&cfg("slskShare")),
-                        share_max_files: cfg("slskShareMaxFiles")
-                            .as_u64()
-                            .and_then(|files| u32::try_from(files).ok())
-                            .unwrap_or(soulseek::DEFAULT_SHARE_MAX_FILES),
-                        backend: soulseek::client::network(),
-                        ..SoulseekSettings::default()
-                    },
-                    youtube: YoutubeSettings {
-                        backend: Some(Arc::new(youtube::Ubit {
-                            config_dir: self.ubit_config(),
-                            ubit: ubit_bin(&self.0.env),
-                        })),
-                        fetch: Arc::new(ArtPictures { allow_private_urls }),
-                        ..YoutubeSettings::default()
-                    },
-                    plugins_dir: None,
-                    start_runs: if hiverelay_enabled {
-                        vec!["hiverelay-seed".to_owned()]
-                    } else {
-                        Vec::new()
-                    },
-                    stop_traffic: Some(Box::new({
-                        let gate = traffic.clone();
-                        move || {
-                            detach_traffic();
-                            gate.stop();
-                        }
-                    })),
-                    onchange: Some(notify.clone()),
-                    ..MirrorOptions::default()
+        let mirror = Arc::new(MirrorHost::open(
+            node.clone(),
+            Some(acquirer.clone()),
+            Arc::new(LocalMirrorFiles),
+            Arc::new(NodeStreams),
+            Arc::new(NodeStreams),
+            Arc::new(ArtFeed { allow_private_urls }),
+            vec![seeder, media_check.clone()],
+            MirrorOptions {
+                storage: self.0.storage.display().to_string(),
+                mirror_channel: js_truthy(&cfg("publishChannel")),
+                rechunk: js_truthy(&cfg("rechunk")),
+                watch_dir: self
+                    .0
+                    .env
+                    .get("PEARTUBE_WATCH_DIR")
+                    .cloned()
+                    .and_then(non_empty),
+                feeds: strings(&cfg("feeds")),
+                soulseek: SoulseekSettings {
+                    user: text(&cfg("slskUser")),
+                    pass: text(&cfg("slskPass")),
+                    server: text(&cfg("slskServer")),
+                    listen_port: cfg("slskListenPort")
+                        .as_u64()
+                        .and_then(|port| u16::try_from(port).ok())
+                        .unwrap_or(soulseek::DEFAULT_LISTEN_PORT),
+                    share: js_truthy(&cfg("slskShare")),
+                    share_max_files: cfg("slskShareMaxFiles")
+                        .as_u64()
+                        .and_then(|files| u32::try_from(files).ok())
+                        .unwrap_or(soulseek::DEFAULT_SHARE_MAX_FILES),
+                    backend: soulseek::client::network(),
+                    ..SoulseekSettings::default()
                 },
-            )
-            .await,
-        );
-        *self.0.mirror.lock().unwrap() = Some(mirror.clone());
+                youtube: YoutubeSettings {
+                    backend: Some(Arc::new(youtube::Ubit {
+                        config_dir: self.ubit_config(),
+                        ubit: ubit_bin(&self.0.env),
+                    })),
+                    fetch: Arc::new(ArtPictures { allow_private_urls }),
+                    ..YoutubeSettings::default()
+                },
+                plugins_dir: None,
+                start_runs: if hiverelay_enabled {
+                    vec!["hiverelay-seed".to_owned()]
+                } else {
+                    Vec::new()
+                },
+                stop_traffic: Some(Box::new({
+                    let gate = traffic.clone();
+                    move || {
+                        detach_traffic();
+                        gate.stop();
+                    }
+                })),
+                onchange: Some(notify.clone()),
+                ..MirrorOptions::default()
+            },
+        ));
+        // `onstarting`: from here on a stop can close the host, also while it starts.
+        *self.0.host.lock().unwrap() = Some(mirror.clone());
         node.serve_search(search_serve(&media_check, global_search));
-        if global_search {
-            let mirror = mirror.clone();
-            tokio::spawn(async move {
-                let _ = mirror.run("media-check", json!({})).await;
-            });
-        }
+        let (done, started) = tokio::sync::watch::channel(false);
         let replication = self
-            .start_replication(&node, &mirror, notify.clone(), traffic, hiverelay_enabled)
+            .start_replication(
+                &node,
+                &mirror,
+                started.clone(),
+                notify.clone(),
+                traffic,
+                hiverelay_enabled,
+            )
             .await;
+        // Plugins start after the node answers: the channel backfill and the folder import can
+        // take a while on a large library.
+        tokio::spawn({
+            let (host, slot, notify) = (mirror.clone(), self.0.mirror.clone(), notify.clone());
+            async move {
+                host.startup().await;
+                // `state.mirror = mirror`: the API reaches the plugins from here on.
+                *slot.lock().unwrap() = Some(host.clone());
+                if global_search && !host.is_closed() {
+                    let host = host.clone();
+                    tokio::spawn(async move {
+                        let _ = host.run("media-check", json!({})).await;
+                    });
+                }
+                let _ = done.send(true);
+                notify();
+            }
+        });
 
         let mut changes = node.onchange();
         let kick = replication.kick.clone();
@@ -668,6 +719,7 @@ impl Relay {
             node,
             acquirer,
             mirror,
+            started,
             changes,
             replication,
             media_check,
@@ -680,6 +732,7 @@ impl Relay {
         &self,
         node: &Arc<CoreNode>,
         mirror: &Arc<MirrorHost<CoreNode>>,
+        started: tokio::sync::watch::Receiver<bool>,
         onchange: Arc<dyn Fn() + Send + Sync>,
         traffic: TrafficGate,
         hiverelay: bool,
@@ -696,6 +749,8 @@ impl Relay {
         let kicker = {
             let (mirror, kick, replicator) = (mirror.clone(), kick.clone(), replicator.clone());
             tokio::spawn(async move {
+                // `scheduleReplicate` runs `state.mirror?.run(...)`: nothing while the plugins start.
+                wait_started(started).await;
                 loop {
                     kick.notified().await;
                     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
@@ -733,6 +788,7 @@ impl Relay {
             node,
             acquirer,
             mirror,
+            started,
             changes,
             replication,
             media_check: _,
@@ -743,6 +799,9 @@ impl Relay {
         if let Err(error) = mirror.close().await {
             log("mirror close failed", json!({ "error": error.to_string() }));
         }
+        // `await mirrorStarting`: the closed host starts nothing more, and a folder import in
+        // flight ends between files.
+        wait_started(started).await;
         // The cast stack closes before the node it drives, as `stop()` does.
         self.0.api.set_cast(None);
         let cast = self.0.cast.lock().unwrap().take();
@@ -751,6 +810,7 @@ impl Relay {
         }
         replication.kicker.abort();
         *self.0.mirror.lock().unwrap() = None;
+        *self.0.host.lock().unwrap() = None;
         *self.0.acquirer.lock().unwrap() = None;
         acquirer.close();
         changes.abort();
@@ -815,6 +875,7 @@ impl Relay {
             current.mirror.clone(),
         );
         let media_check = current.media_check.clone();
+        let started = current.started.clone();
         let (replicator, kick) = (
             current.replication.replicator.clone(),
             current.replication.kick.clone(),
@@ -843,7 +904,28 @@ impl Relay {
             let sources = node.list_sources().await;
             self.sync_directory(&node, &sources).await?;
         }
-        if has(&["rechunk"]) && js_truthy(&self.cfg("rechunk").await) {
+        // `await mirrorStarting`: these changes go to the plugins, which must have started.
+        let convert = has(&["rechunk"]) && js_truthy(&self.cfg("rechunk").await);
+        if convert
+            || has(&[
+                "feeds",
+                "replicate",
+                "replicateSources",
+                "replicateFreeGb",
+                "replicateMbps",
+                "globalSearch",
+                "slskUser",
+                "slskPass",
+                "slskServer",
+            ])
+        {
+            wait_started(started).await;
+            // Only a shutdown closes the host under a step.
+            if mirror.is_closed() {
+                return Err("The relay is shutting down".into());
+            }
+        }
+        if convert {
             let mirror = mirror.clone();
             tokio::spawn(async move {
                 let _ = mirror.run("blob-rechunk", Value::Null).await;
@@ -1064,6 +1146,26 @@ impl Relay {
             .cloned()
             .unwrap_or_else(|| self.0.storage.join("ubit").display().to_string())
     }
+}
+
+/// Runs one lifecycle step on its own task and waits for it there. `bin/relay.js` gets this from
+/// its promises: a step that has started runs to its end, even when what asked for it goes away.
+/// The first open runs through it, so a signal while the node opens does not cut the open; the
+/// API's routes get the same from `http::finish_node_change`. A step that is cut in the middle of
+/// a close leaves a node that nothing closes.
+async fn run_to_end<T: Send + 'static>(step: impl Future<Output = T> + Send + 'static) -> T {
+    match tokio::spawn(step).await {
+        Ok(output) => output,
+        Err(error) if error.is_panic() => std::panic::resume_unwind(error.into_panic()),
+        // Cancelled: the runtime is going away, and it drops this caller too.
+        Err(_) => std::future::pending().await,
+    }
+}
+
+/// `await mirrorStarting`: the plugin host's start runs have ended, or a close has ended them.
+async fn wait_started(mut started: tokio::sync::watch::Receiver<bool>) {
+    // A start that went away without a word has ended too.
+    let _ = started.wait_for(|done| *done).await;
 }
 
 /// `lanAddress(os.networkInterfaces())`: Wi-Fi or Ethernet, never loopback.
@@ -1455,6 +1557,67 @@ pub async fn start_standalone_guard(
     })
 }
 
+/// The relay process, `bin/relay.js` without its guard-only branch: listen, open the node, serve
+/// until `stop` resolves, then close what is open. Returns the exit code.
+///
+/// `stop` counts from the open on, not only once the relay is ready: a signal that arrives while
+/// the node opens lets the open finish and then closes its node.
+pub async fn run(env: HashMap<String, String>, stop: impl Future<Output = ()>) -> i32 {
+    let api_port = port(&env, "PEARTUBE_API_PORT", API_PORT);
+    let relay = match Relay::listen(env).await {
+        Ok(relay) => relay,
+        Err(error) => {
+            log("relay failed to start", json!({ "error": error }));
+            return 1;
+        }
+    };
+    tokio::pin!(stop);
+    let opened = tokio::select! {
+        opened = relay.start() => Some(opened),
+        () = &mut stop => None,
+    };
+    let heartbeat = match opened {
+        Some(Ok(mut status)) => {
+            if let Some(status) = status.as_object_mut() {
+                status.insert("api".into(), json!(api_port));
+            }
+            log("relay ready", status);
+            let relay = relay.clone();
+            let heartbeat = tokio::spawn(async move {
+                let mut every = tokio::time::interval(std::time::Duration::from_secs(60));
+                every.tick().await;
+                loop {
+                    every.tick().await;
+                    if let Some(status) = relay.status().await {
+                        log("heartbeat", status);
+                    }
+                }
+            });
+            stop.await;
+            Some(heartbeat)
+        }
+        Some(Err(error)) => {
+            log("relay failed to open its node", json!({ "error": error }));
+            relay.shutdown().await;
+            return 1;
+        }
+        // The open goes on, on its own task: the shutdown waits for it and closes its node.
+        None => None,
+    };
+    if let Some(heartbeat) = heartbeat {
+        heartbeat.abort();
+    }
+    // A stuck close must not keep the container from stopping (JS: a 3 s kill timer). Only a
+    // shutdown that hangs ends as a failure; a clean one exits 0.
+    match tokio::time::timeout(std::time::Duration::from_secs(3), relay.shutdown()).await {
+        Ok(()) => 0,
+        Err(_) => {
+            log("relay shutdown timed out", json!({}));
+            1
+        }
+    }
+}
+
 /// `bin/relay.js`'s guard-only branch: run the forwarder until a signal or the parent leaves.
 pub async fn guard_only(env: HashMap<String, String>) -> Result<(), String> {
     // Read before the first await: a relay that dies while the guard is still opening would
@@ -1479,7 +1642,7 @@ pub async fn guard_only(env: HashMap<String, String>) -> Result<(), String> {
     // without saying so. Its `shutdown()` closes the guard, so the wait ends here, not only the
     // heartbeat above.
     tokio::select! {
-        _ = wait_for_signal() => {}
+        () = signals() => {}
         _ = parent_gone(pid), if follow => {}
     }
     heartbeat.abort();
@@ -1533,24 +1696,28 @@ async fn parent_gone(pid: Option<u32>) {
     }
 }
 
-async fn wait_for_signal() {
+/// A future that resolves at the first SIGTERM or SIGINT. This call installs the handlers, not the
+/// future's first poll: a signal counts from here on.
+pub fn signals() -> impl Future<Output = ()> {
     #[cfg(unix)]
-    {
+    let handlers = {
         use tokio::signal::unix::{SignalKind, signal};
-        let (Ok(mut term), Ok(mut int)) = (
+        (
             signal(SignalKind::terminate()),
             signal(SignalKind::interrupt()),
-        ) else {
-            let _ = tokio::signal::ctrl_c().await;
+        )
+    };
+    async move {
+        #[cfg(unix)]
+        if let (Ok(mut term), Ok(mut int)) = handlers {
+            tokio::select! {
+                _ = term.recv() => {}
+                _ = int.recv() => {}
+            }
             return;
-        };
-        tokio::select! {
-            _ = term.recv() => {}
-            _ = int.recv() => {}
         }
+        let _ = tokio::signal::ctrl_c().await;
     }
-    #[cfg(not(unix))]
-    let _ = tokio::signal::ctrl_c().await;
 }
 
 fn read_tls(env: &HashMap<String, String>, storage: &Path) -> Option<tokio_rustls::TlsAcceptor> {
