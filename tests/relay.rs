@@ -143,8 +143,27 @@ async fn a_live_setting_applies_without_a_reopen() {
 enum ReopenCase {
     Healthy,
     RestartFails,
-    SettingsFail,
+    BusyPort,
     Recovers,
+}
+
+#[cfg(unix)]
+async fn relay_log<R: tokio::io::AsyncBufRead + Unpin>(
+    lines: &mut tokio::io::Lines<R>,
+    message: &str,
+) -> Value {
+    tokio::time::timeout(Duration::from_secs(60), async {
+        loop {
+            let line = lines.next_line().await.unwrap().expect("relay stopped");
+            if let Ok(value) = serde_json::from_str::<Value>(&line)
+                && value["msg"] == message
+            {
+                break value;
+            }
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("relay did not report {message}"))
 }
 
 #[cfg(unix)]
@@ -204,18 +223,7 @@ async fn check_http_reopen(case: ReopenCase) {
         .spawn()
         .unwrap();
     let mut lines = BufReader::new(child.stdout.take().unwrap()).lines();
-    let ready = tokio::time::timeout(Duration::from_secs(60), async {
-        loop {
-            let line = lines.next_line().await.unwrap().expect("relay ready");
-            if let Ok(value) = serde_json::from_str::<Value>(&line)
-                && value["msg"] == "relay ready"
-            {
-                break value;
-            }
-        }
-    })
-    .await
-    .unwrap();
+    let ready = relay_log(&mut lines, "relay ready").await;
     let status = get_json(addr, "/v1/status");
     assert_eq!(status["writer"], ready["writer"]);
     assert_eq!(status["lan"]["host"], "127.0.0.1");
@@ -241,12 +249,38 @@ async fn check_http_reopen(case: ReopenCase) {
     std::fs::remove_file(import.join("Film tt1234567.mkv")).unwrap();
     let restart = ("POST", "/v1/restart", "");
     let settings = ("PUT", "/v1/settings", r#"{"hiverelayReplicas":4}"#);
-    if case != ReopenCase::Healthy {
-        let (method, path, body) = if case == ReopenCase::SettingsFail {
-            settings
-        } else {
-            restart
-        };
+    if case == ReopenCase::BusyPort {
+        let busy = std::net::UdpSocket::bind((addr.ip(), 0)).unwrap();
+        let busy_addr = busy.local_addr().unwrap();
+        let cause = std::net::UdpSocket::bind(busy_addr)
+            .unwrap_err()
+            .to_string();
+        let patch = json!({ "dhtPort": busy_addr.port() });
+        let saved = request_json(addr, "PUT", "/v1/settings", &patch.to_string());
+        assert_eq!(saved["changed"], json!(["dhtPort"]));
+        assert_eq!(saved["restartNeeded"], json!(["dhtPort"]));
+        assert!(
+            saved["warning"].as_str().unwrap().contains(&cause),
+            "{saved}"
+        );
+        let file = std::fs::File::open(dir.path().join("settings.json")).unwrap();
+        assert_eq!(
+            serde_json::from_reader::<_, Value>(file).unwrap()["dhtPort"],
+            busy_addr.port()
+        );
+
+        // Keep the port occupied beyond the retry. Only the corrective PUT can restore the node.
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        let pending = get_json(addr, "/v1/settings");
+        assert_eq!(pending["settings"]["dhtPort"]["value"], busy_addr.port());
+        assert_eq!(pending["restartNeeded"], json!(["dhtPort"]));
+        let fixed = request_json(addr, "PUT", "/v1/settings", r#"{"dhtPort":0}"#);
+        assert!(fixed.get("warning").is_none(), "{fixed}");
+        assert_eq!(get_json(addr, "/v1/settings")["restartNeeded"], json!([]));
+        assert_eq!(entry_hash(get_json(addr, "/v1/entries")), hash);
+        drop(busy);
+    } else if case != ReopenCase::Healthy {
+        let (method, path, body) = restart;
         let broken = dir.path().join("not-a-directory");
         std::fs::write(&broken, b"not a directory").unwrap();
         let swap = dir.path().join("swap");
@@ -254,56 +288,50 @@ async fn check_http_reopen(case: ReopenCase) {
         std::fs::rename(&swap, &link).unwrap();
         let cause = std::fs::create_dir_all(&link).unwrap_err();
         let (status, reply) = try_request_json(addr, method, path, body);
-        if case == ReopenCase::Recovers {
-            symlink(&database, &swap).unwrap();
-            std::fs::rename(&swap, &link).unwrap();
-        }
-        assert_eq!(
-            status, 400,
-            "{method} {path}: warning={}, error={}",
-            reply["warning"], reply["error"]
-        );
+        assert_eq!(status, 400, "{method} {path}: {reply}");
         assert_eq!(reply, json!({"error": format!("io: {cause}")}));
-        if case == ReopenCase::Recovers {
-            tokio::time::timeout(Duration::from_secs(15), async {
-                loop {
-                    let (status, entries) = try_request_json(addr, "GET", "/v1/entries", "");
-                    if status == 200 {
-                        assert_eq!(entry_hash(entries), hash);
-                        break;
-                    }
-                    assert_eq!(status, 503, "{entries}");
-                    tokio::time::sleep(Duration::from_millis(25)).await;
-                }
-            })
-            .await
-            .expect("automatic recovery");
-            assert!(child.try_wait().unwrap().is_none());
-            assert!(
-                get_json(addr, "/v1/status")["privateGuard"]["port"]
-                    .as_u64()
-                    .unwrap()
-                    > 0
-            );
-            child.kill().await.unwrap();
-        } else {
-            let exit = tokio::time::timeout(Duration::from_secs(15), child.wait())
-                .await
-                .unwrap()
-                .unwrap();
-            assert_eq!(exit.code(), Some(1));
+        if case == ReopenCase::RestartFails {
+            relay_log(&mut lines, "restart recovery failed").await;
+            let (status, reply) = try_request_json(addr, "GET", "/v1/entries", "");
+            assert_eq!(status, 503, "{reply}");
+            assert_eq!(reply, json!({"error": "The relay node is unavailable"}));
         }
+        symlink(&database, &swap).unwrap();
+        std::fs::rename(&swap, &link).unwrap();
+        if case == ReopenCase::RestartFails {
+            request_json(addr, method, path, body);
+        }
+        tokio::time::timeout(Duration::from_secs(15), async {
+            loop {
+                let (status, entries) = try_request_json(addr, "GET", "/v1/entries", "");
+                if status == 200 {
+                    assert_eq!(entry_hash(entries), hash);
+                    break;
+                }
+                assert_eq!(status, 503, "{entries}");
+                tokio::time::sleep(Duration::from_millis(25)).await;
+            }
+        })
+        .await
+        .expect("entry restored");
+        assert!(
+            get_json(addr, "/v1/status")["privateGuard"]["port"]
+                .as_u64()
+                .unwrap()
+                > 0
+        );
     } else {
         for (method, path, body) in [restart, restart, settings] {
             let reply = request_json(addr, method, path, body);
             assert!(reply.get("warning").is_none(), "{reply}");
+            assert_eq!(reply["restartNeeded"], json!([]));
             assert_eq!(entry_hash(get_json(addr, "/v1/entries")), hash);
         }
         let settings = get_json(addr, "/v1/settings");
         assert_eq!(settings["settings"]["hiverelayReplicas"]["value"], 4);
         assert_eq!(settings["restartNeeded"], json!([]));
-        child.kill().await.unwrap();
     }
+    child.kill().await.unwrap();
     bootstrap.destroy().await.unwrap();
 }
 
@@ -321,8 +349,8 @@ async fn failed_http_reopen_on_restart() {
 
 #[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn failed_http_reopen_on_non_live_settings() {
-    check_http_reopen(ReopenCase::SettingsFail).await;
+async fn busy_port_http_reopen_can_be_corrected_through_settings() {
+    check_http_reopen(ReopenCase::BusyPort).await;
 }
 
 #[cfg(unix)]

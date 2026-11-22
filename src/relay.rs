@@ -21,7 +21,7 @@ use crate::app_settings::{js_string, js_truthy};
 use crate::cast::adapters::NodePeer;
 use crate::cast::traits::CastPeer;
 use crate::cast::{CastController, ControllerOptions};
-use crate::http::{self, Api, ApiServer, BlobAddr, HttpError, Options, Recovery};
+use crate::http::{self, Api, ApiServer, BlobAddr, HttpError, Options};
 use crate::mirror::{
     ArtFeed, LocalMirrorFiles, MirrorConfig, MirrorHost, MirrorOptions, SoulseekSettings,
 };
@@ -35,6 +35,9 @@ use crate::providers::soulseek;
 use crate::replicate::{ReplicateConfig, Replicator};
 use crate::settings::Settings;
 use crate::traffic::TrafficGate;
+
+#[cfg(test)]
+mod reopen_tests;
 
 type Shared<T> = Arc<Mutex<Option<T>>>;
 
@@ -77,6 +80,7 @@ struct Inner {
     extra: Arc<Mutex<Value>>,
     /// `privateGuard`: the forwarder for other peers' private routing, with the settings it runs.
     guard: Arc<Mutex<Option<(String, PrivateGuard)>>>,
+    retry_pending: AtomicBool,
     shutting_down: AtomicBool,
 }
 
@@ -159,7 +163,7 @@ impl Relay {
                         Box::pin(async move {
                             let inner = weak
                                 .upgrade()
-                                .ok_or_else(|| HttpError::new(503, "The relay is shutting down"))?;
+                                .ok_or_else(|| "The relay is shutting down".to_owned())?;
                             Relay(inner).apply_settings(changed).await
                         }) as BoxFuture<'static, _>
                     })
@@ -249,6 +253,7 @@ impl Relay {
                 cast_host: cast_host.clone(),
                 extra: extra.clone(),
                 guard: guard.clone(),
+                retry_pending: AtomicBool::new(false),
                 shutting_down: AtomicBool::new(false),
             }
         });
@@ -314,12 +319,6 @@ impl Relay {
     pub async fn status(&self) -> Option<Value> {
         let node = self.0.api.node()?;
         Some(serde_json::to_value(node.status().await).unwrap_or(Value::Null))
-    }
-
-    /// The process must exit if its one recovery attempt cannot restore the node.
-    pub async fn wait_for_failure(&self) {
-        let mut recovery = self.0.api.recovery.subscribe();
-        let _ = recovery.wait_for(|state| *state == Recovery::Failed).await;
     }
 
     /// SIGTERM: stop the API, close what is open and return.
@@ -403,9 +402,7 @@ impl Relay {
     }
 
     async fn open_locked(&self, open: &mut Option<Open>) -> Result<(), String> {
-        if self.0.shutting_down.load(Ordering::SeqCst)
-            || *self.0.api.recovery.borrow() == Recovery::Failed
-        {
+        if self.0.shutting_down.load(Ordering::SeqCst) {
             return Err("The relay is shutting down".into());
         }
         let snapshot = self.0.settings.lock().await.snapshot();
@@ -775,8 +772,7 @@ impl Relay {
             && !self.0.shutting_down.load(Ordering::SeqCst)
         {
             log("restart failed", json!({ "error": error }));
-            if *self.0.api.recovery.borrow() == Recovery::Idle {
-                self.0.api.recovery.send_replace(Recovery::Pending);
+            if !self.0.retry_pending.swap(true, Ordering::Relaxed) {
                 let relay = self.clone();
                 tokio::spawn(async move { relay.retry_open().await });
             }
@@ -789,39 +785,28 @@ impl Relay {
         // Let the failed request return and give closing store users time to release their handles.
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
         let mut open = self.0.open.lock().await;
-        if self.0.shutting_down.load(Ordering::SeqCst) {
+        self.0.retry_pending.store(false, Ordering::Relaxed);
+        if open.is_some() || self.0.shutting_down.load(Ordering::SeqCst) {
             return;
         }
-        if open.is_none() {
-            if let Err(error) = self.open_locked(&mut open).await {
-                log("restart recovery failed", json!({ "error": error }));
-                self.0.api.recovery.send_replace(Recovery::Failed);
-                return;
-            }
-            if let Err(error) = self.apply_guard().await {
-                log("private guard failed to start", json!({ "error": error }));
-            }
+        if let Err(error) = self.open_locked(&mut open).await {
+            log("restart recovery failed", json!({ "error": error }));
+        } else if let Err(error) = self.apply_guard().await {
+            log("private guard failed to start", json!({ "error": error }));
         }
-        self.0.api.recovery.send_replace(Recovery::Idle);
     }
 
     /// `state.applySettings(changed)`: live settings apply in place; any other change reopens.
-    async fn apply_settings(&self, changed: Vec<String>) -> Result<Option<String>, HttpError> {
+    async fn apply_settings(&self, changed: Vec<String>) -> Result<(), String> {
         let mut open = self.0.open.lock().await;
         let live = {
             let settings = self.0.settings.lock().await;
             changed.iter().all(|key| settings.is_live(key))
         };
         let Some(current) = open.as_ref().filter(|_| live) else {
-            self.reopen_locked(&mut open)
-                .await
-                .map_err(|e| HttpError::new(400, e))?;
-            return Ok(self.apply_guard().await.err());
+            self.reopen_locked(&mut open).await?;
+            return self.apply_guard().await;
         };
-        Ok(self.apply_live(current, &changed).await.err())
-    }
-
-    async fn apply_live(&self, current: &Open, changed: &[String]) -> Result<(), String> {
         let (node, acquirer, mirror) = (
             current.node.clone(),
             current.acquirer.clone(),
@@ -923,13 +908,16 @@ impl Relay {
             .await
             .map_err(|e| HttpError::new(400, e.to_string()))?;
         if claim.reopen_needed {
-            let _ = self
-                .0
-                .settings
-                .lock()
-                .await
-                .update(&json!({ "channel": claim.channel }));
-            self.reopen().await.map_err(|e| HttpError::new(500, e))?;
+            // Finish reopening if the client leaves. The later claim may need a peer;
+            // leave that wait with the request so it can release the identity lock.
+            let patch = json!({ "channel": claim.channel });
+            let relay = self.clone();
+            http::finish_node_change(async move {
+                let _ = relay.0.settings.lock().await.update(&patch);
+                relay.reopen().await
+            })
+            .await?
+            .map_err(|e| HttpError::new(500, e))?;
             if let Some(node) = self.0.api.node() {
                 let _ = node.claim_with_mnemonic(&mnemonic, &alias).await;
             }

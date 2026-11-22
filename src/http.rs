@@ -25,12 +25,11 @@ use hyper::{Method, Request, Response, StatusCode};
 use hyper_util::client::legacy::Client;
 use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::rt::{TokioExecutor, TokioIo};
-use hyper_util::server::graceful::GracefulShutdown;
 use serde_json::{Map, Number, Value, json};
 use sha2::{Digest, Sha256};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::{mpsc, oneshot, watch};
+use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinSet;
 use url::Url;
 
@@ -125,9 +124,9 @@ pub enum Art {
 
 /// `state.posterUrl` / `state.backdropUrl`: an IMDb id to a Cinemeta image URL.
 pub type ArtLookup = Arc<dyn Fn(String) -> BoxFuture<'static, Option<String>> + Send + Sync>;
-/// `state.applySettings(changed)`: a live apply can return a warning, but a failed reopen is an error.
+/// `state.applySettings(changed)`: an apply error becomes a warning on the saved settings.
 pub type ApplySettings =
-    Arc<dyn Fn(Vec<String>) -> BoxFuture<'static, Result<Option<String>, HttpError>> + Send + Sync>;
+    Arc<dyn Fn(Vec<String>) -> BoxFuture<'static, Result<(), String>> + Send + Sync>;
 /// `state.restart()`: an unsuccessful reopen keeps its error for the HTTP response.
 pub type Restart = Arc<dyn Fn() -> BoxFuture<'static, Result<(), HttpError>> + Send + Sync>;
 /// `state.recoverMnemonic(mnemonic, alias)`.
@@ -137,13 +136,13 @@ pub type RecoverMnemonic =
 pub type Identify =
     Arc<dyn Fn(String) -> BoxFuture<'static, Result<Value, HttpError>> + Send + Sync>;
 
-// A client disconnect must not cancel a node change after settings were saved or close began.
-async fn finish_node_change<T: Send + 'static>(
-    change: BoxFuture<'static, Result<T, HttpError>>,
+/// Finish the node change even if the client that requested it disconnects.
+pub(crate) async fn finish_node_change<T: Send + 'static>(
+    change: impl Future<Output = T> + Send + 'static,
 ) -> Result<T, HttpError> {
     tokio::spawn(change)
         .await
-        .map_err(|error| HttpError::new(500, error.to_string()))?
+        .map_err(|error| HttpError::new(500, error.to_string()))
 }
 
 /// The app's `metahub(kind, size)` lookups, which read Cinemeta through [`crate::art`].
@@ -302,10 +301,12 @@ impl ApiServer {
         if let Some(shutdown) = self.shutdown.take() {
             let _ = shutdown.send(());
         }
-        for client in self.sse.lock().unwrap().drain(..) {
+        self.accept.abort();
+        let _ = self.accept.await;
+        let mut clients = self.sse.lock().unwrap();
+        for client in clients.drain(..) {
             let _ = client.try_send(Bytes::new());
         }
-        let _ = self.accept.await;
     }
 }
 
@@ -316,16 +317,8 @@ struct CachedMedia {
     shared: futures_util::future::Shared<BoxFuture<'static, Option<MediaInfo>>>,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Recovery {
-    Idle,
-    Pending,
-    Failed,
-}
-
 /// The API server and its request state.
 pub struct Api<N: Node> {
-    pub(crate) recovery: watch::Sender<Recovery>,
     node: Mutex<Option<Arc<N>>>,
     options: Options,
     settings: Option<Arc<tokio::sync::Mutex<Settings>>>,
@@ -348,7 +341,6 @@ impl<N: Node> Api<N> {
         let blob = Mutex::new(options.blob.take());
         let cast = Mutex::new(options.cast.take());
         Self {
-            recovery: watch::Sender::new(Recovery::Idle),
             node: Mutex::new(None),
             options,
             settings,
@@ -451,17 +443,13 @@ impl<N: Node> Api<N> {
         let (shutdown, mut stop) = oneshot::channel::<()>();
         let accept = tokio::spawn(async move {
             let mut connections = JoinSet::new();
-            let graceful = GracefulShutdown::new();
-            let mut recovery = api.recovery.subscribe();
             loop {
                 tokio::select! {
                     _ = &mut stop => break,
-                    _ = recovery.wait_for(|state| *state == Recovery::Failed) => break,
                     accepted = listener.accept() => {
                         let Ok((stream, remote)) = accepted else { continue };
                         let api = Arc::clone(&api);
                         let handshake = Arc::clone(&handshake);
-                        let watcher = graceful.watcher();
                         connections.spawn(async move {
                             let Some(stream) = handshake(stream).await else { return };
                             let service = service_fn(move |req| {
@@ -471,16 +459,11 @@ impl<N: Node> Api<N> {
                                 }
                             });
                             let http = hyper::server::conn::http1::Builder::new();
-                            let _ = watcher.watch(http.serve_connection(TokioIo::new(stream), service)).await;
+                            let _ = http.serve_connection(TokioIo::new(stream), service).await;
                         });
                     }
                     Some(_) = connections.join_next(), if !connections.is_empty() => {}
                 }
-            }
-            drop(listener);
-            if *recovery.borrow() == Recovery::Failed {
-                // Finish the request that reports the failure before the process exits.
-                let _ = tokio::time::timeout(Duration::from_secs(1), graceful.shutdown()).await;
             }
             connections.abort_all();
             while connections.join_next().await.is_some() {}
@@ -702,27 +685,24 @@ impl<N: Node> Api<N> {
             }
             if *method == Method::PUT && path == "/v1/settings" {
                 let patch = self.read_body(req.body).await?;
-                let updated = settings
+                let changed = settings
                     .lock()
                     .await
-                    .update(&patch)
+                    .save_patch(&patch)
                     .map_err(|error| HttpError::new(error.status(), error.message()))?;
-                let changed: Vec<String> = updated
-                    .get("changed")
-                    .and_then(Value::as_array)
-                    .map(|keys| {
-                        keys.iter()
-                            .filter_map(|key| key.as_str().map(str::to_owned))
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                let mut out = object(updated);
-                // Unlocked: applying reads the settings it just saved.
-                if !changed.is_empty()
+                // Apply without the settings lock; the response must show what is applied now.
+                let warning = if !changed.is_empty()
                     && let Some(apply) = &self.options.apply_settings
-                    && let Some(warning) = finish_node_change(apply(changed)).await?
                 {
-                    out.insert("warning".to_owned(), Value::String(warning));
+                    finish_node_change(apply(changed.clone())).await?.err()
+                } else {
+                    None
+                };
+                let mut out = Map::new();
+                out.insert("changed".to_owned(), changed.into());
+                out.extend(object(settings.lock().await.view()));
+                if let Some(message) = warning {
+                    out.insert("warning".to_owned(), Value::String(message));
                 }
                 return Ok(Some(Value::Object(out)));
             }
@@ -730,7 +710,7 @@ impl<N: Node> Api<N> {
                 && path == "/v1/restart"
                 && let Some(restart) = &self.options.restart
             {
-                finish_node_change(restart()).await?;
+                finish_node_change(restart()).await??;
                 return Ok(Some(settings.lock().await.view()));
             }
         }
@@ -891,7 +871,7 @@ impl<N: Node> Api<N> {
                     self.via_api(req.headers, req.remote, &mut entries);
                     value(entries)?
                 }
-                None if *self.recovery.borrow() != Recovery::Idle => {
+                None if self.options.restart.is_some() => {
                     return Err(HttpError::new(503, "The relay node is unavailable"));
                 }
                 None => Value::Array(Vec::new()),
