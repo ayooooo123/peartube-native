@@ -67,7 +67,7 @@ jobs:
       # and macOS runners deliver no LAN multicast, so every test that discovers a peer over mDNS fails there.
       matrix:
         # Create the longest cold job first. All jobs remain eligible to run at once.
-        check: ${{ fromJSON(needs.changes.outputs.scope == 'full' && '["test","transfers","clippy"]' || '["test","clippy"]') }}
+        check: ${{ fromJSON(needs.changes.outputs.scope == 'full' && '["test","interop","transfers","clippy"]' || '["test","clippy"]') }}
         os: [macos-latest, ubuntu-latest]
         include:
           - os: ubuntu-latest
@@ -195,9 +195,9 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: peartube-native
-          # The transfer tests can read the full test cache, but must not save a partial one.
+          # Only the general test job writes the cache that the other test jobs read.
           key: ${{ matrix.check == 'clippy' && 'clippy' || 'test' }}-${{ hashFiles('peartube-native/Cargo.lock', 'peartube-native/STACK.lock') }}
-          save-if: ${{ matrix.check != 'transfers' }}
+          save-if: ${{ matrix.check == 'test' || matrix.check == 'clippy' }}
           cache-bin: false
       - run: cargo fmt --check -p peartube-native -p peartube-native-ffi
         if: matrix.check == 'clippy'
@@ -215,7 +215,8 @@ jobs:
           from functools import cache
           from pathlib import Path
 
-          scope = {"test": os.environ["SCOPE"], "transfers": "transfers", "clippy": "none"}[os.environ["CHECK"]]
+          check = os.environ["CHECK"]
+          scope = {"test": os.environ["SCOPE"], "clippy": "none"}.get(check, check)
           if os.environ["CHECK"] == "clippy" and os.environ["SCOPE"] == "targets":
               # Clippy checks all targets. Read rustc's input lists, not a map of source files.
               # If a different target includes a changed file, run the full suite on this runner.
@@ -265,32 +266,60 @@ jobs:
       - id: tests
         name: Run Rust tests, including ignored interop tests
         if: steps.suite.outputs.scope != 'none'
-        shell: bash
+        shell: python
         env:
           CHECK: ${{ matrix.check }}
           SCOPE: ${{ steps.suite.outputs.scope }}
           TARGETS: ${{ needs.changes.outputs.targets }}
+          SKIP: ${{ matrix.skip }}
         run: |
-          args=(--workspace)
-          transfers=(blobs network_mixed_c)
-          if [[ "$SCOPE" == targets ]]; then
-            args=(-p peartube-native)
-            for target in $TARGETS; do args+=(--test "$target"); done
-          elif [[ "$SCOPE" == transfers ]]; then
-            args=(-p peartube-native)
-            for target in "${transfers[@]}"; do args+=(--test "$target"); done
-          elif [[ "$CHECK" == test ]]; then
-            # Every other binary, including any future binary, stays in the main job.
-            selectors=()
-            for target in "${transfers[@]}"; do selectors+=("binary_id(=peartube-native::$target)"); done
-            excluded=$(IFS='|'; echo "${selectors[*]}")
-            args+=(-E "not($excluded)")
-          fi
-          cargo nextest run --profile ci "${args[@]}" --run-ignored all --no-fail-fast -- ${{ matrix.skip }}
-      # nextest does not run doctests. Keep both crates' doctests even if a Rust test failed.
+          import json, os, subprocess
+
+          check, scope = os.environ["CHECK"], os.environ["SCOPE"]
+          args = ["--workspace"]
+          if scope == "targets":
+              args = ["-p", "peartube-native"]
+              for name in os.environ["TARGETS"].split():
+                  args.extend(["--test", name])
+          elif check != "clippy":
+              # All three runners together run every test. A new target stays in the general job.
+              # Assign heavy binaries before Cargo compiles them, not only when nextest runs them.
+              groups = {
+                  "transfers": {"peartube-native::" + n for n in ("blobs", "network_mixed_c")},
+                  "interop": {"peartube-native-ffi::abi"} | {"peartube-native::" + n for n in (
+                      "node_mixed", "network_mixed_a", "network_mixed_b", "search_mixed", "soulseek_provider")},
+              }
+              meta = json.loads(subprocess.check_output(["cargo", "metadata", "--no-deps", "--format-version=1"]))
+              flags, moved = set(), set()
+              for package in meta["packages"]:
+                  for target in package["targets"]:
+                      if not target["test"]:
+                          continue
+                      kind, name = target["kind"], target["name"]
+                      binary = f"{package['name']}::{name}"
+                      owner = next((job for job, ids in groups.items() if kind == ["test"] and binary in ids), "test")
+                      if owner != "test" and (owner == check or check == "test"):
+                          moved.add(f"binary_id(={binary})")
+                      if owner != check:
+                          continue
+                      if kind in (["bin"], ["test"], ["example"], ["bench"]):
+                          flags.add(("--" + kind[0], name))
+                      elif set(kind) <= {"lib", "rlib", "dylib", "cdylib", "staticlib", "proc-macro"}:
+                          flags.add(("--lib",))
+                      else:
+                          flags.add(())  # Unknown target kind: build Cargo's defaults and filter execution.
+              if () not in flags:
+                  for flag in sorted(flags):
+                      args.extend(flag)
+              expr = "|".join(sorted(moved)) or "none()"
+              args.extend(["-E", f"not({expr})" if check == "test" else expr])
+          os.execvp("cargo", ["cargo", "nextest", "run", "--profile", "ci", *args,
+                              "--run-ignored", "all", "--no-fail-fast", "--", *os.environ["SKIP"].split()])
+      # nextest does not run doctests. Run them here on full changes, including clippy's full fallback.
       - run: cargo test --workspace --doc --no-fail-fast -- --include-ignored ${{ matrix.skip }}
         if: >-
-          !cancelled() && steps.suite.outputs.scope == 'full' &&
+          !cancelled() && (steps.suite.outputs.scope == 'transfers' ||
+          (matrix.check == 'clippy' && steps.suite.outputs.scope == 'full')) &&
           (steps.tests.outcome == 'success' || steps.tests.outcome == 'failure')
 
   result:
