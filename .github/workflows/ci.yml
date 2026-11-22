@@ -161,3 +161,21 @@ jobs:
       - run: cargo clippy --workspace --all-targets -- -D warnings
       # The ignored tests drive the app's own JS: they run here, against the JS_REF checkout.
       - run: cargo test --workspace --no-fail-fast -- --include-ignored --test-threads=1 ${{ matrix.skip }}
+      - name: Sample the founder test with the original serial harness (proof only)
+        if: ${{ !cancelled() && runner.os == 'macOS' }}
+        shell: bash
+        run: |
+          test_name=relays_converge_after_a_js_founder_goes_offline
+          for n in {1..48}; do
+            log="$RUNNER_TEMP/founder-original-$n.log"
+            if cargo test --workspace --test network_mixed_b --no-fail-fast -- \
+                --include-ignored --test-threads=1 ${{ matrix.skip }} --exact "$test_name" >"$log" 2>&1; then
+              grep -F '1 passed; 0 failed;' "$log"
+              if [[ "$n" == 1 ]]; then cat "$log"; fi
+              echo "Original serial sample $n: passed"
+            else
+              echo "Original serial sample $n: failed"
+              cat "$log"
+              exit 1
+            fi
+          done
