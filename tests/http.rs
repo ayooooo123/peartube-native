@@ -1042,9 +1042,6 @@ async fn settings_are_private_and_gated_by_token() {
         settings: Some(Arc::new(tokio::sync::Mutex::new(
             peartube_native::settings::Settings::new(dir.path(), Default::default()),
         ))),
-        restart: Some(Arc::new(|| {
-            Box::pin(async {}) as futures_util::future::BoxFuture<'static, ()>
-        })),
         ..Options::default()
     };
     let api = Api::<Fake>::new(options);

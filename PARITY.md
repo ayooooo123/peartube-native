@@ -28,7 +28,7 @@ there is no Rust code to compare.
 | --- | --- | --- | --- |
 | `bin/private-relay.js` | `relay` (`PEARTUBE_PRIVATE_RELAY` standalone guard), `private_overlay::guard` | `match` | `15298dd16` |
 | `bin/rebuild-view.js` | — | `JS-only:` one-off repair tool, run with the relay stopped; no Rust runtime path | — |
-| `bin/relay.js` | `relay`, `src/bin/peartube-relay.rs` | `match` (cast routes, `hiverelay-seed`, standalone guard, `status.lan` as `{host, port}`, `globalSearch`, `PEARTUBE_WATCH_DIR` env-only, `0`/`false` env flags, `SIGTERM` exit 0, the `slsk*` settings handed to the mirror host and `slskUser`/`slskPass`/`slskServer` applied live) | `2a3f14eeb` |
+| `bin/relay.js` | `relay`, `src/bin/peartube-relay.rs` | `debt:` both relays report a failed POST restart as HTTP 400 with `{"error": message}`. If a settings PUT cannot reopen the node, JS returns 200 with a warning; Rust returns the same 400 error as POST. Rust retries the open once, returns 503 from `/v1/entries` while the node is unavailable, and exits with status 1 if the retry fails. The cast routes, `hiverelay-seed`, standalone guard, `status.lan` as `{host, port}`, `globalSearch`, `PEARTUBE_WATCH_DIR` env-only, `0`/`false` env flags, `SIGTERM` exit 0 and live Soulseek settings match. | `2a3f14eeb` |
 | `src/acquire.js` | `acquire` | `match` (`existing` peer-copy + SHA-256 verification, `keepCopy`, `Retry-After` 300 s cap, rotated-source response close, SSRF guard) | `15298dd16` |
 | `src/app-settings.js` | `app_settings` | `match` | `8326afa2c` |
 | `src/apply.js` | `node/apply` | `match` | `8326afa2c` |

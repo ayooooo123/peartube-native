@@ -21,7 +21,7 @@ use crate::app_settings::{js_string, js_truthy};
 use crate::cast::adapters::NodePeer;
 use crate::cast::traits::CastPeer;
 use crate::cast::{CastController, ControllerOptions};
-use crate::http::{self, Api, ApiServer, BlobAddr, HttpError, Options};
+use crate::http::{self, Api, ApiServer, BlobAddr, HttpError, Options, Recovery};
 use crate::mirror::{
     ArtFeed, LocalMirrorFiles, MirrorConfig, MirrorHost, MirrorOptions, SoulseekSettings,
 };
@@ -157,10 +157,10 @@ impl Relay {
                     Arc::new(move |changed: Vec<String>| {
                         let weak = weak.clone();
                         Box::pin(async move {
-                            match weak.upgrade() {
-                                Some(inner) => Relay(inner).apply_settings(changed).await,
-                                None => Ok(()),
-                            }
+                            let inner = weak
+                                .upgrade()
+                                .ok_or_else(|| HttpError::new(503, "The relay is shutting down"))?;
+                            Relay(inner).apply_settings(changed).await
                         }) as BoxFuture<'static, _>
                     })
                 }),
@@ -169,13 +169,14 @@ impl Relay {
                     Arc::new(move || {
                         let weak = weak.clone();
                         Box::pin(async move {
-                            if let Some(inner) = weak.upgrade() {
-                                let relay = Relay(inner);
-                                if let Err(error) = relay.reopen().await {
-                                    log("restart failed", json!({ "error": error }));
-                                }
-                            }
-                        }) as BoxFuture<'static, ()>
+                            let inner = weak
+                                .upgrade()
+                                .ok_or_else(|| HttpError::new(503, "The relay is shutting down"))?;
+                            Relay(inner)
+                                .reopen()
+                                .await
+                                .map_err(|e| HttpError::new(400, e))
+                        }) as BoxFuture<'static, _>
                     })
                 }),
                 recover_mnemonic: Some({
@@ -315,6 +316,12 @@ impl Relay {
         Some(serde_json::to_value(node.status().await).unwrap_or(Value::Null))
     }
 
+    /// The process must exit if its one recovery attempt cannot restore the node.
+    pub async fn wait_for_failure(&self) {
+        let mut recovery = self.0.api.recovery.subscribe();
+        let _ = recovery.wait_for(|state| *state == Recovery::Failed).await;
+    }
+
     /// SIGTERM: stop the API, close what is open and return.
     pub async fn shutdown(&self) {
         if self.0.shutting_down.swap(true, Ordering::SeqCst) {
@@ -396,7 +403,9 @@ impl Relay {
     }
 
     async fn open_locked(&self, open: &mut Option<Open>) -> Result<(), String> {
-        if self.0.shutting_down.load(Ordering::SeqCst) {
+        if self.0.shutting_down.load(Ordering::SeqCst)
+            || *self.0.api.recovery.borrow() == Recovery::Failed
+        {
             return Err("The relay is shutting down".into());
         }
         let snapshot = self.0.settings.lock().await.snapshot();
@@ -429,6 +438,30 @@ impl Relay {
         if let Some(port) = cfg("dhtPort").as_u64().filter(|port| *port > 0) {
             options["dhtPort"] = json!(port);
         }
+        // `createCastController({ storage, getNode, getLanHost, onchange })`: the sender side of a
+        // cast. It opens with the node and browses the LAN for receivers.
+        let lan_host = self.lan_host(&cfg("lanHost")).map(|host| host.to_string());
+        let cast = {
+            let cast = Arc::downgrade(&self.0);
+            let host = Arc::downgrade(&self.0);
+            let change = Arc::downgrade(&self.0);
+            CastController::start(ControllerOptions {
+                storage: self.0.storage.clone(),
+                get_node: Arc::new(move || {
+                    let node = cast.upgrade()?.api.node()?;
+                    Some(Arc::new(NodePeer::new(node)) as Arc<dyn CastPeer>)
+                }),
+                get_lan_host: Arc::new(move || host.upgrade()?.cast_host.lock().unwrap().clone()),
+                mdns: true,
+                on_change: Some(Arc::new(move || {
+                    if let Some(inner) = change.upgrade() {
+                        Relay(inner).notify("cast");
+                    }
+                })),
+            })
+            .await
+            .map_err(|error| error.message)?
+        };
         let node = create_node(options).await.map_err(|e| e.to_string())?;
         self.0.settings.lock().await.mark_applied(&snapshot);
         let blob = *node.blob_server();
@@ -476,31 +509,7 @@ impl Relay {
             log("directory sync failed", json!({ "error": error }));
         }
 
-        // `createCastController({ storage, getNode, getLanHost, onchange })`: the sender side of a
-        // cast. It opens with the node and browses the LAN for receivers.
-        let lan_host = self.lan_host(&cfg("lanHost")).map(|host| host.to_string());
         *self.0.cast_host.lock().unwrap() = lan_host.clone();
-        let cast = {
-            let cast = Arc::downgrade(&self.0);
-            let host = Arc::downgrade(&self.0);
-            let change = Arc::downgrade(&self.0);
-            CastController::start(ControllerOptions {
-                storage: self.0.storage.clone(),
-                get_node: Arc::new(move || {
-                    let node = cast.upgrade()?.api.node()?;
-                    Some(Arc::new(NodePeer::new(node)) as Arc<dyn CastPeer>)
-                }),
-                get_lan_host: Arc::new(move || host.upgrade()?.cast_host.lock().unwrap().clone()),
-                mdns: true,
-                on_change: Some(Arc::new(move || {
-                    if let Some(inner) = change.upgrade() {
-                        Relay(inner).notify("cast");
-                    }
-                })),
-            })
-            .await
-            .map_err(|error| error.message)?
-        };
         cast.set_lan_host(lan_host).await;
         let cast = Arc::new(cast);
         *self.0.cast.lock().unwrap() = Some(cast.clone());
@@ -756,24 +765,63 @@ impl Relay {
 
     async fn reopen(&self) -> Result<(), String> {
         let mut open = self.0.open.lock().await;
-        self.close_locked(&mut open).await;
-        let result = self.open_locked(&mut open).await;
+        self.reopen_locked(&mut open).await
+    }
+
+    async fn reopen_locked(&self, open: &mut Option<Open>) -> Result<(), String> {
+        self.close_locked(open).await;
+        let result = self.open_locked(open).await;
+        if let Err(error) = &result
+            && !self.0.shutting_down.load(Ordering::SeqCst)
+        {
+            log("restart failed", json!({ "error": error }));
+            if *self.0.api.recovery.borrow() == Recovery::Idle {
+                self.0.api.recovery.send_replace(Recovery::Pending);
+                let relay = self.clone();
+                tokio::spawn(async move { relay.retry_open().await });
+            }
+        }
         self.notify("update");
         result
     }
 
+    async fn retry_open(&self) {
+        // Let the failed request return and give closing store users time to release their handles.
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        let mut open = self.0.open.lock().await;
+        if self.0.shutting_down.load(Ordering::SeqCst) {
+            return;
+        }
+        if open.is_none() {
+            if let Err(error) = self.open_locked(&mut open).await {
+                log("restart recovery failed", json!({ "error": error }));
+                self.0.api.recovery.send_replace(Recovery::Failed);
+                return;
+            }
+            if let Err(error) = self.apply_guard().await {
+                log("private guard failed to start", json!({ "error": error }));
+            }
+        }
+        self.0.api.recovery.send_replace(Recovery::Idle);
+    }
+
     /// `state.applySettings(changed)`: live settings apply in place; any other change reopens.
-    async fn apply_settings(&self, changed: Vec<String>) -> Result<(), String> {
+    async fn apply_settings(&self, changed: Vec<String>) -> Result<Option<String>, HttpError> {
         let mut open = self.0.open.lock().await;
         let live = {
             let settings = self.0.settings.lock().await;
             changed.iter().all(|key| settings.is_live(key))
         };
         let Some(current) = open.as_ref().filter(|_| live) else {
-            self.close_locked(&mut open).await;
-            self.open_locked(&mut open).await?;
-            return self.apply_guard().await;
+            self.reopen_locked(&mut open)
+                .await
+                .map_err(|e| HttpError::new(400, e))?;
+            return Ok(self.apply_guard().await.err());
         };
+        Ok(self.apply_live(current, &changed).await.err())
+    }
+
+    async fn apply_live(&self, current: &Open, changed: &[String]) -> Result<(), String> {
         let (node, acquirer, mirror) = (
             current.node.clone(),
             current.acquirer.clone(),

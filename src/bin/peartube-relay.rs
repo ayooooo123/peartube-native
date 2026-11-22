@@ -58,7 +58,10 @@ async fn main() {
         })
     };
 
-    wait_for_signal().await;
+    let exit_code = tokio::select! {
+        _ = relay.wait_for_failure() => 1,
+        _ = wait_for_signal() => 0,
+    };
     heartbeat.abort();
     // A stuck close must not keep the container from stopping (JS: a 3 s kill timer).
     if tokio::time::timeout(Duration::from_secs(3), relay.shutdown())
@@ -67,7 +70,7 @@ async fn main() {
     {
         log("relay shutdown timed out", json!({}));
     }
-    std::process::exit(0);
+    std::process::exit(exit_code);
 }
 
 fn port_env(var: &str, default: u16) -> u16 {

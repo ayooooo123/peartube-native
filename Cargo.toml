@@ -43,7 +43,7 @@ futures-channel = "0.3"
 futures-util = "0.3"
 hyper = { version = "1", features = ["client", "http1", "server"] }
 hyper-rustls = { version = "0.27", default-features = false, features = ["http1", "ring", "tls12", "webpki-tokio"] }
-hyper-util = { version = "0.1", features = ["client-legacy", "http1", "tokio"] }
+hyper-util = { version = "0.1", features = ["client-legacy", "http1", "server-graceful", "tokio"] }
 # The order `localeCompare` gives search hits that tie (providers/soulseek/rank.rs): the CLDR root
 # collation. ICU4X's normalizer and properties are here already, through `url`.
 icu_collator = "2"
