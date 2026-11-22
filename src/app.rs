@@ -130,7 +130,7 @@ pub struct SearchRequest {
 pub struct SearchGlobalRequest {
     pub query: Option<String>,
     pub id: Option<Value>,
-    pub limit: Option<Number>,
+    pub limit: Option<Value>,
 }
 
 /// A call that names one key: `focusSource`, `warm`, `removeSource` and `remove`.
@@ -984,7 +984,7 @@ where
         request: SearchGlobalRequest,
     ) -> Result<Vec<Value>, String> {
         let node = self.current()?;
-        let limit = request.limit.and_then(|n| n.as_u64()).unwrap_or(0) as usize;
+        let limit = crate::search::request_limit(request.limit.as_ref());
         node.search_global(
             request.query.as_deref().unwrap_or(""),
             request.id.as_ref().filter(|id| !id.is_null()),

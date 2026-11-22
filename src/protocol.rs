@@ -1040,8 +1040,8 @@ pub(crate) fn js_number(s: &str) -> f64 {
         "-Infinity" => return f64::NEG_INFINITY,
         _ => {}
     }
-    if t.len() > 2 {
-        let radix = match &t[..2] {
+    if let Some(prefix) = t.get(..2) {
+        let radix = match prefix {
             "0x" | "0X" => Some(16),
             "0o" | "0O" => Some(8),
             "0b" | "0B" => Some(2),

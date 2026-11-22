@@ -9,6 +9,7 @@
 //                                   a second film (Solaris) and prints its id
 //   search <bootstrap-json> <query> a JS node that follows nothing searches until a row comes back,
 //                                   plays the first row, prints the rows and the played SHA-256
+//   limit-catalog <bootstrap-json> <storage>  compare result counts on two relays; a URL on stdin tests the Rust API
 //   fetch <url>                     fetch the whole URL and print its SHA-256
 //
 // Every mode prints one JSON line on stdout and then idles until stdin closes.
@@ -98,6 +99,47 @@ if (mode === 'testnet') {
   const bytes = Buffer.from(await (await fetch(args[0])).arrayBuffer())
   out({ sha256: sha256(bytes), size: bytes.length })
   keepAlive()
+} else if (mode === 'limit-catalog') {
+  const { createApi } = await import(pathToFileURL(resolve(APP, 'src/http.js')).href)
+  const { createInterface } = await import('node:readline')
+  const bootstrap = JSON.parse(args[0])
+  const open = name => createNode({ storage: join(args[1], name), bootstrap })
+  const nodes = []
+  for (const [start, end] of [[0, 20], [20, 28]]) {
+    const relay = await open(`relay-${start}`)
+    nodes.push(relay)
+    for (let i = start; i < end; i++) {
+      const op = await relay.put({ id: `catalogue:${i}`, title: `Catalogue ${i}` }, Readable.from([Buffer.from([i])]))
+      await relay.append(op)
+    }
+    relay.serveSearch({ isMedia: () => true })
+  }
+  const node = await open('searcher')
+  const api = createApi({ node })
+  const host = new URL(`udp://${bootstrap[0]}`).hostname
+  await new Promise(resolve => api.listen(0, host, resolve))
+  const query = 'catalogue'
+  const requests = [undefined, 0, '雪', 4, -2, '4', 2.9, 80].map(limit => ({ query, limit }))
+  const counts = async search => {
+    const result = []
+    for (const request of requests) result.push((await search(request)).length)
+    return result
+  }
+  const httpCounts = url => counts(async request => {
+    const res = await fetch(new URL('/v1/search/global', url), {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(request)
+    })
+    const body = await res.json()
+    if (!res.ok) throw new Error(body.error)
+    return body.results
+  })
+  await until(async () => (await node.searchGlobal({ query, limit: 80 })).length === 28)
+  out({ requests, node: await counts(request => node.searchGlobal(request)), http: await httpCounts(`http://${host}:${api.address().port}`) })
+  createInterface({ input: process.stdin }).once('line', async url => out(await httpCounts(url)))
+  keepAlive(async () => {
+    api.close()
+    await Promise.all([node, ...nodes].map(peer => peer.close()))
+  })
 } else {
   throw new Error(`unknown mode ${mode}`)
 }

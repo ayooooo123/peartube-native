@@ -803,7 +803,7 @@ impl<N: Node> Api<N> {
                 .unwrap_or_default()
                 .to_owned();
             let id = body.get("id").filter(|id| !id.is_null()).cloned();
-            let limit = body.get("limit").and_then(Value::as_u64).unwrap_or(0) as usize;
+            let limit = crate::search::request_limit(body.get("limit"));
             let key = format!(
                 "{query_text}\n{}",
                 id.as_ref().and_then(Value::as_str).unwrap_or_default()
