@@ -263,6 +263,13 @@ jobs:
       # Fails when a committed reference is not what the app at JS_REF produces.
       - run: node fixtures/gen/check.mjs
         if: steps.suite.outputs.scope != 'none'
+      # Unfiltered cargo test also links examples whose test flag is false.
+      - name: Link workspace examples
+        if: steps.suite.outputs.scope == 'transfers' || (matrix.check == 'clippy' && steps.suite.outputs.scope == 'full')
+        shell: bash
+        run: |
+          cargo build --workspace --examples --profile test --message-format=json-render-diagnostics |
+            jq -r 'select(.reason == "compiler-artifact" and .target.kind == ["example"] and .executable != null) | "Linked example: \(.target.name)"'
       - id: tests
         name: Run Rust tests, including ignored interop tests
         if: steps.suite.outputs.scope != 'none'
