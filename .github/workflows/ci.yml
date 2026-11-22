@@ -12,8 +12,8 @@ concurrency:
 # The app commit in JS_REF is the reference for every fixture and every ignored interop test.
 env:
   PEARTUBE_APP: ${{ github.workspace }}/peartube
-  # Keep file and line information in failures without linking full debug data into every test.
-  CARGO_PROFILE_DEV_DEBUG: line-tables-only
+  # Tests keep debug assertions and overflow checks. CI does not use a debugger.
+  CARGO_PROFILE_DEV_DEBUG: "0"
 
 jobs:
   changes:
@@ -179,6 +179,16 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+      # Fresh checkouts otherwise make Cargo rebuild unchanged path dependencies.
+      # Both cache keys (restore and save) include STACK.lock, even if a pin moves back.
+      - name: Use the pinned commit time for sibling build inputs
+        run: |
+          export TZ=UTC
+          for dir in ../*/; do
+            case "${dir#../}" in peartube-native/|peartube/) continue ;; esac
+            stamp=$(git -C "$dir" show -s --format=%cd --date=format-local:%Y%m%d%H%M.%S HEAD)
+            find "$dir" -name .git -prune -o -exec touch -h -t "$stamp" {} +
+          done
       # Cargo builds the pinned siblings in this workspace's target directory.
       # The action also keys on OS, architecture and rustc, and omits this workspace's binaries.
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
