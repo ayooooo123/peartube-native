@@ -409,13 +409,28 @@ impl Media {
             .as_ref()
             .is_some_and(|window| window.short)
     }
+
+    /// Whether this stream's window runs to its blob's last block: a finishing tail.
+    fn window_reaches_end(&self) -> bool {
+        let Some(blob) = self.blob else {
+            return false;
+        };
+        let last = blob.block_offset + blob.block_length;
+        self.window
+            .lock()
+            .expect("cast window")
+            .as_ref()
+            .is_some_and(|window| window.end == last)
+    }
 }
 
 /// The receiver's steering pass, newest stream first. The newest has first claim on the shared
-/// budget: once a newer stream's window is short of what it planned, every older window lets go
-/// of its range and permits and is not steered this pass, so the newer one takes them on the next.
-/// Without this an old title's reader near its start kept the whole pool and a new title got one
-/// block. `live` runs for every stream, in order; a stream that is not live loses its window.
+/// budget: once a newer stream's window is short of what it planned, every older window that does
+/// not reach its blob's end lets go of its range and permits and is not steered this pass, so the
+/// newer one takes them on the next. Without this an old title's reader near its start kept the
+/// whole pool and a new title got one block. A window that reaches its end keeps its blocks: it
+/// is bounded, and it lets go at the end of the file. `live` runs for every stream, in order; a
+/// stream that is not live loses its window.
 pub async fn steer_newest_first<L, S, F>(streams: &[Arc<Media>], mut live: L, mut steer: S)
 where
     L: FnMut(&Arc<Media>) -> bool,
@@ -424,12 +439,12 @@ where
 {
     let mut newer_short = false;
     for media in streams {
-        if !live(media) || newer_short {
+        if !live(media) || (newer_short && !media.window_reaches_end()) {
             media.clear_window();
             continue;
         }
         steer(media.clone()).await;
-        newer_short = media.window_short();
+        newer_short |= media.window_short();
     }
 }
 
@@ -1131,14 +1146,24 @@ mod tests {
         let old_film = peers(0).await;
         let new_film = peers(0).await;
         let peer = budget_peer();
-        let old = budget_media(old_film.reader.clone(), peer.clone());
-        let new = budget_media(new_film.reader.clone(), peer.clone());
+        let old = Arc::new(budget_media(old_film.reader.clone(), peer.clone()));
+        let new = Arc::new(budget_media(new_film.reader.clone(), peer.clone()));
         old.steer_window(64 << 30, 8.0e6, 390 * BS as u64);
         assert_eq!(old.window_range(), Some((390, 400)));
         assert_eq!(held_blocks(&old), 10);
+        let streams = [new.clone(), old.clone()];
         for tick in 0..5u64 {
-            new.steer_window(64 << 30, 8.0e6, tick * BS as u64);
-            old.steer_window(64 << 30, 8.0e6, 390 * BS as u64);
+            steer_newest_first(
+                &streams,
+                |_| true,
+                |media| {
+                    let at = if Arc::ptr_eq(&media, &new) { tick } else { 390 } * BS as u64;
+                    async move {
+                        media.steer_window(64 << 30, 8.0e6, at);
+                    }
+                },
+            )
+            .await;
             assert_eq!(held_blocks(&old), 10, "tick {tick}");
             assert_eq!(new.window_range(), Some((0, 65)), "tick {tick}");
         }
