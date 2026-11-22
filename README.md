@@ -180,7 +180,7 @@ Seeks fetch discarded blocks again. The TV app currently has no
 
 ## Running tests
 
-Rust 1.90 or newer, Node.js and npm are required. Clone the sibling path
+The tests require Rust 1.90 or newer, Node.js and npm. Clone the sibling path
 dependencies listed in `Cargo.toml` and their transitive dependencies alongside
 this repository; CI lists the required repositories. The app is the reference for
 every JS-backed test: check out the PearTube app at the commit in [`JS_REF`](JS_REF)
