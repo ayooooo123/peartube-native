@@ -74,6 +74,10 @@ jobs:
           - os: macos-latest
             skip: --skip mdns_interop_with_bonjour_service --skip over_the_lan --skip over_lan --skip lan_token_gating_and_dial_order
     runs-on: ${{ matrix.os }}
+    env:
+      # Build the pinned C++ sources. On macOS, Clang can reuse parsed SDK headers.
+      CXX: clang++
+      CXXFLAGS: ${{ startsWith(matrix.os, 'macos-') && '-fmodules -fcxx-modules' || '' }}
     defaults:
       run:
         working-directory: peartube-native
@@ -189,6 +193,11 @@ jobs:
             stamp=$(git -C "$dir" show -s --format=%cd --date=format-local:%Y%m%d%H%M.%S HEAD)
             find "$dir" -name .git -prune -o -exec touch -h -t "$stamp" {} +
           done
+      - name: Identify the native compiler for the Cargo cache
+        run: |
+          version=$("$CXX" --version)
+          echo "$version"
+          echo "CXX_VERSION=${version%%$'\n'*}" >> "$GITHUB_ENV"
       # Cargo builds the pinned siblings in this workspace's target directory.
       # The action also keys on OS, architecture and rustc, and omits this workspace's binaries.
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
