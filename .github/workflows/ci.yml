@@ -291,6 +291,15 @@ jobs:
         if: >-
           !cancelled() && steps.suite.outputs.scope == 'full' &&
           (steps.tests.outcome == 'success' || steps.tests.outcome == 'failure')
+      # Ordinary examples have no test names. Check their links on the same full build.
+      - name: Link workspace examples
+        if: >-
+          !cancelled() && steps.suite.outputs.scope == 'full' &&
+          (steps.tests.outcome == 'success' || steps.tests.outcome == 'failure')
+        shell: bash
+        run: |
+          cargo build --workspace --examples --profile test --message-format=json-render-diagnostics |
+            jq -r 'select(.reason == "compiler-artifact" and .target.kind == ["example"] and .executable != null) | "Linked example: \(.target.name)"'
 
   result:
     name: CI result
