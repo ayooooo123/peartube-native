@@ -97,6 +97,27 @@ pub fn words(q: &str) -> Vec<String> {
         .collect()
 }
 
+/// The node takes a row count, with zero reserved for the default. Keep a negative or
+/// fractional count below one distinct from a missing, zero or nonnumeric JSON limit.
+pub(crate) fn request_limit(raw: Option<&Value>) -> usize {
+    let number = match raw {
+        Some(Value::Number(n)) => n.as_f64().unwrap_or(f64::NAN),
+        Some(Value::String(s)) => crate::protocol::js_number(s),
+        Some(Value::Array(items)) => match items.as_slice() {
+            // Number([x]) parses the string form of x. "true" and "false" are not numbers.
+            [item] if !item.is_boolean() => return request_limit(Some(item)),
+            _ => return 0,
+        },
+        Some(Value::Bool(flag)) => return usize::from(*flag),
+        _ => return 0,
+    };
+    if number == 0.0 || number.is_nan() {
+        0
+    } else {
+        (number as usize).max(1)
+    }
+}
+
 fn valid_id(mid: Option<&Value>) -> Option<String> {
     let mid = mid?.as_str()?;
     let lower = mid.to_lowercase();
@@ -386,7 +407,12 @@ impl GlobalSearch {
         }
         let mut run = lock(&run);
         run.returned = true;
-        Ok(rows(&run, limit.clamp(1, MAX_HITS * ASK_TOPIC)))
+        let limit = if limit == 0 {
+            MAX_HITS
+        } else {
+            limit.min(MAX_HITS * ASK_TOPIC)
+        };
+        Ok(rows(&run, limit))
     }
 
     /// Ends the lookup and its connections when the node suspends.

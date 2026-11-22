@@ -267,3 +267,86 @@ fn rust_relay_answers_a_js_searcher() {
     let _ = std::fs::remove_dir_all(&storage);
     let _ = &mut testnet;
 }
+
+#[test]
+#[ignore = "needs node and the PearTube app checkout"]
+fn global_search_request_limits_match_js() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut testnet = spawn_js("testnet", &[]);
+    let bootstrap = testnet.result()["bootstrap"].clone();
+    let mut catalog = spawn_js(
+        "limit-catalog",
+        &[bootstrap.to_string(), dir.path().display().to_string()],
+    );
+    let reference = catalog.result();
+    let expected = json!([20, 20, 20, 4, 1, 4, 2, 28]);
+    assert_eq!(reference["node"], expected);
+    assert_eq!(reference["http"], expected);
+
+    let (send, replies) = std::sync::mpsc::channel();
+    let backend = peartube_native::backend::Backend::spawn(json!({ "apiPort": 0 }), move |line| {
+        let _ = send.send(line);
+    })
+    .unwrap();
+    let call = |method: &str, params: &Value| {
+        backend
+            .send(&json!({ "id": 1, "method": method, "params": params }).to_string())
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(120);
+        loop {
+            let line = replies
+                .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+                .expect("worker reply");
+            let reply: Value = serde_json::from_str(&line).unwrap();
+            if reply["id"] == 1 {
+                break reply;
+            }
+        }
+    };
+    let init = call("init", &json!({ "castStorage": dir.path().join("cast") }));
+    assert_eq!(init["result"]["ok"], true, "{init}");
+    let start = call(
+        "start",
+        &json!({
+            "trackersDir": dir.path().join("trackers"), "defaultFolder": "default",
+            "settings": { "bootstrap": bootstrap, "lanDiscovery": false, "privateRouting": false }
+        }),
+    );
+    let url = start["result"]["apiUrl"].as_str().expect("worker API URL");
+    // Prove that both relays answered before a small count can pass as a search limit.
+    let deadline = Instant::now() + Duration::from_secs(120);
+    loop {
+        let reply = call(
+            "searchGlobal",
+            &json!({ "query": "catalogue", "limit": 80 }),
+        );
+        if reply["result"].as_array().expect("search results").len() == 28 {
+            break;
+        }
+        assert!(Instant::now() < deadline, "worker did not find both relays");
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    let worker: Vec<Value> = reference["requests"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|params| {
+            let reply = call("searchGlobal", params);
+            match reply["result"].as_array() {
+                Some(rows) => json!(rows.len()),
+                None => reply["error"].clone(),
+            }
+        })
+        .collect();
+    catalog.send(url);
+    let http = catalog.result();
+    backend.shutdown();
+    eprintln!(
+        "JS: {expected}; Rust worker: {}; Rust HTTP: {http}",
+        json!(worker)
+    );
+    assert_eq!(
+        (json!(worker), http),
+        (reference["node"].clone(), reference["http"].clone())
+    );
+}

@@ -65,7 +65,7 @@ there is no Rust code to compare.
 | `src/tags.js` | `tags` | `match` (FLAC and Ogg Vorbis/Opus comments, ID3v2.3/2.4, `albumKey`) | `2a3f14eeb` |
 | `src/traffic.js` | `traffic` | `match` | `8326afa2c` |
 | `src/ui.js` | — | `JS-only:` shared asset; `relay.Dockerfile` copies the app's own file to `web/index.html` at image build and the relay serves it | `2a3f14eeb` |
-| `worklet/worker.js` | `app`, `lifecycle`, `ipc`, `backend` | `match` (`searchGlobal`) | `d6b9fc3ce` |
+| `worklet/worker.js` | `app`, `lifecycle`, `ipc`, `backend` | `match` (`searchGlobal`: the worker and HTTP API return up to 20 rows when the request omits `limit` or gives zero or a nonnumeric value) | `d6b9fc3ce` |
 | `<storage>/plugins/*.mjs (user plugins)` | — | `JS-only:` Rust cannot execute JS plugins; the built-in plugins are ports of the app's own (`http-acquire`, `channel-backfill`, `blob-rechunk`, `watch-dir`, `feed-mirror`, `soulseek`, `p2p-replicate`, `hiverelay-seed`, `media-check`) | — |
 
 `src/cast-ui.js`, `bin/receiver.js` and the browser-receiver cast routes were removed from the app in `fe2897172`;
