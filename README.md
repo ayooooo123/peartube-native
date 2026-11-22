@@ -68,7 +68,10 @@ The `privateGuard` setting runs the guard forwarder in-process on its own HyperD
 (JS spawns `bin/private-relay.js`); `PEARTUBE_PRIVATE_RELAY` (or
 `PEARTUBE_PRIVATE_RELAY_PORT`) makes the same binary the standalone Corestore-free guard
 of `bin/private-relay.js`: no storage folder, no Corestore, and channel or content flags
-are refused. The cast stack (the app's `createCastController`) opens with the node and
+are refused. A guard whose fixed port another socket holds does not start: the relay logs
+`private guard failed to start` and runs without it, and a restart starts it after the port
+is free. In that state the app's guard takes another port and reports the configured one.
+The cast stack (the app's `createCastController`) opens with the node and
 answers `/v1/cast/*` from it, closing with a stop or reopen. `status.lan` reports
 `{host, port}`, as JS does. Not yet ported: JS plugins from `<storage>/plugins`.
 The UI and web player come from `PEARTUBE_WEB_DIR` (default: `web/` beside the binary).

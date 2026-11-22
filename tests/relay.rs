@@ -393,6 +393,47 @@ async fn a_restart_answers_the_reason_when_its_guard_step_fails() {
     relay.shutdown().await;
 }
 
+/// `state.restart`: a restart starts a guard that the owner wants and that does not run. The
+/// Rust guard runs inside the relay, so the guard that is missing here is one that could not
+/// start: another socket holds its port while the relay starts. The relay then runs without a
+/// guard, and its status says so. After the port is free, a restart starts the guard on that
+/// port, and the node is open again. The app's guard does not fail in that state (its DHT takes
+/// another port), so the app's own test stops the guard process instead.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_restart_starts_a_wanted_guard_that_did_not_start() {
+    let dir = tempfile::tempdir().unwrap();
+    let held = std::net::UdpSocket::bind("0.0.0.0:0").expect("a UDP port to hold");
+    let port = held.local_addr().unwrap().port();
+    let mut env = env(dir.path());
+    env.insert("PEARTUBE_PRIVATE_GUARD".into(), "1".into());
+    env.insert("PEARTUBE_PRIVATE_GUARD_PORT".into(), port.to_string());
+    let relay = Relay::listen(env).await.expect("relay listens");
+    let ready = relay.start().await.expect("node opens");
+    let addr = relay.addresses()[0];
+    let status = move || tokio::task::spawn_blocking(move || get_json(addr, "/v1/status"));
+    assert_eq!(
+        status().await.unwrap()["privateGuard"],
+        Value::Null,
+        "a guard runs although another socket holds its port"
+    );
+    drop(held);
+    let answer =
+        tokio::task::spawn_blocking(move || try_request_json(addr, "POST", "/v1/restart", ""))
+            .await
+            .unwrap();
+    assert_eq!(answer.0, 200, "the restart failed: {}", answer.1);
+    assert_eq!(
+        status().await.unwrap()["privateGuard"]["port"],
+        json!(port),
+        "the restart did not start the guard on its port"
+    );
+    assert_eq!(
+        relay.status().await.expect("the node is open again")["writer"],
+        ready["writer"]
+    );
+    relay.shutdown().await;
+}
+
 /// The relay's library from its API: an album folder in the import folder is listed as tracks
 /// that carry their own names, the owner removes them and only the files a mirror put there go
 /// with them, and the Soulseek provider follows its live settings.
