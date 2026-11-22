@@ -300,6 +300,26 @@ jobs:
         run: |
           cargo build --workspace --examples --profile test --message-format=json-render-diagnostics |
             jq -r 'select(.reason == "compiler-artifact" and .target.kind == ["example"] and .executable != null) | "Linked example: \(.target.name)"'
+      - name: Trace the founder test alone on macOS (proof only)
+        if: >-
+          !cancelled() && runner.os == 'macOS' && matrix.check == 'test' &&
+          (steps.tests.outcome == 'success' || steps.tests.outcome == 'failure')
+        shell: bash
+        run: |
+          for n in {1..20}; do
+            log="$RUNNER_TEMP/founder-$n.log"
+            if MIXED_TRACE=1 AUTOBEE_DEBUG=1 cargo nextest run --profile ci \
+                -p peartube-native --test network_mixed_b --run-ignored all --test-threads 1 \
+                -E 'test(=relays_converge_after_a_js_founder_goes_offline)' \
+                --success-output immediate >"$log" 2>&1; then
+              echo "Founder sample $n: passed"
+              if [[ "$n" == 1 ]]; then cat "$log"; else grep -F '5A: converged' "$log"; fi
+            else
+              echo "Founder sample $n: failed"
+              cat "$log"
+              exit 1
+            fi
+          done
 
   result:
     name: CI result
