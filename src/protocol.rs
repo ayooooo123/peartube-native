@@ -31,7 +31,7 @@ const MAX_SAFE_INTEGER: f64 = 9_007_199_254_740_991.0;
 
 /// `ID`: `kind:name` with an optional `:sNNeNN(N)` episode suffix, lowercase only.
 pub fn is_id(s: &str) -> bool {
-    let parts = s.split(':').collect::<Vec<_>>();
+    let parts = s.split(':').collect::<Vec<&str>>();
     if parts.len() != 2 && parts.len() != 3 {
         return false;
     }
