@@ -28,3 +28,13 @@ test-group = "lan"
 [[profile.ci.overrides]]
 filter = 'test(=a_paused_connection_receives_no_new_blocks_until_resumed)'
 threads-required = "num-test-threads"
+
+# Start long transfers and the C link test early. This changes order, not coverage.
+[[profile.ci.overrides]]
+filter = '''
+    test(=http_stream_survives_cache_ceiling)
+  | test(=rust_viewer_evicts_the_spent_prefix_without_stalling_the_tail)
+  | test(=js_viewer_evicts_the_spent_prefix_over_rust_bytes)
+  | test(=c_host_links_staticlib)
+'''
+priority = 10
