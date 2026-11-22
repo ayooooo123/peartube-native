@@ -31,13 +31,15 @@ test-group = "lan"
 priority = -10
 leak-timeout = { period = "5s", result = "fail" }
 
-# These tests check 150 ms timing windows. The live transfer failed even on the
-# old serial runner; the RPC returned before its deadline in a parallel run.
-# Reserve the runner for each one. Do not retry either assertion.
+# Reserve the runner for observed timing failures. The pause and RPC checks
+# use a 150 ms window. The guard checks have 5 s to disconnect or find the
+# same open stream at both ends. Keep the assertions; do not retry them.
 [[profile.ci.overrides]]
 filter = '''
     test(=a_paused_connection_receives_no_new_blocks_until_resumed)
   | test(=rpc_times_out_and_rejects_after_close)
+  | test(=an_unadvertised_hop_is_disconnected)
+  | test(=guards_and_swarms_rendezvous_and_exchange_bytes)
 '''
 threads-required = "num-test-threads"
 
