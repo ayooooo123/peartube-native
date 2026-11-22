@@ -316,6 +316,69 @@ jobs:
             cargo nextest run --profile ci -p peartube-native --test "$target" \
               -E "test(=$name)" --test-threads 1 --run-ignored all
           done
+      - name: Hold one watch scan in put and observe the other
+        if: >-
+          !cancelled() && matrix.check == 'test' && runner.os == 'Linux' &&
+          (steps.tests.outcome == 'success' || steps.tests.outcome == 'failure')
+        shell: bash
+        run: |
+          set -euo pipefail
+          work=$(mktemp -d "$RUNNER_TEMP/watch-gate.XXXXXX")
+          probe="$work/peartube-native"
+          mkdir "$probe"
+          git archive HEAD | tar -xf - -C "$probe"
+          for dir in "$GITHUB_WORKSPACE"/*; do
+            if [[ -d "$dir" && "${dir##*/}" != peartube-native ]]; then ln -s "$dir" "$work/"; fi
+          done
+          # This separate executable reuses the real fake node. Do not change the fixture.
+          cat tests/acquire_mirror.rs - > "$probe/tests/watch_gate_probe.rs" <<'RS'
+
+          #[tokio::test]
+          async fn ci_controlled_watch_overlap() {
+              use peartube_native::mirror::{LocalMirrorFiles, MirrorHost, MirrorOptions};
+              let root = tempfile::tempdir().unwrap();
+              let import = root.path().join("import");
+              let storage = root.path().join("storage");
+              std::fs::create_dir(&import).unwrap();
+              std::fs::create_dir(&storage).unwrap();
+              let node = FakeNode::new();
+              let host = MirrorHost::start(
+                  node.clone(), None, Arc::new(LocalMirrorFiles), Arc::new(Factory),
+                  Arc::new(RechunkFactory), Feeds::new(), Vec::new(),
+                  MirrorOptions {
+                      storage: storage.display().to_string(),
+                      watch_dir: Some(import.display().to_string()),
+                      mirror_channel: false, poll_interval_ms: 0, ..Default::default()
+                  },
+              ).await;
+              host.wait_idle().await;
+              std::fs::write(import.join("Late.mkv"), b"late").unwrap();
+              let gate = Arc::new(tokio::sync::Semaphore::new(0));
+              *node.put_gate.lock().unwrap() = Some(gate.clone());
+              let first = host.run("watch-dir", Value::Null);
+              let overlap = async {
+                  until(|| node.calls.lock().unwrap().iter().any(|c| c["method"] == "put")).await;
+                  let second = host.run("watch-dir", Value::Null).await.unwrap();
+                  gate.add_permits(1);
+                  second
+              };
+              let (first, second) = tokio::time::timeout(
+                  Duration::from_secs(10), futures_util::future::join(first, overlap),
+              ).await.expect("both scans completed after the gate opened");
+              let first = first.unwrap();
+              let after = host.run("watch-dir", Value::Null).await.unwrap();
+              println!("first={first} while_held={second} after_release={after}");
+              assert_eq!(first["ingested"], 1);
+              assert_eq!(second, json!({"scanned": 0, "ingested": 0, "busy": true, "items": []}));
+              assert_eq!(after["scanned"], 1);
+              assert!(after.get("busy").is_none());
+              host.close().await;
+          }
+          RS
+          CARGO_TARGET_DIR="$PWD/target" cargo test --locked --manifest-path "$probe/Cargo.toml" \
+            -p peartube-native --test watch_gate_probe -- ci_controlled_watch_overlap --exact --nocapture \
+            | tee "$work/result"
+          grep -F ' while_held=' "$work/result"
 
   result:
     name: CI result
