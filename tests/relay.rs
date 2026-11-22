@@ -359,6 +359,40 @@ async fn failed_http_reopen_recovers_without_another_restart() {
     check_http_reopen(ReopenCase::Recovers).await;
 }
 
+/// `state.restart`: a restart reopens the node and then runs the guard step, and its client gets
+/// the reason when one of them fails, as `bin/relay.js` answers it. Here the guard's port is the
+/// peer port, so the guard step fails at the start and at every restart. The node is open again
+/// after the restart that failed.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_restart_answers_the_reason_when_its_guard_step_fails() {
+    let dir = tempfile::tempdir().unwrap();
+    let port = free_port().to_string();
+    let mut env = env(dir.path());
+    env.insert("PEARTUBE_DHT_PORT".into(), port.clone());
+    env.insert("PEARTUBE_PRIVATE_GUARD".into(), "1".into());
+    env.insert("PEARTUBE_PRIVATE_GUARD_PORT".into(), port);
+    let relay = Relay::listen(env).await.expect("relay listens");
+    let ready = relay.start().await.expect("node opens");
+    let addr = relay.addresses()[0];
+    let answer =
+        tokio::task::spawn_blocking(move || try_request_json(addr, "POST", "/v1/restart", ""))
+            .await
+            .unwrap();
+    assert_eq!(
+        answer,
+        (
+            400,
+            json!({ "error": "privateGuardPort: use a different port from the peer port" })
+        ),
+        "the restart did not answer the reason its guard step failed"
+    );
+    assert_eq!(
+        relay.status().await.expect("the node is open again")["writer"],
+        ready["writer"]
+    );
+    relay.shutdown().await;
+}
+
 /// The relay's library from its API: an album folder in the import folder is listed as tracks
 /// that carry their own names, the owner removes them and only the files a mirror put there go
 /// with them, and the Soulseek provider follows its live settings.

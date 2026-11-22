@@ -186,7 +186,7 @@ impl Relay {
                                 .upgrade()
                                 .ok_or_else(|| HttpError::new(503, "The relay is shutting down"))?;
                             Relay(inner)
-                                .reopen()
+                                .restart()
                                 .await
                                 .map_err(|e| HttpError::new(400, e))
                         }) as BoxFuture<'static, _>
@@ -888,6 +888,16 @@ impl Relay {
         {
             log("private guard failed to start", json!({ "error": error }));
         }
+    }
+
+    /// `state.restart()`: reopens the node, then runs the guard step, which brings back a guard
+    /// that is wanted and does not run. The client gets the reason when one of them fails.
+    async fn restart(&self) -> Result<(), String> {
+        let mut open = self.turn().await?;
+        self.reopen_locked(&mut open).await?;
+        self.apply_guard().await?;
+        self.notify("update");
+        Ok(())
     }
 
     /// `state.applySettings(changed)`: live settings apply in place; any other change reopens.

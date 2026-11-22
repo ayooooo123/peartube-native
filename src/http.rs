@@ -129,7 +129,7 @@ pub type ArtLookup = Arc<dyn Fn(String) -> BoxFuture<'static, Option<String>> + 
 /// `state.applySettings(changed)`: an apply error becomes a warning on the saved settings.
 pub type ApplySettings =
     Arc<dyn Fn(Vec<String>) -> BoxFuture<'static, Result<(), String>> + Send + Sync>;
-/// `state.restart()`: an unsuccessful reopen keeps its error for the HTTP response.
+/// `state.restart()`: an unsuccessful reopen or guard step keeps its error for the HTTP response.
 pub type Restart = Arc<dyn Fn() -> BoxFuture<'static, Result<(), HttpError>> + Send + Sync>;
 /// `state.recoverMnemonic(mnemonic, alias)`.
 pub type RecoverMnemonic =
@@ -271,7 +271,8 @@ pub struct Options {
     pub settings: Option<Arc<tokio::sync::Mutex<Settings>>>,
     /// `state.applySettings(changed)`.
     pub apply_settings: Option<ApplySettings>,
-    /// `state.restart`: reopens the node for the settings a restart applies.
+    /// `state.restart`: reopens the node for the settings a restart applies, then runs the
+    /// guard step.
     pub restart: Option<Restart>,
     /// `state.recoverMnemonic(mnemonic, alias)`.
     pub recover_mnemonic: Option<RecoverMnemonic>,
