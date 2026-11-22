@@ -264,32 +264,54 @@ jobs:
       - id: tests
         name: Run Rust tests, including ignored interop tests
         if: steps.suite.outputs.scope != 'none'
-        shell: bash
+        shell: python
         env:
           CHECK: ${{ matrix.check }}
           SCOPE: ${{ steps.suite.outputs.scope }}
           TARGETS: ${{ needs.changes.outputs.targets }}
+          SKIP: ${{ matrix.skip }}
         run: |
-          args=(--workspace)
-          transfers=(blobs network_mixed_c)
-          if [[ "$SCOPE" == targets ]]; then
-            args=(-p peartube-native)
-            for target in $TARGETS; do args+=(--test "$target"); done
-          elif [[ "$SCOPE" == transfers ]]; then
-            args=(-p peartube-native)
-            for target in "${transfers[@]}"; do args+=(--test "$target"); done
-          elif [[ "$CHECK" == test ]]; then
-            # Every other binary, including any future binary, stays in the main job.
-            selectors=()
-            for target in "${transfers[@]}"; do selectors+=("binary_id(=peartube-native::$target)"); done
-            excluded=$(IFS='|'; echo "${selectors[*]}")
-            args+=(-E "not($excluded)")
-          fi
-          cargo nextest run --profile ci "${args[@]}" --run-ignored all --no-fail-fast -- ${{ matrix.skip }}
+          import json, os, subprocess
+
+          scope, check = os.environ["SCOPE"], os.environ["CHECK"]
+          args = ["--workspace"]
+          if scope == "targets":
+              args = ["-p", "peartube-native"]
+              for name in os.environ["TARGETS"].split():
+                  args.extend(["--test", name])
+          elif check != "clippy":
+              # Use Cargo's target list, not a map from sources to tests. Select the
+              # binaries before compilation; nextest filters alone work after linking.
+              meta = json.loads(subprocess.check_output(["cargo", "metadata", "--no-deps", "--format-version=1"]))
+              targets = [(p["name"], t) for p in meta["packages"] for t in p["targets"] if t["test"]]
+              transfer = {(p, t["name"]) for p, t in targets if t["kind"] == ["test"] and (
+                  p == "peartube-native-ffi" or p == "peartube-native" and
+                  (t["name"] in ("blobs", "network_mixed_c") or t["name"].endswith("_fixtures")))}
+              filters = "|".join(f"binary_id(={p}::{n})" for p, n in sorted(transfer)) or "none()"
+              second = check == "transfers"
+              flags = set()
+              for p, t in targets:
+                  kind, name = t["kind"], t["name"]
+                  if (kind == ["test"] and (p, name) in transfer) != second:
+                      continue
+                  if kind in (["bin"], ["test"], ["example"], ["bench"]):
+                      flags.add(("--" + kind[0], name))
+                  elif set(kind) <= {"lib", "rlib", "dylib", "cdylib", "staticlib", "proc-macro"}:
+                      flags.add(("--lib",))
+                  else:
+                      # Unknown Cargo target kind: build all defaults; filter execution only.
+                      flags.clear()
+                      break
+              for flag in sorted(flags):
+                  args.extend(flag)
+              args.extend(["-E", filters if second else f"not({filters})"])
+          os.execvp("cargo", ["cargo", "nextest", "run", "--profile", "ci", *args,
+                              "--run-ignored", "all", "--no-fail-fast", "--", *os.environ["SKIP"].split()])
       # nextest does not run doctests. Keep both crates' doctests even if a Rust test failed.
       - run: cargo test --workspace --doc --no-fail-fast -- --include-ignored ${{ matrix.skip }}
         if: >-
-          !cancelled() && steps.suite.outputs.scope == 'full' &&
+          !cancelled() && (steps.suite.outputs.scope == 'transfers' ||
+          (matrix.check == 'clippy' && steps.suite.outputs.scope == 'full')) &&
           (steps.tests.outcome == 'success' || steps.tests.outcome == 'failure')
 
   result:
