@@ -48,7 +48,7 @@ pub fn is_id(s: &str) -> bool {
 
 fn is_episode_part(p: &str) -> bool {
     let b = p.as_bytes();
-    (b.len() == 6 || b.len() == 7)
+    matches!(b.len(), 6 | 7)
         && b[0] == b's'
         && b[3] == b'e'
         && b[1..3].iter().all(u8::is_ascii_digit)
