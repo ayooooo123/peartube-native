@@ -21,7 +21,7 @@ relay UI, the API and video (`/v1/blob`; the node's blob server stays on loopbac
 (the `channel` setting) is the channel it serves; a pre-channel `settings.json` has its `tracker`
 moved to `channel` and its `streamHost`/`streamPort` dropped at start. HTTPS runs on
 `PEARTUBE_HTTPS_PORT` when `tls.crt`/`tls.key` exist. The acquirer comes with the
-`http-acquire`, `channel-backfill`, `blob-rechunk`, `watch-dir`, `feed-mirror`, `soulseek`,
+`http-acquire`, `channel-backfill`, `blob-rechunk`, `watch-dir`, `feed-mirror`, `soulseek`, `youtube`,
 `p2p-replicate` and `hiverelay-seed` plugins. `watch-dir` sweeps the import folder
 (`PEARTUBE_WATCH_DIR`) and `<storage>/staging`: a media file is announced once, and a folder
 of music files becomes one album, each track announced as `<release>:sNNeMM` with its own
@@ -29,8 +29,31 @@ name in `music`. `soulseek` is the app's Soulseek provider (the `slsk*` settings
 `/v1/providers/soulseek/search`, `browse` and `mirror` find albums on Soulseek peers and
 download them into the folder `watch-dir` sweeps, and `/v1/jobs` lists those mirrors with
 the acquirer's jobs. Where the app loads the `peartube-soulseek-bare` addon, the relay links
-the crate that addon wraps, `peartube-soulseek`. `p2p-replicate` and `hiverelay-seed`
-share one `traffic` gate (`peartube/bulk-busy`, `hiverelayUploadMbps`). `hiverelay-seed`
+the crate that addon wraps, `peartube-soulseek`.
+
+The owner can search Soulseek and YouTube together with `POST /v1/search/sources`.
+The JSON reply groups rows in the requested source order and keeps each source's ranking.
+With `stream: true`, each source sends an event as it finishes. The last event gives counts
+and errors without sending the rows again. A source that times out does not hide other results.
+The relay serves result pictures at `/v1/providers/youtube/thumb/<id>`; the browser does
+not contact the picture host. The `youtube` plugin uses `ubit` to search and to download
+audio. Both providers wait for a running import before placing any files. Cancelling a
+waiting save leaves the folder unchanged. The owner can see the outcome in `/v1/jobs`.
+
+An open, a restart, a settings change and a recovery run one at a time. Each one runs to
+its end after it starts, also when the client that asked for it hangs up. The plugins start
+after the node answers. A restart or a stop during the import of a folder waits only for
+the file in the import, and the next open imports the rest. A stop signal during the open
+closes the node, and the process exits with code 0. A shutdown that takes more than 3 s
+exits with code 1.
+
+When the relay restarts or shuts down, the first call to close starts every plugin's stop.
+Other callers wait for that same operation. The host releases its traffic gate after all
+stops finish, even if one fails. A single failure keeps its original reason. When several
+stops fail, the caller gets their reasons in plugin registration order.
+
+`p2p-replicate` and `hiverelay-seed` share one `traffic` gate
+(`peartube/bulk-busy`, `hiverelayUploadMbps`). `hiverelay-seed`
 recruits existing HiveRelays for this relay's own cores: `POST /seed-core` on the
 `hiverelays` list (`=TOKEN` per relay, `hiverelayApiKey` as its default), and the
 zero-key `hiverelay-discovery-v1` DHT (`hiverelayDiscover`, `PEARTUBE_HIVERELAY=1`)
@@ -58,6 +81,7 @@ Paths on the right are in the PearTube app unless otherwise stated.
 | `http` | `src/http.js`: loopback API, media and event endpoints |
 | `acquire`, `mirror`, `mirror::watch` | `src/acquire.js`, `src/mirror.js`: acquisition jobs, mirror plugins, and the import folder (`watch-dir`: one announce for each media file, one album for each folder of music files) |
 | `providers::soulseek` | `src/providers/soulseek.js`: the Soulseek provider (search ranking, browse, album and lone-track placement, mirror jobs). `providers::soulseek::client` is the `peartube-soulseek` client it drives |
+| `providers::youtube`, `providers::staging`, `mirror::sources` | `src/providers/youtube.js`, `src/providers/staging.js`, `src/mirror.js`: audio saves, shared album names and pins, and search across providers |
 | `tags` | `src/tags.js`: music tags (FLAC and Ogg comments, ID3v2.3/2.4) and the album key two rips of one album share |
 | `cast` | `src/cast.js`, `src/cast-control.js`: controller, receiver, the cast channel on the peer connection, pairing and media serving |
 | `lan` | `src/lan.js`: mDNS and isolated LAN DHT; worker host Bonjour events and interface selection |
@@ -115,10 +139,12 @@ identified below rather than presented as live network parity.
 - `tests/identity_fixtures.rs`, `tests/settings_fixtures.rs`: JS identity and settings results, file bytes and modes; JS reads Rust-written files.
 - `tests/resolution_fixtures.rs`: JS media resolution fixture results, FLAC and MPEG audio included.
 - `tests/tags_fixtures.rs`: JS tag-reader results for FLAC, Ogg and ID3 files, each also cut short at every length, and album keys. `tests/soulseek_fixtures.rs`: JS Soulseek placement, ranking and browse results.
-- `tests/art_identify.rs`: JS artwork and identification results against scripted HTTP and fake `ubit`.
-- `tests/http.rs`: JS API responses, status and headers against a scripted node, including a library the owner removes from and a provider's jobs and calls.
-- `tests/acquire_mirror.rs`: JS acquisition and mirror call and JSON traces against scripted dependencies. Its library sessions (`tests/js/acquire-mirror-library.json`) run both mirror hosts on real files instead: album folders and their pins, `<storage>/staging`, a read-only import folder, what the owner removed, and the Soulseek provider on a scripted network, compared as JSON text.
+- `tests/art_identify.rs`: JS artwork and identification results against scripted HTTP and fake `ubit`. An audio save through the embedded SDK must leave the relay's settings folder as it was.
+- `tests/http.rs`: responses from the app and Rust API, including owner-only pictures, search errors and exact event frames. A client must receive the fast source's event before it releases the slow source.
+- `tests/acquire_mirror.rs`: calls and results from both acquirers and mirror hosts. The library sessions compare album imports on real files, pinned names and artists, saved file hashes by relative path, cancellation during an import and each source's results before and after its deadline.
+  `tests/js/mirror-close.mjs` also runs the app with a real node and a held plugin stop. The comparison checks callers that close together, including a stop that calls close again. It checks when the traffic listener goes away and which failure reasons reach each caller.
 - `tests/soulseek_provider.rs`: the app's own `createSoulseekPlugin` beside the Rust provider on one scripted Soulseek client and clock, with real files: every call, job view and folder listing compared as JSON text.
+- `tests/youtube_provider.rs`: the app and Rust search, save, cancel and fetch pictures against the same scripted extractor and clock. The test compares jobs, skipped tracks and files on disk without depending on live YouTube availability.
 - `tests/apply.rs`: JS apply operations, host calls and view bytes on a real Hyperbee.
 - `tests/blobs.rs`: JS blob operations, core keys, announce fields, encrypted and plain block bytes, cache decisions, and ingested SHA-256 checkpoint/resume in both directions with `sodium-native` (`tests/js/sha256-state.mjs`).
 - `tests/cast.rs`: JS cast fixtures, the `peartube-cast/v1` control channel over in-memory Protomux connections (pairing rules, state pushes, session control, a non-paired peer refused), and live JS↔Rust interop on a local testnet in both directions. `tests/cast_default.rs` casts between two default backends over the LAN, from pairing through exact bytes on the receiver's player port.
