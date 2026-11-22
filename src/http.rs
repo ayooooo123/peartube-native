@@ -124,15 +124,26 @@ pub enum Art {
 
 /// `state.posterUrl` / `state.backdropUrl`: an IMDb id to a Cinemeta image URL.
 pub type ArtLookup = Arc<dyn Fn(String) -> BoxFuture<'static, Option<String>> + Send + Sync>;
-/// `state.applySettings(changed)`.
+/// `state.applySettings(changed)`: an apply error becomes a warning on the saved settings.
 pub type ApplySettings =
     Arc<dyn Fn(Vec<String>) -> BoxFuture<'static, Result<(), String>> + Send + Sync>;
+/// `state.restart()`: an unsuccessful reopen keeps its error for the HTTP response.
+pub type Restart = Arc<dyn Fn() -> BoxFuture<'static, Result<(), HttpError>> + Send + Sync>;
 /// `state.recoverMnemonic(mnemonic, alias)`.
 pub type RecoverMnemonic =
     Arc<dyn Fn(String, String) -> BoxFuture<'static, Result<Value, HttpError>> + Send + Sync>;
 /// `state.identify(link)`.
 pub type Identify =
     Arc<dyn Fn(String) -> BoxFuture<'static, Result<Value, HttpError>> + Send + Sync>;
+
+/// Finish the node change even if the client that requested it disconnects.
+pub(crate) async fn finish_node_change<T: Send + 'static>(
+    change: impl Future<Output = T> + Send + 'static,
+) -> Result<T, HttpError> {
+    tokio::spawn(change)
+        .await
+        .map_err(|error| HttpError::new(500, error.to_string()))
+}
 
 /// The app's `metahub(kind, size)` lookups, which read Cinemeta through [`crate::art`].
 pub fn cinemeta_lookup(base: &str, art: Art) -> ArtLookup {
@@ -239,10 +250,10 @@ pub struct Options {
     /// `state.settings`: the relay settings the `/v1/settings` routes read and write, shared
     /// with the relay that opens the node from them.
     pub settings: Option<Arc<tokio::sync::Mutex<Settings>>>,
-    /// `state.applySettings(changed)`: applies live settings in place; a message becomes `warning`.
+    /// `state.applySettings(changed)`.
     pub apply_settings: Option<ApplySettings>,
     /// `state.restart`: reopens the node for the settings a restart applies.
-    pub restart: Option<Arc<dyn Fn() -> BoxFuture<'static, ()> + Send + Sync>>,
+    pub restart: Option<Restart>,
     /// `state.recoverMnemonic(mnemonic, alias)`.
     pub recover_mnemonic: Option<RecoverMnemonic>,
     /// `state.identify(link)`.
@@ -674,31 +685,24 @@ impl<N: Node> Api<N> {
             }
             if *method == Method::PUT && path == "/v1/settings" {
                 let patch = self.read_body(req.body).await?;
-                let updated = settings
+                let changed = settings
                     .lock()
                     .await
-                    .update(&patch)
+                    .save_patch(&patch)
                     .map_err(|error| HttpError::new(error.status(), error.message()))?;
-                let changed: Vec<String> = updated
-                    .get("changed")
-                    .and_then(Value::as_array)
-                    .map(|keys| {
-                        keys.iter()
-                            .filter_map(|key| key.as_str().map(str::to_owned))
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                let mut warning = None;
-                // Unlocked: applying reads the settings it just saved.
-                if !changed.is_empty()
+                // Apply without the settings lock; the response must show what is applied now.
+                let warning = if !changed.is_empty()
                     && let Some(apply) = &self.options.apply_settings
-                    && let Err(message) = apply(changed.clone()).await
                 {
-                    warning = Some(message);
-                }
-                let mut out = object(updated);
-                if let Some(warning) = warning {
-                    out.insert("warning".to_owned(), Value::String(warning));
+                    finish_node_change(apply(changed.clone())).await?.err()
+                } else {
+                    None
+                };
+                let mut out = Map::new();
+                out.insert("changed".to_owned(), changed.into());
+                out.extend(object(settings.lock().await.view()));
+                if let Some(message) = warning {
+                    out.insert("warning".to_owned(), Value::String(message));
                 }
                 return Ok(Some(Value::Object(out)));
             }
@@ -706,7 +710,7 @@ impl<N: Node> Api<N> {
                 && path == "/v1/restart"
                 && let Some(restart) = &self.options.restart
             {
-                restart().await;
+                finish_node_change(restart()).await??;
                 return Ok(Some(settings.lock().await.view()));
             }
         }
@@ -866,6 +870,9 @@ impl<N: Node> Api<N> {
                     let mut entries = node.search(None, options).await.map_err(node_error)?;
                     self.via_api(req.headers, req.remote, &mut entries);
                     value(entries)?
+                }
+                None if self.options.restart.is_some() => {
+                    return Err(HttpError::new(503, "The relay node is unavailable"));
                 }
                 None => Value::Array(Vec::new()),
             };

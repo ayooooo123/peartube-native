@@ -138,6 +138,227 @@ async fn a_live_setting_applies_without_a_reopen() {
     relay.shutdown().await;
 }
 
+#[cfg(unix)]
+#[derive(PartialEq)]
+enum ReopenCase {
+    Healthy,
+    RestartFails,
+    BusyPort,
+    Recovers,
+}
+
+#[cfg(unix)]
+async fn relay_log<R: tokio::io::AsyncBufRead + Unpin>(
+    lines: &mut tokio::io::Lines<R>,
+    message: &str,
+) -> Value {
+    tokio::time::timeout(Duration::from_secs(60), async {
+        loop {
+            let line = lines.next_line().await.unwrap().expect("relay stopped");
+            if let Ok(value) = serde_json::from_str::<Value>(&line)
+                && value["msg"] == message
+            {
+                break value;
+            }
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("relay did not report {message}"))
+}
+
+#[cfg(unix)]
+async fn check_http_reopen(case: ReopenCase) {
+    use peartube_native::private_overlay::{dht::DhtOptions, peeroxide::open_dht, to_hex};
+    use std::os::unix::fs::symlink;
+    use std::process::Stdio;
+    use tokio::io::{AsyncBufReadExt, BufReader};
+
+    let bootstrap = open_dht(DhtOptions {
+        host: Some("127.0.0.1".into()),
+        port: 0,
+        bootstrap: Vec::new(),
+    })
+    .await
+    .unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let import = dir.path().join("import");
+    let database = dir.path().join("database");
+    let link = dir.path().join("corestore");
+    std::fs::create_dir(&database).unwrap();
+    symlink(&database, &link).unwrap();
+    std::fs::create_dir(&import).unwrap();
+    std::fs::write(import.join("Film tt1234567.mkv"), b"fixture video").unwrap();
+    std::fs::write(
+        dir.path().join("settings.json"),
+        r#"{"privateGuard":true,"privateGuardPort":0,"lan":true,"lanHost":"127.0.0.1"}"#,
+    )
+    .unwrap();
+    let followed = to_hex(&hypercore::crypto::KeyPair::from_seed(&[0x33; 32]).public_key);
+    let mut env = env_on(
+        dir.path(),
+        &format!("127.0.0.1:{}", bootstrap.address().unwrap().port()),
+    );
+    for (key, value) in [
+        ("PEARTUBE_PRIVATE_HOST", "127.0.0.1"),
+        ("PEARTUBE_REPLICATE", "1"),
+        ("PEARTUBE_PUBLISH_CHANNEL", "0"),
+        ("PEARTUBE_SOURCES", &followed),
+        ("PEARTUBE_WATCH_DIR", import.to_str().unwrap()),
+    ] {
+        env.insert(key.into(), value.into());
+    }
+    let addr = std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap();
+    let mut child = tokio::process::Command::new(env!("CARGO_BIN_EXE_peartube-relay"))
+        .kill_on_drop(true)
+        .env_clear()
+        .envs(env)
+        .env("PEARTUBE_API_PORT", addr.port().to_string())
+        .env("HOME", dir.path())
+        .env("TMPDIR", dir.path())
+        .current_dir(dir.path())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut lines = BufReader::new(child.stdout.take().unwrap()).lines();
+    let ready = relay_log(&mut lines, "relay ready").await;
+    let status = get_json(addr, "/v1/status");
+    assert_eq!(status["writer"], ready["writer"]);
+    assert_eq!(status["lan"]["host"], "127.0.0.1");
+    assert!(status["privateGuard"]["port"].as_u64().unwrap() > 0);
+    assert!(
+        status["sources"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|s| s["key"] == followed)
+    );
+    let entry_hash = |entries: Value| {
+        let row = entries["results"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["id"] == "imdb:tt1234567")
+            .expect("imported film");
+        row["sha256"].as_str().unwrap().to_owned()
+    };
+    let hash = entry_hash(get_json(addr, "/v1/entries"));
+    // A reopened node must read this entry from storage, not import the file a second time.
+    std::fs::remove_file(import.join("Film tt1234567.mkv")).unwrap();
+    let restart = ("POST", "/v1/restart", "");
+    let settings = ("PUT", "/v1/settings", r#"{"hiverelayReplicas":4}"#);
+    if case == ReopenCase::BusyPort {
+        let busy = std::net::UdpSocket::bind((addr.ip(), 0)).unwrap();
+        let busy_addr = busy.local_addr().unwrap();
+        let cause = std::net::UdpSocket::bind(busy_addr)
+            .unwrap_err()
+            .to_string();
+        let patch = json!({ "dhtPort": busy_addr.port() });
+        let saved = request_json(addr, "PUT", "/v1/settings", &patch.to_string());
+        assert_eq!(saved["changed"], json!(["dhtPort"]));
+        assert_eq!(saved["restartNeeded"], json!(["dhtPort"]));
+        assert!(
+            saved["warning"].as_str().unwrap().contains(&cause),
+            "{saved}"
+        );
+        let file = std::fs::File::open(dir.path().join("settings.json")).unwrap();
+        assert_eq!(
+            serde_json::from_reader::<_, Value>(file).unwrap()["dhtPort"],
+            busy_addr.port()
+        );
+
+        // Keep the port occupied beyond the retry. Only the corrective PUT can restore the node.
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        let pending = get_json(addr, "/v1/settings");
+        assert_eq!(pending["settings"]["dhtPort"]["value"], busy_addr.port());
+        assert_eq!(pending["restartNeeded"], json!(["dhtPort"]));
+        let fixed = request_json(addr, "PUT", "/v1/settings", r#"{"dhtPort":0}"#);
+        assert!(fixed.get("warning").is_none(), "{fixed}");
+        assert_eq!(get_json(addr, "/v1/settings")["restartNeeded"], json!([]));
+        assert_eq!(entry_hash(get_json(addr, "/v1/entries")), hash);
+        drop(busy);
+    } else if case != ReopenCase::Healthy {
+        let (method, path, body) = restart;
+        let broken = dir.path().join("not-a-directory");
+        std::fs::write(&broken, b"not a directory").unwrap();
+        let swap = dir.path().join("swap");
+        symlink(broken, &swap).unwrap();
+        std::fs::rename(&swap, &link).unwrap();
+        let cause = std::fs::create_dir_all(&link).unwrap_err();
+        let (status, reply) = try_request_json(addr, method, path, body);
+        assert_eq!(status, 400, "{method} {path}: {reply}");
+        assert_eq!(reply, json!({"error": format!("io: {cause}")}));
+        if case == ReopenCase::RestartFails {
+            relay_log(&mut lines, "restart recovery failed").await;
+            let (status, reply) = try_request_json(addr, "GET", "/v1/entries", "");
+            assert_eq!(status, 503, "{reply}");
+            assert_eq!(reply, json!({"error": "The relay node is unavailable"}));
+        }
+        symlink(&database, &swap).unwrap();
+        std::fs::rename(&swap, &link).unwrap();
+        if case == ReopenCase::RestartFails {
+            request_json(addr, method, path, body);
+        }
+        tokio::time::timeout(Duration::from_secs(15), async {
+            loop {
+                let (status, entries) = try_request_json(addr, "GET", "/v1/entries", "");
+                if status == 200 {
+                    assert_eq!(entry_hash(entries), hash);
+                    break;
+                }
+                assert_eq!(status, 503, "{entries}");
+                tokio::time::sleep(Duration::from_millis(25)).await;
+            }
+        })
+        .await
+        .expect("entry restored");
+        assert!(
+            get_json(addr, "/v1/status")["privateGuard"]["port"]
+                .as_u64()
+                .unwrap()
+                > 0
+        );
+    } else {
+        for (method, path, body) in [restart, restart, settings] {
+            let reply = request_json(addr, method, path, body);
+            assert!(reply.get("warning").is_none(), "{reply}");
+            assert_eq!(reply["restartNeeded"], json!([]));
+            assert_eq!(entry_hash(get_json(addr, "/v1/entries")), hash);
+        }
+        let settings = get_json(addr, "/v1/settings");
+        assert_eq!(settings["settings"]["hiverelayReplicas"]["value"], 4);
+        assert_eq!(settings["restartNeeded"], json!([]));
+    }
+    child.kill().await.unwrap();
+    bootstrap.destroy().await.unwrap();
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn http_reopens_keep_the_imported_entry() {
+    check_http_reopen(ReopenCase::Healthy).await;
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn failed_http_reopen_on_restart() {
+    check_http_reopen(ReopenCase::RestartFails).await;
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn busy_port_http_reopen_can_be_corrected_through_settings() {
+    check_http_reopen(ReopenCase::BusyPort).await;
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn failed_http_reopen_recovers_without_another_restart() {
+    check_http_reopen(ReopenCase::Recovers).await;
+}
+
 /// The relay's library from its API: an album folder in the import folder is listed as tracks
 /// that carry their own names, the owner removes them and only the files a mirror put there go
 /// with them, and the Soulseek provider follows its live settings.

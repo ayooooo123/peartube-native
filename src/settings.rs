@@ -548,8 +548,8 @@ impl Settings {
         Value::Object(out)
     }
 
-    /// Applies a patch to settings.json and returns the changed keys with the new view.
-    pub fn update(&mut self, patch: &Value) -> Result<Value, SettingsError> {
+    /// Saves the patch before the relay applies the changed keys and reads the resulting view.
+    pub(crate) fn save_patch(&mut self, patch: &Value) -> Result<Vec<String>, SettingsError> {
         let Value::Object(patch) = patch else {
             return Err(SettingsError::new(400, "settings: body must be an object"));
         };
@@ -598,6 +598,12 @@ impl Settings {
             self.write(&next)?;
             self.saved = next;
         }
+        Ok(changed)
+    }
+
+    /// Applies a patch to settings.json and returns the changed keys with the new view.
+    pub fn update(&mut self, patch: &Value) -> Result<Value, SettingsError> {
+        let changed = self.save_patch(patch)?;
         let mut out = Map::new();
         out.insert(
             "changed".to_owned(),
