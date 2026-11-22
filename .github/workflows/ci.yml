@@ -12,8 +12,8 @@ concurrency:
 # The app commit in JS_REF is the reference for every fixture and every ignored interop test.
 env:
   PEARTUBE_APP: ${{ github.workspace }}/peartube
-  # Keep file and line information in failures without linking full debug data into every test.
-  CARGO_PROFILE_DEV_DEBUG: line-tables-only
+  # Tests keep debug assertions and overflow checks. CI does not use a debugger.
+  CARGO_PROFILE_DEV_DEBUG: "0"
 
 jobs:
   changes:
