@@ -67,7 +67,7 @@ jobs:
       # and macOS runners deliver no LAN multicast, so every test that discovers a peer over mDNS fails there.
       matrix:
         os: [ubuntu-latest, macos-latest]
-        check: [clippy, test]
+        check: ${{ fromJSON(needs.changes.outputs.scope == 'full' && '["clippy","test","transfers"]' || '["clippy","test"]') }}
         include:
           - os: ubuntu-latest
             skip: --skip mdns_interop_with_bonjour_service
@@ -194,7 +194,9 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: peartube-native
-          key: ${{ matrix.check }}-${{ hashFiles('peartube-native/Cargo.lock', 'peartube-native/STACK.lock') }}
+          # The transfer tests can read the full test cache, but must not save a partial one.
+          key: ${{ matrix.check == 'clippy' && 'clippy' || 'test' }}-${{ hashFiles('peartube-native/Cargo.lock', 'peartube-native/STACK.lock') }}
+          save-if: ${{ matrix.check != 'transfers' }}
           cache-bin: false
       - run: cargo fmt --check -p peartube-native -p peartube-native-ffi
         if: matrix.check == 'clippy'
@@ -212,7 +214,7 @@ jobs:
           from functools import cache
           from pathlib import Path
 
-          scope = os.environ["SCOPE"] if os.environ["CHECK"] == "test" else "none"
+          scope = {"test": os.environ["SCOPE"], "transfers": "transfers", "clippy": "none"}[os.environ["CHECK"]]
           if os.environ["CHECK"] == "clippy" and os.environ["SCOPE"] == "targets":
               # Clippy checks all targets. Read rustc's input lists, not a map of source files.
               # If a different target includes a changed file, run the full suite on this runner.
@@ -264,13 +266,24 @@ jobs:
         if: steps.suite.outputs.scope != 'none'
         shell: bash
         env:
+          CHECK: ${{ matrix.check }}
           SCOPE: ${{ steps.suite.outputs.scope }}
           TARGETS: ${{ needs.changes.outputs.targets }}
         run: |
           args=(--workspace)
+          transfers=(blobs network_mixed_c)
           if [[ "$SCOPE" == targets ]]; then
             args=(-p peartube-native)
             for target in $TARGETS; do args+=(--test "$target"); done
+          elif [[ "$SCOPE" == transfers ]]; then
+            args=(-p peartube-native)
+            for target in "${transfers[@]}"; do args+=(--test "$target"); done
+          elif [[ "$CHECK" == test ]]; then
+            # Every other binary, including any future binary, stays in the main job.
+            selectors=()
+            for target in "${transfers[@]}"; do selectors+=("binary_id(=peartube-native::$target)"); done
+            excluded=$(IFS='|'; echo "${selectors[*]}")
+            args+=(-E "not($excluded)")
           fi
           cargo nextest run --profile ci "${args[@]}" --run-ignored all --no-fail-fast -- ${{ matrix.skip }}
       # nextest does not run doctests. Keep both crates' doctests even if a Rust test failed.
