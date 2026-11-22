@@ -2,8 +2,8 @@
 
 Rust backend for PearTube, replacing the app's Bare worklet. It ports the worker,
 node, discovery, media and protocol logic onto the sibling Rust Hypercore stack.
-The JavaScript app is the reference; parity is covered by fixtures and mixed-node
-tests, not a claim that every runtime behavior is identical.
+The JavaScript app is the reference. Fixtures and mixed-node tests compare the two
+implementations; they do not prove that every runtime behavior is identical.
 
 ## Hosts
 
