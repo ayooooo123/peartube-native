@@ -19,7 +19,7 @@ If a match is correct code, put a comment on the line before it: `// ast-grep-ig
 
 ### duration-from-float
 
-- **The one way:** convert a computed float to a `Duration` with `Duration::try_from_secs_f64` (or `try_from_secs_f32`). Decide in the code what an invalid value means, for example no wait or `Duration::MAX`.
+- **The one way:** convert a computed float to a `Duration` with `Duration::try_from_secs_f64` (or `try_from_secs_f32`), and handle the error on purpose. Better, where the code reads the setting, reject a value that is not finite, is negative, or makes a wait too long. Add a computed `Duration` to an `Instant` with `checked_add`: `Instant + Duration` panics on overflow, so `Duration::MAX` is not a safe fallback.
 - **Why:** `Duration::from_secs_f64`, `from_secs_f32`, `mul_f64`, `mul_f32`, `div_f64` and `div_f32` panic on a negative value, on NaN and on a value that is too large. A rate of 0 gives an infinite value.
 - **Fault:** a benchmark reader paced its reads with `Duration::from_secs_f64(count as f64 / rate)`. With a rate of 0, the reader panicked and exited with status 101. That work had no pull request. The same call is in `pace()` in `src/replicate.rs`: by the code, a very small positive `replicateMbps` (for example 1e-20) makes the wait too large, and the call panics.
 - **Check:** ast-grep rule `duration-from-float`.
@@ -77,7 +77,7 @@ If a match is correct code, put a comment on the line before it: `// ast-grep-ig
 
 ### Locks
 
-- **The one way:** use `std::sync::Mutex` for short sections with no `.await` while the guard lives. Use `tokio::sync::Mutex` only where a guard must live across an `.await` (the open lock and the settings), and never hold it across a wait on a peer or the network. Two forms of `std` locking exist: `.lock().unwrap()` (about 190 calls) and the helper `lock()` in `src/node/core.rs`, which keeps working after a panic poisoned the lock (about 180 calls). No fault has come from either form. In `src/node/`, use the helper; elsewhere, use the form of the file that you change.
+- **The one way:** use `std::sync::Mutex` for short sections with no `.await` while the guard lives. Use `tokio::sync::Mutex` only where a guard must live across an `.await` (the open lock and the settings), and never hold it across a wait on a peer or the network.
 - **Why:** a guard held across a wait on a peer blocks every other user of the lock for as long as the peer does not answer.
 - **Fault:** [pull request 22](https://github.com/ayooooo123/peartube-native/pull/22). The identity lock is held across `self.channel.append(...).await`, which can wait for a peer. That is the probable cause of the 58-minute test hang; nobody proved it.
 - **Check:** Clippy's `await_holding_lock` (a warning by default; CI makes it an error) checks `std` guards across `.await`. A reviewer judges `tokio` guards, because a pattern cannot tell a wait on a peer from a short wait.
@@ -112,10 +112,10 @@ If a match is correct code, put a comment on the line before it: `// ast-grep-ig
 
 ### Test changes
 
-- **The one way:** a pull request that removes a test, removes or changes an assertion, adds `#[ignore]` or a skip, makes a time limit in a test longer, or changes how tests run (CI test commands, `[profile.*]`, `[dev-dependencies]`) says so in a line `Test-change: <reason>` in the pull request text or in a commit message. A reviewer judges the reason.
+- **The one way:** do not weaken a test to make it pass. Do not remove a test or an assertion, loosen an assertion, add `#[ignore]` or a skip, make a time limit in a test longer, or change how tests run (CI test commands, `[profile.*]`, `[dev-dependencies]`). If a test is wrong, change it and give the reason in the pull request text. The guard still fails, and a person decides at merge time.
 - **Why:** a weaker test passes on broken code, and nobody sees the change unless a person reads every test diff.
 - **Fault:** [pull request 11](https://github.com/ayooooo123/peartube-native/pull/11) removed a unit test of `src/node/storage.rs` that also checked that disk mode survives. [Pull request 31](https://github.com/ayooooo123/peartube-native/pull/31) added its new test with `#[ignore]`, so a plain `cargo test` skips it (CI runs it with `--include-ignored`).
-- **Check:** `scripts/ci/test_guard.py`.
+- **Check:** `scripts/ci/test_guard.py` fails the pull request. It cannot tell a correct change from a weakening, so it fails on every removed or changed assertion. A change of spaces, line breaks or a last comma in an assertion does not count, and a new or shorter time limit does not fail.
 
 ### Test build and shipped build
 
@@ -126,7 +126,7 @@ If a match is correct code, put a comment on the line before it: `// ast-grep-ig
 
 ### Module boundaries
 
-- **The one way:** `relay`, `app` and `backend` put the parts together and may use any module. `protocol`, `ipc`, `traffic`, `control_channel`, `ssrf`, `tags` and `mnemonic` are leaves: they use only `protocol` or `ipc`. Do not add a new use from `node` to a module that uses `node`.
+- **The one way:** `relay`, `app` and `backend` put the parts together and may use any module. `traffic` and `control_channel` use no other module of the crate, and `ssrf`, `tags` and `mnemonic` use only `protocol`. Keep them so. Do not add a use that closes a cycle, for example from `node` to a module that uses `node`.
 - **Why:** a cycle between modules makes a change in one module break the other, and an agent must read both to change either.
-- **Fault:** none yet. Now `node` uses types from `acquire`, `search`, `mirror`, `backend` and `cast`, and those modules use `node`.
-- **Check:** none. A rule would write the current cycles into CI. Move the shared types into `node` first; then a rule can check the boundary.
+- **Fault:** none yet. Two cycles exist now. `node` uses types from `acquire`, `search`, `mirror`, `backend` and `cast`, and those modules use `node`. `protocol` uses `ipc::well_formed`, `ipc` uses `app_settings::js_truthy`, and `app_settings` uses `protocol`.
+- **Check:** none. A rule would write the current cycles into CI. First move the shared types into `node`, and move `js_truthy` out of `app_settings` into a module that uses no other module of the crate. Then a rule can check the boundary.

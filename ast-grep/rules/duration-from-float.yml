@@ -3,8 +3,9 @@ language: rust
 severity: error
 message: This float to Duration conversion panics on a negative, NaN or too large value.
 note: |
-  Use Duration::try_from_secs_f64(x) (or try_from_secs_f32) instead of this call.
-  Those functions return an error for a negative, NaN or too large value. Decide in code what such a value means, for example no wait or Duration::MAX.
+  Use Duration::try_from_secs_f64(x) (or try_from_secs_f32) instead of this call, and handle its error on purpose.
+  Better, where the code reads the setting, reject a value that is not finite, is negative, or makes a wait too long.
+  Do not add a fallback such as Duration::MAX to an Instant: Instant + Duration panics on overflow. Use Instant::checked_add.
   For mul and div methods, pass the new length in seconds, for example d.as_secs_f64() * x, to try_from_secs_f64 or try_from_secs_f32.
   See docs/code-rules.md#duration-from-float.
 rule:
