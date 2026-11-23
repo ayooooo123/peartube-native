@@ -115,7 +115,7 @@ If a match is correct code, put a comment on the line before it: `// ast-grep-ig
 - **The one way:** do not weaken a test to make it pass. Do not remove a test or an assertion, loosen an assertion, add `#[ignore]` or a skip, make a time limit in a test longer, or change how tests run (CI test commands, `[profile.*]`, `[dev-dependencies]`). If a test is wrong, change it and give the reason in the pull request text. The guard still fails, and a person decides at merge time.
 - **Why:** a weaker test passes on broken code, and nobody sees the change unless a person reads every test diff.
 - **Fault:** [pull request 11](https://github.com/ayooooo123/peartube-native/pull/11) removed a unit test of `src/node/storage.rs` that also checked that disk mode survives. [Pull request 31](https://github.com/ayooooo123/peartube-native/pull/31) added its new test with `#[ignore]`, so a plain `cargo test` skips it (CI runs it with `--include-ignored`).
-- **Check:** `scripts/ci/test_guard.py` fails the pull request. It cannot tell a correct change from a weakening, so it fails on every removed or changed assertion. A change of spaces, line breaks or a last comma in an assertion does not count, and a new or shorter time limit does not fail.
+- **Check:** `scripts/ci/test_guard.py` fails the pull request. It cannot tell a correct change from a weakening, so it fails on every removed or changed assertion. A change of spaces, line breaks or a last comma in an assertion does not count, a test or an assertion that moves to another file does not count as removed, and a new or shorter time limit does not fail.
 
 ### Test build and shipped build
 
