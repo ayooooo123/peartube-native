@@ -16,6 +16,8 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{Arc, LazyLock, Mutex, MutexGuard, Weak};
 use std::time::{Duration, Instant};
 
+use tokio::sync::Notify;
+
 use futures_util::future::BoxFuture;
 use serde_json::{Map, Value, json};
 use tokio::sync::OnceCell;
@@ -52,8 +54,9 @@ const ASK_CONNECTED: usize = 16;
 /// Relays from the topic that one search asks, and of those at most this many per /24.
 const ASK_TOPIC: usize = 4;
 const PER_BUCKET: usize = 2;
-/// A search returns what arrived by then; later answers come with the next call.
-const COLLECT: Duration = Duration::from_millis(1200);
+/// A search returns as soon as every ask answered, and no later than this; later answers
+/// come with the next call.
+const COLLECT: Duration = Duration::from_millis(2000);
 const ASK_TIMEOUT: Duration = Duration::from_secs(3);
 /// After the last search the lookup ends and search-only connections close.
 const IDLE: Duration = Duration::from_secs(60);
@@ -69,6 +72,23 @@ const PER_NODE: usize = 20;
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(|error| error.into_inner())
+}
+
+/// Waits until every ask answered or failed, and never past `COLLECT`.
+async fn wait_for_asks(run: &Arc<Mutex<Run>>) {
+    let _ = tokio::time::timeout(COLLECT, async {
+        loop {
+            let wake = {
+                let r = lock(run);
+                if r.pending == 0 {
+                    return;
+                }
+                r.wake.clone().notified_owned()
+            };
+            wake.await;
+        }
+    })
+    .await;
 }
 
 /// What the node gives global search.
@@ -186,6 +206,8 @@ struct Run {
     topic_asked: usize,
     returned: bool,
     at: std::time::Instant,
+    pending: usize,
+    wake: Arc<Notify>,
 }
 
 #[derive(Default)]
@@ -357,6 +379,8 @@ impl GlobalSearch {
                     topic_asked: 0,
                     returned: false,
                     at: std::time::Instant::now(),
+                    pending: 0,
+                    wake: Arc::new(Notify::new()),
                 }))
             });
             state.runs.push((run_key, run.clone()));
@@ -403,7 +427,7 @@ impl GlobalSearch {
             }
         }
         if !lock(&run).returned {
-            tokio::time::sleep(COLLECT).await;
+            wait_for_asks(&run).await;
         }
         let mut run = lock(&run);
         run.returned = true;
@@ -665,9 +689,11 @@ impl Inner {
         let mux = conn.mux().clone();
         let control = cell
             .get_or_init(|| async move {
-                open_channel(&mux, &SEARCH, handlers, ASK_TIMEOUT)
-                    .await
-                    .ok()
+                let opened = open_channel(&mux, &SEARCH, handlers, ASK_TIMEOUT).await;
+                if let Err(error) = &opened {
+                    eprintln!("search: opening a channel failed: {error}");
+                }
+                opened.ok()
             })
             .await
             .clone();
@@ -688,7 +714,13 @@ impl Inner {
         let Some(inner) = self.weak.upgrade() else {
             return;
         };
-        tokio::spawn(async move { inner.ask(run, conn, from_topic).await });
+        lock(&run).pending += 1;
+        tokio::spawn(async move {
+            inner.ask(run.clone(), conn, from_topic).await;
+            let mut r = lock(&run);
+            r.pending = r.pending.saturating_sub(1);
+            r.wake.notify_one();
+        });
     }
 
     async fn ask(&self, run: Arc<Mutex<Run>>, conn: ConnectionHandle, from_topic: bool) {
@@ -731,8 +763,12 @@ impl Inner {
         payload.insert("q".to_owned(), json!(q));
         payload.insert("mid".to_owned(), mid.map_or(Value::Null, Value::String));
         payload.insert("limit".to_owned(), json!(MAX_HITS));
-        let Ok(result) = control.call("search", payload, ASK_TIMEOUT).await else {
-            return;
+        let result = match control.call("search", payload, ASK_TIMEOUT).await {
+            Ok(result) => result,
+            Err(error) => {
+                eprintln!("search: asking a relay failed: {error}");
+                return;
+            }
         };
         let hits = result
             .get("hits")
@@ -808,5 +844,65 @@ impl Inner {
                 conn.close();
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run_with(pending: usize) -> Arc<Mutex<Run>> {
+        Arc::new(Mutex::new(Run {
+            q: String::new(),
+            mid: None,
+            rows: Vec::new(),
+            asked: HashSet::new(),
+            buckets: HashMap::new(),
+            topic_asked: 0,
+            returned: false,
+            at: std::time::Instant::now(),
+            pending,
+            wake: Arc::new(Notify::new()),
+        }))
+    }
+
+    /// No ask in flight means no wait at all; a flat sleep would always spend the window.
+    #[tokio::test]
+    async fn a_fast_answer_ends_the_wait_before_the_window() {
+        let run = run_with(0);
+        let started = std::time::Instant::now();
+        wait_for_asks(&run).await;
+        assert!(
+            started.elapsed() < Duration::from_millis(200),
+            "the wait was {:?}",
+            started.elapsed()
+        );
+    }
+
+    /// A slow ask is waited for, but never past the window.
+    #[tokio::test]
+    async fn a_slow_ask_is_capped_by_the_window() {
+        let run = run_with(1);
+        let worker = run.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            let mut r = lock(&worker);
+            r.pending = 0;
+            r.wake.notify_one();
+        });
+        let started = std::time::Instant::now();
+        wait_for_asks(&run).await;
+        let elapsed = started.elapsed();
+        assert!(elapsed >= Duration::from_millis(90), "{elapsed:?}");
+        assert!(elapsed < Duration::from_millis(1500), "{elapsed:?}");
+    }
+
+    /// The window outlasts a relay that answers after the app's old 1.2 s first call.
+    #[test]
+    fn the_window_outlasts_a_slow_relay() {
+        assert!(
+            COLLECT >= Duration::from_millis(1500),
+            "the collect window is {COLLECT:?}"
+        );
     }
 }
