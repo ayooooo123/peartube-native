@@ -80,7 +80,7 @@ async fn wait_for_asks(run: &Arc<Mutex<Run>>) {
         loop {
             let wake = {
                 let r = lock(run);
-                if r.pending == 0 && !r.asked.is_empty() {
+                if r.pending == 0 && r.answered > 0 {
                     return;
                 }
                 r.wake.clone().notified_owned()
@@ -204,6 +204,8 @@ struct Run {
     asked: HashSet<String>,
     buckets: HashMap<String, usize>,
     topic_asked: usize,
+    /// Asks that reached a peer and got an answer, even zero rows.
+    answered: usize,
     returned: bool,
     at: std::time::Instant,
     pending: usize,
@@ -377,6 +379,7 @@ impl GlobalSearch {
                     asked: HashSet::new(),
                     buckets: HashMap::new(),
                     topic_asked: 0,
+                    answered: 0,
                     returned: false,
                     at: std::time::Instant::now(),
                     pending: 0,
@@ -430,7 +433,9 @@ impl GlobalSearch {
             wait_for_asks(&run).await;
         }
         let mut run = lock(&run);
-        run.returned = true;
+        if run.answered > 0 {
+            run.returned = true;
+        }
         let limit = if limit == 0 {
             MAX_HITS
         } else {
@@ -719,7 +724,7 @@ impl Inner {
             inner.ask(run.clone(), conn, from_topic).await;
             let mut r = lock(&run);
             r.pending = r.pending.saturating_sub(1);
-            r.wake.notify_one();
+            r.wake.notify_waiters();
         });
     }
 
@@ -759,6 +764,7 @@ impl Inner {
         let Some(control) = self.control(&conn).await else {
             return;
         };
+        lock(&run).answered += 1;
         let mut payload = Map::new();
         payload.insert("q".to_owned(), json!(q));
         payload.insert("mid".to_owned(), mid.map_or(Value::Null, Value::String));
@@ -863,6 +869,7 @@ mod tests {
             asked: peers,
             buckets: HashMap::new(),
             topic_asked: 0,
+            answered: if asked { 1 } else { 0 },
             returned: false,
             at: std::time::Instant::now(),
             pending,
@@ -892,7 +899,8 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(100)).await;
             let mut r = lock(&worker);
             r.pending = 0;
-            r.wake.notify_one();
+            r.answered += 1;
+            r.wake.notify_waiters();
         });
         let started = std::time::Instant::now();
         wait_for_asks(&run).await;
@@ -910,6 +918,20 @@ mod tests {
         assert!(
             started.elapsed() >= Duration::from_millis(1900),
             "a cold search returned after {:?}",
+            started.elapsed()
+        );
+    }
+
+    /// A peer that fails before it answers must not end the wait; only an answer may.
+    #[tokio::test]
+    async fn a_failing_peer_does_not_end_the_wait() {
+        let run = run_with(0, true);
+        lock(&run).answered = 0;
+        let started = std::time::Instant::now();
+        wait_for_asks(&run).await;
+        assert!(
+            started.elapsed() >= Duration::from_millis(1900),
+            "a failing peer ended the wait after {:?}",
             started.elapsed()
         );
     }
