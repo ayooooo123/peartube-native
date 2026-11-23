@@ -84,7 +84,7 @@ If a match is correct code, put a comment on the line before it: `// ast-grep-ig
 
 ### Byte budgets
 
-- **The one way:** the cast window budget (`reserve_window` in `src/cast/media.rs`) plans in whole blocks, reserves exactly the bytes of the blocks that it plans, and never downloads more bytes than it holds. A test of a budget asserts the permits that each window holds, so that it fails when one window takes too much.
+- **The one way:** the budget of the cast window (`reserve_window` in `src/cast/media.rs`) plans in whole blocks, reserves exactly the bytes of the blocks that it plans, and never downloads more bytes than it holds. A test of a budget asserts the permits that each window holds, so that it fails when one window takes too much.
 - **Why:** the budget bounds memory on small devices. A plan that rounds, estimates or reads the budget twice downloads more than it reserved.
 - **Fault:** [pull request 10](https://github.com/ayooooo123/peartube-native/pull/10) (open). Four revisions failed their checks: a reservation of the unclipped byte count; 79 blocks for a budget of 75 after a backward seek; a plan from the mean block size that downloaded 20,447,232 bytes against a pool of 20,132,658 bytes; and a window without the reader's own block. A test summed the permits of all windows, so it could not fail when one window took too much. On main, the steering reserves 75 blocks and then 1 block, because it reserves the new window before it drops the old one.
 - **Check:** a reviewer judges this. These faults are arithmetic, and a pattern cannot tell a correct plan from a wrong one.
