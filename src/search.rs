@@ -80,7 +80,7 @@ async fn wait_for_asks(run: &Arc<Mutex<Run>>) {
         loop {
             let wake = {
                 let r = lock(run);
-                if r.pending == 0 {
+                if r.pending == 0 && !r.asked.is_empty() {
                     return;
                 }
                 r.wake.clone().notified_owned()
@@ -851,12 +851,16 @@ impl Inner {
 mod tests {
     use super::*;
 
-    fn run_with(pending: usize) -> Arc<Mutex<Run>> {
+    fn run_with(pending: usize, asked: bool) -> Arc<Mutex<Run>> {
+        let mut peers = HashSet::new();
+        if asked {
+            peers.insert("peer".to_owned());
+        }
         Arc::new(Mutex::new(Run {
             q: String::new(),
             mid: None,
             rows: Vec::new(),
-            asked: HashSet::new(),
+            asked: peers,
             buckets: HashMap::new(),
             topic_asked: 0,
             returned: false,
@@ -869,7 +873,7 @@ mod tests {
     /// No ask in flight means no wait at all; a flat sleep would always spend the window.
     #[tokio::test]
     async fn a_fast_answer_ends_the_wait_before_the_window() {
-        let run = run_with(0);
+        let run = run_with(0, true);
         let started = std::time::Instant::now();
         wait_for_asks(&run).await;
         assert!(
@@ -882,7 +886,7 @@ mod tests {
     /// A slow ask is waited for, but never past the window.
     #[tokio::test]
     async fn a_slow_ask_is_capped_by_the_window() {
-        let run = run_with(1);
+        let run = run_with(1, true);
         let worker = run.clone();
         tokio::spawn(async move {
             tokio::time::sleep(Duration::from_millis(100)).await;
@@ -895,6 +899,19 @@ mod tests {
         let elapsed = started.elapsed();
         assert!(elapsed >= Duration::from_millis(90), "{elapsed:?}");
         assert!(elapsed < Duration::from_millis(1500), "{elapsed:?}");
+    }
+
+    /// A cold search has no peer to ask yet; it must not return before the topic join brings one.
+    #[tokio::test]
+    async fn a_cold_search_waits_for_the_first_connection() {
+        let run = run_with(0, false);
+        let started = std::time::Instant::now();
+        wait_for_asks(&run).await;
+        assert!(
+            started.elapsed() >= Duration::from_millis(1900),
+            "a cold search returned after {:?}",
+            started.elapsed()
+        );
     }
 
     /// The window outlasts a relay that answers after the app's old 1.2 s first call.
