@@ -1,11 +1,14 @@
-// Generates soulseek-reference.json from the app's own src/providers/soulseek.js: where `placeSingleTrack` puts a
-// lone track (which also exercises the module's private folder and file naming), the order
-// `normalizeSoulseekCandidates` ranks search hits in, and `normalizeSoulseekBrowse`.
+// Generates soulseek-reference.json from the app's own src/providers/soulseek.js and src/providers/staging.js:
+// where `placeSingleTrack` puts a lone track, the order `normalizeSoulseekCandidates` ranks search hits in,
+// `normalizeSoulseekBrowse`, and what every source provider shares about the import folder (the names of the two
+// dot files, which release ids a pin may hold, and how a folder or file name is cut to fit).
 import { writeFileSync } from 'node:fs'
 import { load, outFile } from './app.mjs'
 
 const soulseek = await load('src/providers/soulseek.js')
+const staging = await load('src/providers/staging.js')
 const { placeSingleTrack, normalizeSoulseekCandidates, normalizeSoulseekBrowse } = soulseek
+const { RELEASE_ID, safeSegment, clipBytes, formatAlbumDir } = staging
 
 // A Rust string cannot hold a lone surrogate; a name cut inside a pair reads the same once it is written to disk
 // (the file system call replaces it) or passes `toWellFormed`, so the reference is taken after it.
@@ -164,20 +167,60 @@ const browse = [
 ].map(({ records, username }) => ({ records, username, expected: normalizeSoulseekBrowse(records, username) }))
 
 const releaseIds = [`mb:${MB}`, `mb:${MB.toUpperCase()}`, `mb:${MB}0`, `mb:${MB.slice(1)}`, 'discogs:r1', 'discogs:r123456789012', 'discogs:r1234567890123', 'discogs:r', 'discogs:42',
-  'album:0123456789abcdef0123', 'album:0123456789abcdef012', 'album:0123456789ABCDEF0123', `mb:${MB}:s01e02`, ` mb:${MB}`, `mb:${MB}\n`, 'imdb:tt0111161', ''].map(input => ({ input, expected: soulseek.RELEASE_ID.test(input) }))
+  'album:0123456789abcdef0123', 'album:0123456789abcdef012', 'album:0123456789ABCDEF0123', `mb:${MB}:s01e02`, ` mb:${MB}`, `mb:${MB}\n`, 'imdb:tt0111161', '',
+  'yt:0123456789abcdef0123', 'yt:0123456789abcdef012', 'yt:0123456789abcdef01234', 'yt:0123456789ABCDEF0123', 'yt:', 'YT:0123456789abcdef0123'].map(input => ({ input, expected: RELEASE_ID.test(input) }))
+
+// A name is cut to 140 UTF-16 units and then to 180 UTF-8 bytes, between characters. Only text outside ASCII can
+// reach the second limit: 60 three-byte characters are 180 bytes, 61 are not.
+const kana = '\u30a2'
+const cyr = '\u0416'
+const face = '\ud83d\ude00'
+const segmentInputs = [
+  'plain name',
+  kana.repeat(60), kana.repeat(61), kana.repeat(140), kana.repeat(200),
+  cyr.repeat(90), cyr.repeat(91), cyr.repeat(140),
+  // One, two and three bytes over, where the next character would not fit.
+  'a' + kana.repeat(60), 'ab' + kana.repeat(60), 'abc' + kana.repeat(60), 'a' + cyr.repeat(90),
+  face.repeat(45), face.repeat(46), face.repeat(70), 'a' + face.repeat(70),
+  // The 140-unit cut falls inside a pair, and the half that is left still counts toward the bytes.
+  'a'.repeat(139) + face, 'a'.repeat(139) + kana, 'a'.repeat(140) + kana,
+  // What is trimmed after the cut: dots and spaces at the end.
+  kana.repeat(59) + ' . ' + kana, kana.repeat(59) + '...', '  .@' + kana.repeat(61), kana.repeat(30) + '/' + kana.repeat(40),
+  '', '...', null
+]
+const segments = segmentInputs.map(input => ({ input, expected: wellFormed(safeSegment(input, 'fallback')) }))
+const clipped = [[kana.repeat(4), 0], [kana.repeat(4), 2], [kana.repeat(4), 3], [kana.repeat(4), 11], [kana.repeat(4), 12], ['a' + cyr + kana + face, 1], ['a' + cyr + kana + face, 2],
+  ['a' + cyr + kana + face, 3], ['a' + cyr + kana + face, 5], ['a' + cyr + kana + face, 6], ['a' + cyr + kana + face, 9], ['a' + cyr + kana + face, 10], ['', 5]
+].map(([input, max]) => ({ input, max, expected: clipBytes(input, max) }))
+const albumDirs = [
+  { artist: kana.repeat(40), album: kana.repeat(40), year: 1978 },
+  { artist: 'Artist', album: 'Album', year: 2001 },
+  { artist: 'Artist', album: 'Album', year: null },
+  { artist: '', album: kana.repeat(70), year: 1999 },
+  { artist: '', album: '', year: null, fallbackTitle: kana.repeat(30) + ' \u00b7 ' + kana.repeat(40) },
+  { artist: '', album: '', year: null, fallbackTitle: '' }
+].map(input => ({ input, expected: formatAlbumDir(input) }))
 
 const reference = {
   constants: {
     SOULSEEK_SEARCH_CAP: soulseek.SOULSEEK_SEARCH_CAP,
     DEFAULT_LISTEN_PORT: soulseek.DEFAULT_LISTEN_PORT,
     DEFAULT_SHARE_MAX_FILES: soulseek.DEFAULT_SHARE_MAX_FILES,
-    ALBUM_PIN: soulseek.ALBUM_PIN,
-    MIRRORED_LIST: soulseek.MIRRORED_LIST
+    ALBUM_PIN: staging.ALBUM_PIN,
+    MIRRORED_LIST: staging.MIRRORED_LIST
   },
   releaseIds,
+  segments,
+  clipped,
+  albumDirs,
   placed,
   candidates,
   browse
+}
+// JSON drops a property that is undefined without a word: a name the app moved to another file would thin this
+// reference out and the comparison with it.
+for (const [name, value] of Object.entries(reference.constants)) {
+  if (value === undefined) throw new Error(`the app no longer exports ${name} where this generator reads it`)
 }
 writeFileSync(outFile('soulseek-reference.json'), JSON.stringify(reference, null, 2) + '\n')
 console.log(`wrote ${outFile('soulseek-reference.json')}`)

@@ -21,7 +21,7 @@ relay UI, the API and video (`/v1/blob`; the node's blob server stays on loopbac
 (the `channel` setting) is the channel it serves; a pre-channel `settings.json` has its `tracker`
 moved to `channel` and its `streamHost`/`streamPort` dropped at start. HTTPS runs on
 `PEARTUBE_HTTPS_PORT` when `tls.crt`/`tls.key` exist. The acquirer comes with the
-`http-acquire`, `channel-backfill`, `blob-rechunk`, `watch-dir`, `feed-mirror`, `soulseek`,
+`http-acquire`, `channel-backfill`, `blob-rechunk`, `watch-dir`, `feed-mirror`, `soulseek`, `youtube`,
 `p2p-replicate` and `hiverelay-seed` plugins. `watch-dir` sweeps the import folder
 (`PEARTUBE_WATCH_DIR`) and `<storage>/staging`: a media file is announced once, and a folder
 of music files becomes one album, each track announced as `<release>:sNNeMM` with its own
@@ -29,9 +29,36 @@ name in `music`. `soulseek` is the app's Soulseek provider (the `slsk*` settings
 `/v1/providers/soulseek/search`, `browse` and `mirror` find albums on Soulseek peers and
 download them into the folder `watch-dir` sweeps, and `/v1/jobs` lists those mirrors with
 the acquirer's jobs. Where the app loads the `peartube-soulseek-bare` addon, the relay links
-the crate that addon wraps, `peartube-soulseek`. `p2p-replicate` and `hiverelay-seed`
-share one `traffic` gate (`peartube/bulk-busy`, `hiverelayUploadMbps`). `hiverelay-seed`
-recruits existing HiveRelays for this relay's own cores: `POST /seed-core` on the
+the crate that addon wraps, `peartube-soulseek`.
+
+The owner can search Soulseek and YouTube together with `POST /v1/search/sources`.
+The JSON reply groups rows in the requested source order and keeps each source's ranking.
+With `stream: true`, each source sends an event as it finishes. The last event gives counts
+and errors without sending the rows again. A source that times out does not hide other results.
+The relay serves result pictures at `/v1/providers/youtube/thumb/<id>`; the browser does
+not contact the picture host. The `youtube` plugin uses `ubit` to search and to download
+audio. Both providers wait for a running import before placing any files. Cancelling a
+waiting save leaves the folder unchanged. The owner can see the outcome in `/v1/jobs`.
+
+An open, a restart, a settings change and the reopen of a recovery run one at a time. The
+plugins start after the node answers, on their own task, so a folder import does not hold the
+lifecycle lock. A restart or a stop closes the plugin host before the node. As app PR #581
+requires, the host marks itself closed and starts every built-in plugin's stop before it
+awaits any, so a save that waits for the import folder ends as a cancel instead of waiting
+out its limit. A startup import ends between files, as the app's does: a restart waits for the
+file in flight, and the next startup imports the rest. The startup backfill runs even when
+the host closed before it, as the app's does; the work after it checks the closed host. A
+guard step asked for after a shutdown signal refuses at once, and startup logs that refusal
+like any other; a step admitted before the signal can still run when its turn comes.
+
+`p2p-replicate` and `hiverelay-seed` share one `traffic` gate
+(`peartube/bulk-busy`, `hiverelayUploadMbps`). The replica counts the blocks on disk
+one core at a time. It opens the current core again for the download, including after
+it prunes the cache. Connected peers get the first chance to serve the file. If no
+block arrives for five seconds, the replica looks for peers on the core's topic until
+that download ends. It does not announce the file to find peers.
+
+`hiverelay-seed` recruits existing HiveRelays for this relay's own cores: `POST /seed-core` on the
 `hiverelays` list (`=TOKEN` per relay, `hiverelayApiKey` as its default), and the
 zero-key `hiverelay-discovery-v1` DHT (`hiverelayDiscover`, `PEARTUBE_HIVERELAY=1`)
 with a wire-exact 2-core Hyperdrive v11/v13 beacon and signed
@@ -41,7 +68,9 @@ The `privateGuard` setting runs the guard forwarder in-process on its own HyperD
 (JS spawns `bin/private-relay.js`); `PEARTUBE_PRIVATE_RELAY` (or
 `PEARTUBE_PRIVATE_RELAY_PORT`) makes the same binary the standalone Corestore-free guard
 of `bin/private-relay.js`: no storage folder, no Corestore, and channel or content flags
-are refused. The cast stack (the app's `createCastController`) opens with the node and
+are refused. A guard whose fixed port another socket holds does not start at startup: the
+relay logs `private guard failed to start` and runs without it.
+The cast stack (the app's `createCastController`) opens with the node and
 answers `/v1/cast/*` from it, closing with a stop or reopen. `status.lan` reports
 `{host, port}`, as JS does. Not yet ported: JS plugins from `<storage>/plugins`.
 The UI and web player come from `PEARTUBE_WEB_DIR` (default: `web/` beside the binary).
@@ -58,6 +87,7 @@ Paths on the right are in the PearTube app unless otherwise stated.
 | `http` | `src/http.js`: loopback API, media and event endpoints |
 | `acquire`, `mirror`, `mirror::watch` | `src/acquire.js`, `src/mirror.js`: acquisition jobs, mirror plugins, and the import folder (`watch-dir`: one announce for each media file, one album for each folder of music files) |
 | `providers::soulseek` | `src/providers/soulseek.js`: the Soulseek provider (search ranking, browse, album and lone-track placement, mirror jobs). `providers::soulseek::client` is the `peartube-soulseek` client it drives |
+| `providers::youtube`, `providers::staging`, `mirror::sources` | `src/providers/youtube.js`, `src/providers/staging.js`, `src/mirror.js`: audio saves, shared album names and pins, and search across providers |
 | `tags` | `src/tags.js`: music tags (FLAC and Ogg comments, ID3v2.3/2.4) and the album key two rips of one album share |
 | `cast` | `src/cast.js`, `src/cast-control.js`: controller, receiver, the cast channel on the peer connection, pairing and media serving |
 | `lan` | `src/lan.js`: mDNS and isolated LAN DHT; worker host Bonjour events and interface selection |
@@ -115,10 +145,11 @@ identified below rather than presented as live network parity.
 - `tests/identity_fixtures.rs`, `tests/settings_fixtures.rs`: JS identity and settings results, file bytes and modes; JS reads Rust-written files.
 - `tests/resolution_fixtures.rs`: JS media resolution fixture results, FLAC and MPEG audio included.
 - `tests/tags_fixtures.rs`: JS tag-reader results for FLAC, Ogg and ID3 files, each also cut short at every length, and album keys. `tests/soulseek_fixtures.rs`: JS Soulseek placement, ranking and browse results.
-- `tests/art_identify.rs`: JS artwork and identification results against scripted HTTP and fake `ubit`.
-- `tests/http.rs`: JS API responses, status and headers against a scripted node, including a library the owner removes from and a provider's jobs and calls.
-- `tests/acquire_mirror.rs`: JS acquisition and mirror call and JSON traces against scripted dependencies. Its library sessions (`tests/js/acquire-mirror-library.json`) run both mirror hosts on real files instead: album folders and their pins, `<storage>/staging`, a read-only import folder, what the owner removed, and the Soulseek provider on a scripted network, compared as JSON text.
+- `tests/art_identify.rs`: JS artwork and identification results against scripted HTTP and fake `ubit`. An audio save through the embedded SDK must leave the relay's settings folder as it was.
+- `tests/http.rs`: responses from the app and Rust API, including owner-only pictures, search errors and exact event frames. A client must receive the fast source's event before it releases the slow source.
+- `tests/acquire_mirror.rs`: calls and results from both acquirers and mirror hosts. The library sessions compare album imports on real files, pinned names and artists, saved file hashes by relative path, cancellation during an import and each source's results before and after its deadline.
 - `tests/soulseek_provider.rs`: the app's own `createSoulseekPlugin` beside the Rust provider on one scripted Soulseek client and clock, with real files: every call, job view and folder listing compared as JSON text.
+- `tests/youtube_provider.rs`: the app and Rust search, save, cancel and fetch pictures against the same scripted extractor and clock. The test compares jobs, skipped tracks and files on disk without depending on live YouTube availability.
 - `tests/apply.rs`: JS apply operations, host calls and view bytes on a real Hyperbee.
 - `tests/blobs.rs`: JS blob operations, core keys, announce fields, encrypted and plain block bytes, cache decisions, and ingested SHA-256 checkpoint/resume in both directions with `sodium-native` (`tests/js/sha256-state.mjs`).
 - `tests/cast.rs`: JS cast fixtures, the `peartube-cast/v1` control channel over in-memory Protomux connections (pairing rules, state pushes, session control, a non-paired peer refused), and live JS↔Rust interop on a local testnet in both directions. `tests/cast_default.rs` casts between two default backends over the LAN, from pairing through exact bytes on the receiver's player port.
@@ -324,6 +355,7 @@ tested and rejected for lack of repeatable wins. No ACK, pacing or wire changes.
 - JS plugins from `<storage>/plugins` (`PEARTUBE_PLUGINS_DIR`, `*.mjs`) are a permanent difference: this crate cannot load JavaScript. Its built-in plugins register through `MirrorHost::register`; `p2p-replicate` (`replicate`) and `hiverelay-seed` are built on `CoreNode` and registered by the relay.
 - `hiverelay-seed` marks HiveRelay connections bulk on the shared traffic gate, which buckets them and reports `peersBusy`; the gate's `pause`/`resume` hold and release that connection's inbound reads (`ReadGate` in `src/node/network.rs`), so `hiverelayUploadMbps` caps what the peer can draw from it.
 - Global search (`search`): peeroxide's `join` has no per-lookup `limit`, so a Rust searcher dials every relay the search-topic lookup returns, where the app's hyperswarm join stops at 4. It still asks at most 4 relays (2 per `/24`) and closes the search-only connections a minute after the last search. `media-check` (`media_check`) is built on `CoreNode` and registered by the relay, like `hiverelay-seed`.
+- Replication: when a peer closes a core's channel before this side has answered its open (for example, while this side's pairer still holds the request), protomux-rs rejects that open, so the peer frees the channel id and can open the core again on the same connection. npm protomux ignores such a close: the open stays pending until its pairer answers or declines it. If the pairer answers, npm keeps a channel that the peer has already closed, and if the peer then uses that channel id again while the channel is still open, npm ends the connection (`Invalid open message`). In a matched run with a core that the seeder first opens from storage, JS and Rust followers got the core again on the same connection from a Rust seeder; from a JS seeder the connection ended, as it does between two JS peers.
 - The default cast adapter has no `PeerFactory`: a load targeting a different network reuses the current node. Retry window timing differs. See [cast notes](docs/port-notes-cast.md).
 - Cast: the receiver's read-ahead is one retargeted `core.download` window per stream, sized like the app's (`holdIfThin` and watched-block trimming included), with the TV build's memory-cache permits capping it. A v1 receiver is listed but not castable. See [cast notes](docs/port-notes-cast.md).
 - LAN mDNS and the isolated DHT are implemented, but the real-interface interoperability matrix remains environment-blocked on this Mac. A standalone raw UDP probe also receives no LAN multicast; an ALF “permitted” query alone does not establish delivery. See [LAN notes](docs/port-notes-lan.md).
@@ -332,6 +364,10 @@ tested and rejected for lack of repeatable wins. No ACK, pacing or wire changes.
 - Soulseek: the provider links `peartube-soulseek` where the app loads its addon. That is the `soulseek` cargo feature, on by default and off in the apps' engine (`ffi/`): the client crate exports its own C ABI for the addon, and a library that links it exports those symbols too. A build without the feature, or a host that gives the provider no client (`SoulseekSettings::backend` is `None`), reports `unavailable`, as the app does on a platform with no prebuild. The folder shared with peers stays the client's own choice from the environment (`PEARTUBE_SLSK_SHARE_DIR`, else `PEARTUBE_WATCH_DIR`, else `<PEARTUBE_STORAGE>/staging`).
 - Soulseek search hits that tie on every other key are listed by name in the CLDR root collation (`providers/soulseek/rank.rs`): the order the app's `localeCompare` gives on a host with an English or no locale. The app takes the host's locale, so where that reorders letters (with `LC_ALL=sv_SE.UTF-8`, Node and Bare put `ä` after `z`) such ties come in another order, and `fixtures/soulseek-reference.json` does not regenerate equal on such a host.
 - `POST /v1/entries/remove` makes one pass over the entries it picked. The app's loop allows four, but each file is settled by its first try, so its later passes find nothing to do.
+- A saved source (`sources.json`) that is not a channel link or a 64-hex key stops the app's node from opening, with `Invalid PearTube URI or 64-hex key`: the app's relay does not start. The Rust node opens without that source and reports nothing.
+- Relay restart and shutdown: a restart reopens the node and applies the guard; an ordinary failure answers `400` with the reason. At shutdown the Rust relay stops the host visible at the signal before it waits for the lifecycle lock. A host that a queued open or reopen publishes later is stopped only on shutdown’s turn. A long import on that host can reach the 3 s deadline; the relay logs `relay shutdown timed out` and exits 1. The app gives lifecycle work up to 2 s before it stops the current host. A shutdown alone does not stop the same host twice, but a concurrent restart can also stop that host. A step that was already queued can still run; a new request is refused. Rust serializes the reopen of a recovery, while the app also serializes the claim.
+- App #586 keeps a node close failure. Later restarts answer `500`, a settings change that reopens the node reports the reason as a warning, and shutdown exits 1. The Rust channel close discards the Autobee error. `CoreNode::close()` finishes closing the store and returns `Ok(())`, so the relay has no corresponding error to report.
+- Plugin close: each call starts all stops again. The app’s `Promise.all` rejects on the first rejected stop and skips `traffic.stop()`; the relay discards that rejection. Rust does not run user JS plugins. Its built-in stops return `()`, so the host waits for all of them and releases the traffic gate once.
 
 ## License
 

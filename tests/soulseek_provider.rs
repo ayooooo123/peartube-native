@@ -6,18 +6,27 @@
 //! Here the same sessions drive the Rust provider under tokio's paused clock; the two traces are compared as
 //! JSON text, so the order of the keys counts too.
 
+#[path = "support/files.rs"]
+mod files;
 #[path = "support/soulseek_network.rs"]
 mod network;
+#[path = "support/provider_host.rs"]
+mod provider_host;
+#[path = "support/trace.rs"]
+mod trace;
 
-use std::collections::{HashMap, HashSet};
-use std::path::{Path, PathBuf};
+use std::collections::HashMap;
+use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use network::{FakeBackend, Labels, Network, World, sha256_hex, sorted_names, tree};
+use files::{Labels, tree};
+use network::{FakeBackend, Network, World};
 use peartube_native::providers::soulseek::client::Backend;
-use peartube_native::providers::soulseek::{Options, Provider, SoulseekError, StagingScan};
+use peartube_native::providers::soulseek::{Options, Provider, SoulseekError};
+use peartube_native::providers::staging::PlaceAndScan;
+use provider_host::FakeHost;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -57,53 +66,6 @@ struct SessionOptions {
     no_connect_ms: Option<u64>,
 }
 
-/// What the mirror host's scan answers: one item for each media file it has not reported before.
-struct FakeScan {
-    world: Arc<World>,
-    root: PathBuf,
-    seen: Mutex<HashSet<String>>,
-    busy: AtomicU64,
-}
-
-impl FakeScan {
-    async fn run(self: Arc<Self>) -> Result<Value, String> {
-        let folder = self
-            .root
-            .file_name()
-            .unwrap()
-            .to_string_lossy()
-            .into_owned();
-        self.world.log(json!({ "scan": folder }));
-        self.world.tick().await;
-        if self.busy.load(Ordering::SeqCst) > 0 {
-            self.busy.fetch_sub(1, Ordering::SeqCst);
-            return Ok(json!({ "scanned": 0, "ingested": 0, "busy": true, "items": [] }));
-        }
-        let mut items = Vec::new();
-        let mut scanned = 0;
-        for folder in sorted_names(&self.root) {
-            let dir = self.root.join(&folder);
-            if folder.starts_with('.') || !dir.is_dir() {
-                continue;
-            }
-            for name in sorted_names(&dir) {
-                if name.starts_with('.') || name.ends_with(".json") {
-                    continue;
-                }
-                scanned += 1;
-                if !self.seen.lock().unwrap().insert(format!("{folder}/{name}")) {
-                    continue;
-                }
-                let bytes = std::fs::read(dir.join(&name)).unwrap();
-                items.push(
-                    json!({ "file": name, "size": bytes.len(), "sha256": sha256_hex(&bytes) }),
-                );
-            }
-        }
-        Ok(json!({ "scanned": scanned, "ingested": items.len(), "items": items }))
-    }
-}
-
 /// Lets every task run as far as it can before the clock moves again.
 async fn flush() {
     for _ in 0..50 {
@@ -135,16 +97,19 @@ async fn run_session(network: &Arc<Network>, session: &Session) -> Value {
         storage.join("staging")
     };
     let world = World::new(network.clone(), session.login.clone(), session.bound_port);
-    let scan = Arc::new(FakeScan {
-        world: world.clone(),
-        root: staging.clone(),
-        seen: Mutex::new(HashSet::new()),
-        busy: AtomicU64::new(0),
-    });
     let changes = Arc::new(AtomicU64::new(0));
     let start = tokio::time::Instant::now();
     let now_ms: Arc<dyn Fn() -> u64 + Send + Sync> =
         Arc::new(move || NOW + start.elapsed().as_millis() as u64);
+    let host = FakeHost::new(
+        Arc::new({
+            let world = world.clone();
+            move |call| world.log(call)
+        }),
+        staging.clone(),
+        Duration::from_millis(network.tick),
+        now_ms.clone(),
+    );
     let backend: Option<Arc<dyn Backend>> = match session.backend.as_deref() {
         Some("none") => None,
         _ => Some(Arc::new(FakeBackend(world.clone()))),
@@ -181,11 +146,8 @@ async fn run_session(network: &Arc<Network>, session: &Session) -> Value {
         })
     });
     let provider = Provider::new(options);
-    let staging_scan: Option<StagingScan> = (session.scan != Some(false)).then(|| {
-        let scan = scan.clone();
-        let asked: StagingScan = Arc::new(move || Box::pin(scan.clone().run()));
-        asked
-    });
+    let place_and_scan: Option<PlaceAndScan> =
+        (session.scan != Some(false)).then(|| host.place_and_scan());
 
     let mut out: Vec<Value> = Vec::new();
     let mut put = |step: usize, value: Value| {
@@ -200,7 +162,7 @@ async fn run_session(network: &Arc<Network>, session: &Session) -> Value {
     // A call's outcome, once it has one: the clock moves until then.
     let call = |step: &Value| -> Outcome {
         let slot: Outcome = Arc::new(Mutex::new(None));
-        let (provider, scan) = (provider.clone(), staging_scan.clone());
+        let (provider, host) = (provider.clone(), place_and_scan.clone());
         let (kind, payload) = (
             step["do"].as_str().unwrap().to_owned(),
             step["payload"].clone(),
@@ -210,8 +172,8 @@ async fn run_session(network: &Arc<Network>, session: &Session) -> Value {
             let result = match kind.as_str() {
                 "search" => provider.search(&payload).await,
                 "browse" => provider.browse(&payload).await,
-                "mirror" => provider.mirror(&payload, scan).await,
-                "run" => provider.run(&payload, scan).await,
+                "mirror" => provider.mirror(&payload, host).await,
+                "run" => provider.run(&payload, host).await,
                 other => panic!("unknown call {other}"),
             };
             *done.lock().unwrap() = Some(outcome(result));
@@ -267,8 +229,11 @@ async fn run_session(network: &Arc<Network>, session: &Session) -> Value {
             provider.configure(text("slskUser"), text("slskPass"), text("slskServer"));
             flush().await;
             put(i, Value::Null);
-        } else if let Some(times) = step.get("busy").and_then(Value::as_u64) {
-            scan.busy.store(times, Ordering::SeqCst);
+        } else if let Some(ms) = step.get("hold").and_then(Value::as_u64) {
+            host.hold(ms);
+            put(i, Value::Null);
+        } else if let Some(ms) = step.get("limit").and_then(Value::as_u64) {
+            host.limit(ms);
             put(i, Value::Null);
         } else if step.get("tree").is_some() {
             put(i, tree(&root));
@@ -304,6 +269,7 @@ fn js_trace() -> Value {
     serde_json::from_slice(&output.stdout).expect("the oracle prints JSON")
 }
 
+/// Every session runs to its end before the test fails, so one run names all that differs.
 #[tokio::test(start_paused = true)]
 async fn the_provider_does_what_the_app_does() {
     let oracle = js_trace();
@@ -313,6 +279,7 @@ async fn the_provider_does_what_the_app_does() {
     let expected = oracle["sessions"].as_array().unwrap();
     assert_eq!(expected.len(), scenario.sessions.len());
     let mut records = 0;
+    let mut differs: Vec<String> = Vec::new();
     for (session, expected) in scenario.sessions.iter().zip(expected) {
         let actual = run_session(&network, session).await;
         assert_eq!(actual["name"], expected["name"]);
@@ -321,16 +288,28 @@ async fn the_provider_does_what_the_app_does() {
             expected["trace"].as_array().unwrap(),
         );
         for (index, (actual, expected)) in actual.iter().zip(expected).enumerate() {
-            assert_eq!(
-                actual.to_string(),
-                expected.to_string(),
-                "session “{}”, record {index} (step {})",
-                session.name,
-                expected["step"]
-            );
+            if let Some(difference) = trace::first_difference(actual, expected, "") {
+                differs.push(format!(
+                    "session “{}”, record {index} (step {}): {difference}",
+                    session.name, expected["step"]
+                ));
+            }
             records += 1;
         }
-        assert_eq!(actual.len(), expected.len(), "session “{}”", session.name);
+        if actual.len() != expected.len() {
+            differs.push(format!(
+                "session “{}”: {} records here, {} in the app",
+                session.name,
+                actual.len(),
+                expected.len()
+            ));
+        }
     }
-    assert!(records > 250, "{records} records compared");
+    assert!(
+        differs.is_empty(),
+        "{} records differ from the app:\n  {}",
+        differs.len(),
+        differs.join("\n  ")
+    );
+    assert!(records > 330, "{records} records compared");
 }

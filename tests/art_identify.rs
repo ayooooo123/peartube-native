@@ -183,10 +183,18 @@ async fn respond(
     let status = route
         .and_then(|route| route["status"].as_u64())
         .unwrap_or_else(|| if route.is_some() { 200 } else { 404 });
-    let body = route
-        .and_then(|route| route["body"].as_str())
-        .unwrap_or_default()
-        .to_owned();
+    // `bodyHex` is a body that is not text.
+    let body: Vec<u8> = match route.and_then(|route| route["bodyHex"].as_str()) {
+        Some(hex) => (0..hex.len())
+            .step_by(2)
+            .map(|at| u8::from_str_radix(&hex[at..at + 2], 16).expect("hex"))
+            .collect(),
+        None => route
+            .and_then(|route| route["body"].as_str())
+            .unwrap_or_default()
+            .as_bytes()
+            .to_vec(),
+    };
     let headers = route
         .and_then(|route| route["headers"].as_object())
         .cloned()
@@ -209,7 +217,7 @@ async fn respond(
     response.push_str("\r\n");
     socket.write_all(response.as_bytes()).await?;
     if method != "HEAD" {
-        socket.write_all(body.as_bytes()).await?;
+        socket.write_all(&body).await?;
     }
     Ok(())
 }
@@ -496,14 +504,32 @@ async fn sends_match() {
             allow_private: true,
         };
         let name = case["name"].as_str().unwrap_or_default();
-        match art::send(url.as_str().expect("url"), options).await {
-            Ok(response) => {
-                let href = url::Url::parse(&response.url).expect("response url");
+        // `binary` keeps the reply's bytes; they are compared as hex.
+        let url = url.as_str().expect("url");
+        let reply = if case["binary"] == true {
+            art::send_bytes(url, options).await.map(|reply| {
+                let hex: String = reply
+                    .body
+                    .iter()
+                    .map(|byte| format!("{byte:02x}"))
+                    .collect();
+                let content_type = reply.header("content-type").map(str::to_owned);
+                (reply.status, reply.url, content_type, json!({ "hex": hex }))
+            })
+        } else {
+            art::send(url, options).await.map(|reply| {
+                let content_type = reply.header("content-type").map(str::to_owned);
+                (reply.status, reply.url, content_type, json!(reply.body))
+            })
+        };
+        match reply {
+            Ok((status, href, content_type, body)) => {
+                let href = url::Url::parse(&href).expect("response url");
                 let out = json!({
-                    "status": response.status,
+                    "status": status,
                     "urlPath": format!("{}{}", href.path(), href.query().map(|q| format!("?{q}")).unwrap_or_default()),
-                    "contentType": response.header("content-type"),
-                    "body": response.body,
+                    "contentType": content_type,
+                    "body": body,
                 });
                 same_json(&out, &case["out"], name);
             }
@@ -759,6 +785,7 @@ async fn downloads_match() {
                     controller_for_progress.abort();
                 }
             })),
+            audio: case["audio"] == true,
         };
         let url = case["url"].as_str().expect("url");
         let name = case["name"].as_str().unwrap_or_default();
@@ -812,4 +839,43 @@ async fn embedded_ubit_sdk_runs_by_default_and_blocks_loopback_ssrf() {
     .expect_err("explicit missing UBIT_BIN must still report UBIT_MISSING");
     assert_eq!(missing.status(), Some(501));
     assert_eq!(missing.code(), Some("UBIT_MISSING"));
+}
+
+/// An audio save gets its own SDK settings for the call. The relay's settings folder stays as
+/// the operator left it: a mode written there would turn a video download beside it into audio.
+#[tokio::test]
+async fn audio_save_leaves_the_relay_settings_folder_unchanged() {
+    let server = serve(json!([{
+        "path": "/watch",
+        "status": 200,
+        "headers": { "content-type": "text/html" },
+        "body": "<html></html>"
+    }]))
+    .await;
+    let config = tempfile::tempdir().expect("config dir");
+    let settings = b"{\"cookies\":\"builtin\"}\n";
+    fs::write(config.path().join("settings.json"), settings).expect("settings");
+    let out = tempfile::tempdir().expect("out dir");
+
+    let saved = identify::download_page(
+        &format!("{}/watch", server.base),
+        &out.path().to_string_lossy(),
+        DownloadOptions {
+            config_dir: config.path().to_string_lossy().into_owned(),
+            audio: true,
+            ..Default::default()
+        },
+    )
+    .await;
+    assert!(saved.is_err(), "the embedded SDK refuses a loopback page");
+
+    let held: Vec<_> = fs::read_dir(config.path())
+        .expect("config dir")
+        .map(|entry| entry.expect("entry").file_name())
+        .collect();
+    assert_eq!(held, ["settings.json"]);
+    assert_eq!(
+        fs::read(config.path().join("settings.json")).expect("settings"),
+        settings
+    );
 }

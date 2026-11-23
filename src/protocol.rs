@@ -18,9 +18,9 @@ pub const MAX_TITLE: usize = 300;
 /// Blob block size used by PearTube's uniform blob layout.
 pub const BLOB_BLOCK_SIZE: u64 = 512 * 1024;
 /// Extensions PearTube treats as media files (lowercase).
-pub const MEDIA_EXTENSIONS: [&str; 21] = [
-    "mp4", "m4v", "mkv", "webm", "avi", "mov", "ts", "m2ts", "mts", "mpg", "mpeg", "wmv", "flv",
-    "ogv", "3gp", "ogg", "flac", "mp3", "opus", "wav", "aac",
+pub const MEDIA_EXTENSIONS: [&str; 22] = [
+    "mp4", "m4v", "m4a", "mkv", "webm", "avi", "mov", "ts", "m2ts", "mts", "mpg", "mpeg", "wmv",
+    "flv", "ogv", "3gp", "ogg", "flac", "mp3", "opus", "wav", "aac",
 ];
 /// Port of a node's HTTP API.
 pub const API_PORT: u16 = 8174;

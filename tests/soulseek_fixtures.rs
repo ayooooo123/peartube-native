@@ -1,8 +1,10 @@
 use peartube_native::providers::soulseek::place::{LoneTrack, place_single_track};
 use peartube_native::providers::soulseek::rank::{PeerFile, rank, share_list};
 use peartube_native::providers::soulseek::{
-    ALBUM_PIN, DEFAULT_LISTEN_PORT, DEFAULT_SHARE_MAX_FILES, MIRRORED_LIST, SOULSEEK_SEARCH_CAP,
-    is_release_id,
+    DEFAULT_LISTEN_PORT, DEFAULT_SHARE_MAX_FILES, SOULSEEK_SEARCH_CAP,
+};
+use peartube_native::providers::staging::{
+    ALBUM_PIN, MIRRORED_LIST, clip_bytes, format_album_dir, is_release_id, safe_segment,
 };
 use peartube_native::tags::Tags;
 use serde::Deserialize;
@@ -13,6 +15,9 @@ use serde_json::{Value, json};
 struct Fixtures {
     constants: Value,
     release_ids: Vec<ReleaseId>,
+    segments: Vec<Segment>,
+    clipped: Vec<Clipped>,
+    album_dirs: Vec<AlbumDir>,
     placed: Vec<PlacedCase>,
     candidates: Vec<Ranked>,
     browse: Vec<Browsed>,
@@ -21,6 +26,31 @@ struct Fixtures {
 struct ReleaseId {
     input: String,
     expected: bool,
+}
+#[derive(Deserialize)]
+struct Segment {
+    input: Option<String>,
+    expected: String,
+}
+#[derive(Deserialize)]
+struct Clipped {
+    input: String,
+    max: usize,
+    expected: String,
+}
+#[derive(Deserialize)]
+struct AlbumDir {
+    input: AlbumDirInput,
+    expected: String,
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AlbumDirInput {
+    artist: String,
+    album: String,
+    year: Option<u32>,
+    #[serde(default)]
+    fallback_title: String,
 }
 #[derive(Deserialize)]
 struct PlacedCase {
@@ -89,6 +119,18 @@ fn peer_files(hits: Vec<Hit>) -> impl Iterator<Item = PeerFile> {
     })
 }
 
+/// A name as its start and its sizes: the long ones are the cases that count, and two of them
+/// side by side do not show where they differ.
+fn brief(text: &str) -> String {
+    let head: String = text.chars().take(12).collect();
+    format!(
+        "{head:?} ({} UTF-16 units, {} bytes)",
+        text.encode_utf16().count(),
+        text.len()
+    )
+}
+
+/// Every case is run before the test fails, so one run names all that differ.
 #[test]
 fn soulseek_fixtures() {
     let fixtures: Fixtures =
@@ -103,13 +145,64 @@ fn soulseek_fixtures() {
             "MIRRORED_LIST": MIRRORED_LIST,
         })
     );
+    let mut differs: Vec<String> = Vec::new();
+
+    assert!(fixtures.release_ids.len() >= 23);
     for case in fixtures.release_ids {
-        assert_eq!(
-            is_release_id(&case.input),
-            case.expected,
-            "{:?}",
-            case.input
+        if is_release_id(&case.input) != case.expected {
+            differs.push(format!(
+                "release id {:?}: the app says {}",
+                case.input, case.expected
+            ));
+        }
+    }
+
+    assert!(fixtures.segments.len() >= 26);
+    for case in fixtures.segments {
+        let input = case.input.as_deref().unwrap_or_default();
+        let actual = safe_segment(input, "fallback");
+        if actual != case.expected {
+            differs.push(format!(
+                "segment of {}: {} here, {} in the app",
+                brief(input),
+                brief(&actual),
+                brief(&case.expected)
+            ));
+        }
+    }
+    assert!(fixtures.clipped.len() >= 13);
+    for case in fixtures.clipped {
+        let actual = clip_bytes(&case.input, case.max);
+        if actual != case.expected {
+            differs.push(format!(
+                "{} cut to {} bytes: {} here, {} in the app",
+                brief(&case.input),
+                case.max,
+                brief(actual),
+                brief(&case.expected)
+            ));
+        }
+    }
+    assert!(fixtures.album_dirs.len() >= 6);
+    for case in fixtures.album_dirs {
+        let input = case.input;
+        let actual = format_album_dir(
+            &input.artist,
+            &input.album,
+            input.year,
+            &input.fallback_title,
         );
+        if actual != case.expected {
+            differs.push(format!(
+                "album folder of {} / {} / {:?} / {}: {} here, {} in the app",
+                brief(&input.artist),
+                brief(&input.album),
+                input.year,
+                brief(&input.fallback_title),
+                brief(&actual),
+                brief(&case.expected)
+            ));
+        }
     }
 
     assert!(fixtures.placed.len() >= 70);
@@ -146,27 +239,42 @@ fn soulseek_fixtures() {
             }),
             Err(error) => json!({ "error": error }),
         };
-        assert_eq!(actual, case.expected, "{:?}", input.filename);
+        if actual != case.expected {
+            let keys: Vec<&String> = actual
+                .as_object()
+                .into_iter()
+                .flatten()
+                .filter(|(key, value)| case.expected.get(key.as_str()) != Some(value))
+                .map(|(key, _)| key)
+                .collect();
+            differs.push(format!(
+                "placed {:?}: {keys:?} differ from the app's",
+                input.filename
+            ));
+        }
     }
 
     // The serialized text is compared, so the order of the keys counts too.
     for case in fixtures.candidates {
         let count = case.hits.len();
         let actual = rank(peer_files(case.hits), case.cap);
-        assert_eq!(
-            serde_json::to_string(&actual).unwrap(),
-            serde_json::to_string(&case.expected).unwrap(),
-            "{count} hits, cap {}",
-            case.cap
-        );
+        if serde_json::to_string(&actual).unwrap() != serde_json::to_string(&case.expected).unwrap()
+        {
+            differs.push(format!("ranking of {count} hits, cap {}", case.cap));
+        }
     }
     for case in fixtures.browse {
         let actual = share_list(peer_files(case.records), &case.username);
-        assert_eq!(
-            serde_json::to_string(&actual).unwrap(),
-            serde_json::to_string(&case.expected).unwrap(),
-            "{}",
-            case.username
-        );
+        if serde_json::to_string(&actual).unwrap() != serde_json::to_string(&case.expected).unwrap()
+        {
+            differs.push(format!("share list of {}", case.username));
+        }
     }
+
+    assert!(
+        differs.is_empty(),
+        "{} cases differ from the app:\n  {}",
+        differs.len(),
+        differs.join("\n  ")
+    );
 }

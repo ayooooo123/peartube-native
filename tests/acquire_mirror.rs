@@ -9,8 +9,12 @@
 //! album folders, what the owner removed, and the Soulseek provider on a scripted network. Its sessions are in
 //! `tests/js/acquire-mirror-library.json`, and its trace is compared as JSON text.
 
+#[path = "support/files.rs"]
+mod files;
 #[path = "support/soulseek_network.rs"]
 mod network;
+#[path = "support/trace.rs"]
+mod trace;
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::io;
@@ -539,6 +543,10 @@ struct FakeNode {
     rechunk_wait: Mutex<Option<Arc<tokio::sync::Notify>>>,
     /// The ids `put` refuses once it has read the file.
     refuse: Mutex<Vec<String>>,
+    /// While set, every `put` waits on it once it has read its file, so the import that asked stays
+    /// under way; `parked` counts them.
+    held: Mutex<Option<Arc<tokio::sync::watch::Sender<bool>>>>,
+    parked: std::sync::atomic::AtomicUsize,
 }
 
 impl FakeNode {
@@ -559,6 +567,8 @@ impl FakeNode {
             ),
             rechunk_wait: Mutex::new(None),
             refuse: Mutex::new(Vec::new()),
+            held: Mutex::new(None),
+            parked: std::sync::atomic::AtomicUsize::new(0),
         })
     }
 
@@ -763,6 +773,17 @@ impl Node for FakeNode {
         let meta = serde_json::to_value(&meta)
             .map_err(|error| AcquireError::Message(error.to_string()))?;
         self.calls.lock().unwrap()[index]["meta"] = meta.clone();
+        let hold = self
+            .held
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|free| free.subscribe());
+        if let Some(mut free) = hold {
+            self.parked.fetch_add(1, Ordering::SeqCst);
+            let _ = free.wait_for(|free| *free).await;
+            self.parked.fetch_sub(1, Ordering::SeqCst);
+        }
         let id = meta["id"].as_str().unwrap_or_default();
         if self
             .refuse
@@ -1895,6 +1916,7 @@ impl MirrorHarness {
                     "watch-dir",
                     "feed-mirror",
                     "soulseek",
+                    "youtube",
                 ]
                 .contains(&name)
             })
@@ -2139,17 +2161,23 @@ async fn mirror_host_matches_the_app() {
 
 #[cfg(unix)]
 mod library {
+    use std::collections::HashMap;
+    use std::future::Future;
     use std::os::unix::fs::PermissionsExt;
     use std::path::Path;
+    use std::pin::Pin;
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::Duration;
 
     use peartube_native::mirror::{
-        LocalMirrorFiles, MirrorConfig, MirrorError, MirrorHost, MirrorOptions, SoulseekSettings,
+        Ctx, LocalMirrorFiles, MirrorConfig, MirrorError, MirrorHost, MirrorOptions, MirrorPlugin,
+        MirrorProvider, ProviderFuture, SoulseekSettings,
     };
     use serde_json::{Map, Value, json};
 
-    use super::network::{FakeBackend, Labels, Network, World, flac, tree};
+    use super::files::{Labels, tree};
+    use super::network::{FakeBackend, Network, World, flac};
     use super::{Factory, FakeNode, Feeds, NOW, RechunkFactory, js_trace};
 
     /// A file's modification time when a step names none, in seconds.
@@ -2216,6 +2244,383 @@ mod library {
         }
     }
 
+    /// The source declared in `searchPlugins`. A held search receives one permit after the
+    /// deadline; its completion proves that timing out the caller did not cancel the provider.
+    struct ScriptedSource {
+        spec: Value,
+        release: Arc<tokio::sync::Notify>,
+        finished: Arc<tokio::sync::Notify>,
+    }
+
+    impl MirrorPlugin<FakeNode> for ScriptedSource {
+        fn name(&self) -> &str {
+            self.spec["name"].as_str().unwrap()
+        }
+        fn provider(&self) -> Option<&dyn MirrorProvider<FakeNode>> {
+            Some(self)
+        }
+        fn run<'a>(&'a self, _: Value, _: &'a Ctx<FakeNode>) -> ProviderFuture<'a> {
+            unreachable!()
+        }
+    }
+
+    impl MirrorProvider<FakeNode> for ScriptedSource {
+        fn search<'a>(&'a self, payload: Value, _: &'a Ctx<FakeNode>) -> ProviderFuture<'a> {
+            Box::pin(async move {
+                let plan = self.spec["queries"]
+                    .get(payload["query"].as_str().unwrap())
+                    .unwrap_or(&self.spec);
+                if let Some(ms) = plan["delay"].as_u64() {
+                    tokio::time::sleep(Duration::from_millis(ms)).await;
+                }
+                if plan["hold"] == true {
+                    self.release.notified().await;
+                    self.finished.notify_one();
+                }
+                if let Some(error) = plan["error"].as_str() {
+                    return Err(MirrorError {
+                        message: error.repeat(plan["repeat"].as_u64().unwrap_or(1) as usize),
+                        status: plan["status"].as_u64().map(|s| s as u16),
+                    });
+                }
+                Ok(if plan["args"] == true {
+                    json!({ "candidates": [payload] })
+                } else {
+                    plan["reply"].clone()
+                })
+            })
+        }
+        fn browse<'a>(&'a self, _: Value, _: &'a Ctx<FakeNode>) -> ProviderFuture<'a> {
+            unreachable!()
+        }
+        fn mirror<'a>(&'a self, _: Value, _: &'a Ctx<FakeNode>) -> ProviderFuture<'a> {
+            unreachable!()
+        }
+        fn list_jobs(&self) -> Vec<Value> {
+            Vec::new()
+        }
+        fn get_job(&self, _: &str) -> Option<Value> {
+            None
+        }
+        fn cancel_job(&self, _: &str) -> Option<Value> {
+            None
+        }
+    }
+
+    /// A plugin registered before the provider whose stop does not finish at once. It is in no
+    /// compared output. With it, a host that stopped its plugins one after another has not reached
+    /// the provider when `close` is first polled, which is what the app's own test checks "in the
+    /// tick `close()` was called".
+    struct SlowStop;
+
+    impl MirrorPlugin<FakeNode> for SlowStop {
+        fn name(&self) -> &str {
+            "slow-stop"
+        }
+
+        fn run<'a>(
+            &'a self,
+            _payload: Value,
+            _ctx: &'a Ctx<FakeNode>,
+        ) -> Pin<Box<dyn Future<Output = Result<Value, MirrorError>> + Send + 'a>> {
+            Box::pin(async { Ok(Value::Null) })
+        }
+
+        fn stop<'a>(&'a self) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
+            Box::pin(async { tokio::time::sleep(Duration::from_millis(20)).await })
+        }
+    }
+
+    /// A plugin registered before the others whose stop is held until the test releases it.
+    struct HeldStop {
+        release: tokio::sync::watch::Receiver<bool>,
+        finished: Arc<std::sync::Mutex<Vec<&'static str>>>,
+    }
+
+    impl MirrorPlugin<FakeNode> for HeldStop {
+        fn name(&self) -> &str {
+            "held-stop"
+        }
+        fn run<'a>(&'a self, _: Value, _: &'a Ctx<FakeNode>) -> ProviderFuture<'a> {
+            unreachable!()
+        }
+        fn stop<'a>(&'a self) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
+            Box::pin(async move {
+                self.release.clone().wait_for(|open| *open).await.unwrap();
+                self.finished.lock().unwrap().push("held-stop");
+            })
+        }
+    }
+
+    /// A plugin after the held one: its stop must start while the held stop still waits.
+    struct LaterStop {
+        started: Arc<tokio::sync::Notify>,
+        finished: Arc<std::sync::Mutex<Vec<&'static str>>>,
+    }
+
+    impl MirrorPlugin<FakeNode> for LaterStop {
+        fn name(&self) -> &str {
+            "later-stop"
+        }
+        fn run<'a>(&'a self, _: Value, _: &'a Ctx<FakeNode>) -> ProviderFuture<'a> {
+            unreachable!()
+        }
+        fn stop<'a>(&'a self) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
+            Box::pin(async move {
+                self.finished.lock().unwrap().push("later-stop");
+                self.started.notify_one();
+            })
+        }
+    }
+
+    /// Its stop yields once, then calls `close` again and waits for it. A guard stops the stop
+    /// that the second close starts from calling close a third time, so the two calls cannot wait
+    /// for each other.
+    struct YieldingClose {
+        host: std::sync::Weak<MirrorHost<FakeNode>>,
+        reentered: std::sync::atomic::AtomicBool,
+        suspended: std::sync::mpsc::Sender<()>,
+        finished: Arc<std::sync::atomic::AtomicBool>,
+    }
+
+    impl MirrorPlugin<FakeNode> for YieldingClose {
+        fn name(&self) -> &str {
+            "yielding-close"
+        }
+        fn run<'a>(&'a self, _: Value, _: &'a Ctx<FakeNode>) -> ProviderFuture<'a> {
+            unreachable!()
+        }
+        fn stop<'a>(&'a self) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
+            Box::pin(async move {
+                if self.reentered.swap(true, Ordering::SeqCst) {
+                    return;
+                }
+                // One real suspension, so the marker proves the nested close starts after it.
+                let mut polled = false;
+                std::future::poll_fn(|cx| {
+                    if std::mem::replace(&mut polled, true) {
+                        std::task::Poll::Ready(())
+                    } else {
+                        cx.waker().wake_by_ref();
+                        std::task::Poll::Pending
+                    }
+                })
+                .await;
+                self.suspended.send(()).unwrap();
+                self.host.upgrade().unwrap().close().await;
+                self.finished.store(true, Ordering::SeqCst);
+            })
+        }
+    }
+
+    /// Counts how often its stop ran, so a second `close` can be told from the first.
+    struct CountingStop {
+        calls: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    impl MirrorPlugin<FakeNode> for CountingStop {
+        fn name(&self) -> &str {
+            "counting-stop"
+        }
+        fn run<'a>(&'a self, _: Value, _: &'a Ctx<FakeNode>) -> ProviderFuture<'a> {
+            unreachable!()
+        }
+        fn stop<'a>(&'a self) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
+            Box::pin(async move {
+                self.calls.fetch_add(1, Ordering::SeqCst);
+            })
+        }
+    }
+
+    async fn host_for_close(
+        storage: &Path,
+        stop_traffic: impl FnOnce() + Send + Sync + 'static,
+    ) -> Arc<MirrorHost<FakeNode>> {
+        Arc::new(
+            MirrorHost::start(
+                FakeNode::new(),
+                None,
+                Arc::new(LocalMirrorFiles),
+                Arc::new(Factory),
+                Arc::new(RechunkFactory),
+                Feeds::new(),
+                Vec::new(),
+                MirrorOptions {
+                    storage: storage.display().to_string(),
+                    poll_interval_ms: 0,
+                    mirror_channel: false,
+                    stop_traffic: Some(Box::new(stop_traffic)),
+                    ..MirrorOptions::default()
+                },
+            )
+            .await,
+        )
+    }
+
+    /// The merged host starts every plugin's stop before it awaits any (app #581,
+    /// `d4d7d69ef`): a later plugin's stop must run while an earlier stop is still held.
+    #[tokio::test]
+    async fn close_starts_every_stop_before_it_waits_for_one() {
+        let storage = tempfile::tempdir().unwrap();
+        let traffic = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let host = host_for_close(storage.path(), {
+            let traffic = traffic.clone();
+            move || {
+                traffic.fetch_add(1, Ordering::SeqCst);
+            }
+        })
+        .await;
+        let (release, held) = tokio::sync::watch::channel(false);
+        let started = Arc::new(tokio::sync::Notify::new());
+        let finished = Arc::new(std::sync::Mutex::new(Vec::new()));
+        host.register(Arc::new(HeldStop {
+            release: held,
+            finished: finished.clone(),
+        }));
+        host.register(Arc::new(LaterStop {
+            started: started.clone(),
+            finished: finished.clone(),
+        }));
+        let closing = host.close();
+        tokio::pin!(closing);
+        let mut close_done = false;
+        tokio::time::timeout(Duration::from_secs(5), async {
+            tokio::select! {
+                _ = &mut closing => close_done = true,
+                _ = started.notified() => {}
+            }
+        })
+        .await
+        .expect("the later stop starts while the held stop waits");
+        assert!(!close_done, "the close waits for the held stop");
+        assert_eq!(
+            *finished.lock().unwrap(),
+            ["later-stop"],
+            "the later stop ran to its end; the held stop did not"
+        );
+        assert_eq!(
+            traffic.load(Ordering::SeqCst),
+            0,
+            "the traffic gate waits for every stop"
+        );
+        release.send_replace(true);
+        tokio::time::timeout(Duration::from_secs(5), closing)
+            .await
+            .expect("the close ends once the held stop is released");
+        assert_eq!(
+            *finished.lock().unwrap(),
+            ["later-stop", "held-stop"],
+            "both stops finish"
+        );
+        assert_eq!(traffic.load(Ordering::SeqCst), 1, "the gate runs once");
+        host.close().await;
+        assert_eq!(
+            traffic.load(Ordering::SeqCst),
+            1,
+            "the gate was already taken; a later close does not run it again"
+        );
+    }
+
+    /// A stop that calls `close` again after it suspends still finishes: the second call runs
+    /// each plugin's stop anew, so it does not wait for the stop that called it. The plugin's
+    /// guard stops a third call. The runtime runs on its own thread, so a close that does not
+    /// settle fails by the wall clock instead of blocking the test thread.
+    #[test]
+    fn a_stop_that_calls_close_after_a_yield_finishes() {
+        let storage = tempfile::tempdir().unwrap();
+        let traffic = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let finished = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let (suspended, suspended_rx) = std::sync::mpsc::channel();
+        let (settled, settled_rx) = std::sync::mpsc::channel();
+        let path = storage.path().to_path_buf();
+        let closer = {
+            let traffic = traffic.clone();
+            let finished = finished.clone();
+            let calls = calls.clone();
+            std::thread::spawn(move || {
+                let runtime = tokio::runtime::Builder::new_current_thread()
+                    .enable_time()
+                    .build()
+                    .unwrap();
+                runtime.block_on(async move {
+                    let host = host_for_close(&path, move || {
+                        traffic.fetch_add(1, Ordering::SeqCst);
+                    })
+                    .await;
+                    host.register(Arc::new(YieldingClose {
+                        host: Arc::downgrade(&host),
+                        reentered: std::sync::atomic::AtomicBool::new(false),
+                        suspended,
+                        finished,
+                    }));
+                    host.register(Arc::new(CountingStop { calls }));
+                    host.close().await;
+                    settled.send(()).unwrap();
+                });
+            })
+        };
+        suspended_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("the plugin did not suspend before its nested close");
+        settled_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("outer close did not settle after the plugin awaited host.close()");
+        assert!(
+            finished.load(Ordering::SeqCst),
+            "the stop ran to its end after the second close"
+        );
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            2,
+            "the second close ran every stop again"
+        );
+        assert_eq!(traffic.load(Ordering::SeqCst), 1, "the gate runs once");
+        closer.join().unwrap();
+    }
+
+    /// Main runs the startup backfill even on a host that was closed before `startup`; the work
+    /// after it checks the closed host and does not start. (`src/mirror.js` at main: the
+    /// `channel-backfill` run is outside the `!closed` checks.)
+    #[tokio::test]
+    async fn a_host_closed_before_startup_still_backfills() {
+        let storage = tempfile::tempdir().unwrap();
+        let import = tempfile::tempdir().unwrap();
+        std::fs::write(import.path().join("Clip.mp4"), vec![1u8; 4096]).unwrap();
+        let host = MirrorHost::open(
+            FakeNode::new(),
+            None,
+            Arc::new(LocalMirrorFiles),
+            Arc::new(Factory),
+            Arc::new(RechunkFactory),
+            Feeds::new(),
+            Vec::new(),
+            MirrorOptions {
+                storage: storage.path().display().to_string(),
+                poll_interval_ms: 0,
+                mirror_channel: true,
+                rechunk: false,
+                watch_dir: Some(import.path().display().to_string()),
+                ..MirrorOptions::default()
+            },
+        );
+        host.close().await;
+        host.startup().await;
+        let rows = host.list();
+        let runs = |name: &str| {
+            rows.iter()
+                .find(|row| row["name"] == name)
+                .map(|row| row["runs"].clone())
+        };
+        assert_eq!(runs("channel-backfill"), Some(json!(1)), "the backfill ran");
+        assert_eq!(
+            runs("watch-dir"),
+            Some(json!(0)),
+            "the folder import did not start on the closed host"
+        );
+        host.close().await;
+    }
+
     /// One session of the scenario: the mirror host on real files in a temporary folder.
     async fn run_session(network: &Arc<Network>, session: &Value) -> Value {
         let name = session["name"].as_str().unwrap();
@@ -2244,6 +2649,8 @@ mod library {
 
         let node = FakeNode::new();
         let world = World::new(network.clone(), None, None);
+        // The clock stands still unless a `clock` step moves it.
+        let clock = Arc::new(AtomicU64::new(NOW));
         let sign_in = |key: &str| {
             session["soulseek"][key]
                 .as_str()
@@ -2257,7 +2664,7 @@ mod library {
             Arc::new(Factory),
             Arc::new(RechunkFactory),
             Feeds::new(),
-            Vec::new(),
+            vec![Arc::new(SlowStop)],
             MirrorOptions {
                 storage: storage.to_string_lossy().into_owned(),
                 mirror_channel: false,
@@ -2272,12 +2679,29 @@ mod library {
                 },
                 plugins_dir: Some(storage.join("plugins").to_string_lossy().into_owned()),
                 poll_interval_ms: 0,
-                now_ms: Arc::new(|| NOW),
+                import_wait_ms: session["importWaitMs"].as_u64().unwrap_or(120_000),
+                now_ms: Arc::new({
+                    let clock = clock.clone();
+                    move || clock.load(Ordering::SeqCst)
+                }),
                 ..MirrorOptions::default()
             },
         )
         .await;
         host.wait_idle().await;
+        let release = Arc::new(tokio::sync::Notify::new());
+        let finished = Arc::new(tokio::sync::Notify::new());
+        for spec in session["searchPlugins"].as_array().into_iter().flatten() {
+            host.register(Arc::new(ScriptedSource {
+                spec: spec.clone(),
+                release: release.clone(),
+                finished: finished.clone(),
+            }));
+        }
+        let host = Arc::new(host);
+        // Calls a `begin` step started and no step has taken the outcome of yet.
+        let mut pending: HashMap<String, tokio::task::JoinHandle<Value>> = HashMap::new();
+        let mut closed = false;
 
         let ledger_file = storage.join("mirror-watch.json");
         let ledger = || std::fs::read_to_string(&ledger_file).ok();
@@ -2299,6 +2723,94 @@ mod library {
             let payload = || step.get("payload").cloned().unwrap_or(Value::Null);
             let value = if file_step(&root, step) {
                 Value::Null
+            } else if let Some(label) = step.get("begin").and_then(Value::as_str) {
+                // A run or a provider call that is not waited for: a later `end` takes its outcome.
+                // Its task does not start before this step is recorded.
+                let (host, payload) = (host.clone(), payload());
+                let text = |key: &str| step.get(key).and_then(Value::as_str).map(str::to_owned);
+                let (run, call, provider) = (text("run"), text("provider"), text("name"));
+                let task = tokio::spawn(async move {
+                    let provider = provider.unwrap_or_default();
+                    outcome(match (run, call.as_deref()) {
+                        (Some(plugin), _) => host.run(&plugin, payload).await,
+                        (None, Some("search")) => host.search_provider(&provider, payload).await,
+                        (None, Some("browse")) => host.browse_provider(&provider, payload).await,
+                        (None, Some("mirror")) => host.mirror_provider(&provider, payload).await,
+                        (None, other) => panic!("unknown provider call {other:?}"),
+                    })
+                });
+                pending.insert(label.to_owned(), task);
+                json!({ "started": label })
+            } else if let Some(label) = step.get("end").and_then(Value::as_str) {
+                pending
+                    .remove(label)
+                    .expect("a call that was begun")
+                    .await
+                    .expect("the call ran to its end")
+            } else if let Some(want) = step.get("until") {
+                // Waits, in real time, until as many announces are parked on a hold or a job reads as
+                // the step says. A state that never comes stops the run here, where the step is known.
+                let mut reached = false;
+                for _ in 0..2000 {
+                    reached = match want.get("job").and_then(Value::as_u64) {
+                        None => {
+                            Some(node.parked.load(Ordering::SeqCst) as u64)
+                                == want["parked"].as_u64()
+                        }
+                        Some(n) => host
+                            .get_provider_job(&format!("job-{n}"))
+                            .is_some_and(|job| {
+                                job["status"] == want["status"]
+                                    && (want.get("phase").is_none()
+                                        || job["phase"] == want["phase"])
+                            }),
+                    };
+                    if reached {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                }
+                assert!(reached, "session “{name}”, step {i}: never reached {want}");
+                Value::Null
+            } else if step.get("hold").is_some() {
+                *node.held.lock().unwrap() = Some(Arc::new(tokio::sync::watch::channel(false).0));
+                Value::Null
+            } else if step.get("release").is_some() {
+                if let Some(free) = node.held.lock().unwrap().take() {
+                    free.send_replace(true);
+                }
+                Value::Null
+            } else if let Some(ms) = step.get("clock").and_then(Value::as_u64) {
+                clock.fetch_add(ms, Ordering::SeqCst);
+                Value::Null
+            } else if step.get("close").is_some() {
+                // What every provider job reads when `close` has been polled once (every plugin's stop
+                // has started and none has been waited for: the app's "tick `close()` was called in"),
+                // and once the host has closed.
+                let view = || -> Value {
+                    host.list_provider_jobs()
+                        .iter()
+                        .map(|job| {
+                            json!({
+                                "jobId": job["jobId"],
+                                "status": job["status"],
+                                "phase": job["phase"],
+                                "error": job["error"],
+                            })
+                        })
+                        .collect()
+                };
+                let mut closing = Box::pin(host.close());
+                let done = std::future::poll_fn(|cx| {
+                    std::task::Poll::Ready(closing.as_mut().poll(cx).is_ready())
+                })
+                .await;
+                let at_once = view();
+                if !done {
+                    closing.await;
+                }
+                closed = true;
+                json!({ "atOnce": at_once, "closed": view() })
             } else if let Some(ids) = step.get("refuse") {
                 *node.refuse.lock().unwrap() = serde_json::from_value(ids.clone()).unwrap();
                 Value::Null
@@ -2323,6 +2835,25 @@ mod library {
                     slsk_server: text("slskServer"),
                 });
                 Value::Null
+            } else if let Some(query) = step.get("searchSources") {
+                let mut parts = Vec::new();
+                let answer = host
+                    .search_sources(
+                        query.clone(),
+                        Some(&mut |part| {
+                            parts.push(serde_json::to_value(part).unwrap());
+                        }),
+                    )
+                    .await;
+                let mut record = outcome(answer.map(|v| serde_json::to_value(v).unwrap()));
+                record["parts"] = Value::Array(parts);
+                record
+            } else if step.get("releaseSearch").is_some() {
+                release.notify_one();
+                let resumed = tokio::time::timeout(Duration::from_secs(1), finished.notified())
+                    .await
+                    .is_ok();
+                json!({ "finishedLate": usize::from(resumed) })
             } else if let Some(call) = step.get("provider").and_then(Value::as_str) {
                 let provider = step["name"].as_str().unwrap();
                 outcome(match call {
@@ -2359,7 +2890,10 @@ mod library {
                 host.list()
                     .into_iter()
                     .filter(|plugin| {
-                        matches!(plugin["name"].as_str(), Some("watch-dir" | "soulseek"))
+                        matches!(
+                            plugin["name"].as_str(),
+                            Some("watch-dir" | "soulseek" | "youtube")
+                        )
                     })
                     .collect()
             } else if step.get("tree").is_some() {
@@ -2374,7 +2908,9 @@ mod library {
             };
             put(json!(i), value);
         }
-        host.close().await;
+        if !closed {
+            host.close().await;
+        }
         if read_only {
             set_mode(&import, 0o755);
         }
@@ -2384,6 +2920,7 @@ mod library {
         serde_json::from_str(&text.replace(&root[1..root.len() - 1], "<root>")).unwrap()
     }
 
+    /// Every session runs to its end before the test fails, so one run names all that differs.
     #[tokio::test]
     async fn the_library_matches_the_app() {
         let oracle = js_trace("acquire-mirror-library.mjs");
@@ -2394,6 +2931,7 @@ mod library {
         let expected = oracle["sessions"].as_array().unwrap();
         assert_eq!(expected.len(), sessions.len());
         let mut records = 0;
+        let mut differs: Vec<String> = Vec::new();
         for (session, expected) in sessions.iter().zip(expected) {
             let actual = run_session(&network, session).await;
             assert_eq!(actual["name"], expected["name"]);
@@ -2402,22 +2940,30 @@ mod library {
                 expected["trace"].as_array().unwrap(),
             );
             for (actual, expected) in actual.iter().zip(expected) {
-                assert_eq!(
-                    actual.to_string(),
-                    expected.to_string(),
-                    "session “{}”, step {}",
-                    session["name"],
-                    expected["step"]
-                );
+                if let Some(difference) = super::trace::first_difference(actual, expected, "") {
+                    differs.push(format!(
+                        "session “{}”, step {}: {difference}",
+                        session["name"].as_str().unwrap(),
+                        expected["step"]
+                    ));
+                }
                 records += 1;
             }
-            assert_eq!(
-                actual.len(),
-                expected.len(),
-                "session “{}”",
-                session["name"]
-            );
+            if actual.len() != expected.len() {
+                differs.push(format!(
+                    "session “{}”: {} records here, {} in the app",
+                    session["name"].as_str().unwrap(),
+                    actual.len(),
+                    expected.len()
+                ));
+            }
         }
-        assert!(records > 100, "{records} records compared");
+        assert!(
+            differs.is_empty(),
+            "{} records differ from the app:\n  {}",
+            differs.len(),
+            differs.join("\n  ")
+        );
+        assert!(records > 150, "{records} records compared");
     }
 }

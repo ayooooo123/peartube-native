@@ -1314,9 +1314,15 @@ impl Controller {
         self.aborted.load(Ordering::SeqCst)
     }
 
-    async fn aborted(&self) {
-        while !self.is_aborted() {
-            self.notify.notified().await;
+    /// Ends when the controller is aborted; at once when it already is.
+    pub async fn aborted(&self) {
+        loop {
+            // Asked for before the flag is read: an abort between the two is not missed.
+            let notified = self.notify.notified();
+            if self.is_aborted() {
+                return;
+            }
+            notified.await;
         }
     }
 }
@@ -1328,6 +1334,8 @@ pub struct DownloadOptions {
     pub ubit: String,
     pub controller: Option<Controller>,
     pub on_progress: Option<Box<dyn FnMut(DownloadProgress) + Send>>,
+    /// The page's audio only (`-a`: the best AAC stream, copied as it is into an M4A).
+    pub audio: bool,
 }
 
 impl Default for DownloadOptions {
@@ -1338,8 +1346,46 @@ impl Default for DownloadOptions {
             ubit: String::new(),
             controller: None,
             on_progress: None,
+            audio: false,
         }
     }
+}
+
+/// The SDK has no per-call `-a`. Give this call its own settings without changing the mode
+/// of concurrent video downloads or leaving a second copy of the relay's settings on disk.
+fn audio_config(base: &std::path::Path) -> std::io::Result<tempfile::TempDir> {
+    let mut builder = tempfile::Builder::new();
+    #[cfg(unix)]
+    builder.permissions(std::os::unix::fs::PermissionsExt::from_mode(0o700));
+    let dir = builder.prefix("peartube-ubit-").tempdir()?;
+    let mut settings = match std::fs::read(base.join("settings.json")) {
+        Ok(bytes) => {
+            serde_json::from_slice::<serde_json::Map<String, Value>>(&bytes).unwrap_or_default()
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => serde_json::Map::new(),
+        Err(e) => return Err(e),
+    };
+    // The SDK resolves its default jar relative to its settings folder. Keep the operator's
+    // choice without copying the jar into the temporary folder.
+    if settings
+        .get("cookies")
+        .and_then(Value::as_str)
+        .unwrap_or("builtin")
+        == "builtin"
+    {
+        let jar = std::path::absolute(base.join("cookies.txt"))?;
+        settings.insert(
+            "cookies".to_owned(),
+            Value::from(jar.to_string_lossy().as_ref()),
+        );
+    }
+    settings.insert("mode".to_owned(), Value::from("audio"));
+    let mut file = std::fs::OpenOptions::new();
+    file.write(true).create_new(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut file, 0o600);
+    serde_json::to_writer(file.open(dir.path().join("settings.json"))?, &settings)?;
+    Ok(dir)
 }
 
 /// `downloadPage`: drain a page into `out_dir` with live progress, cancelling or timing out a stalled source.
@@ -1354,6 +1400,17 @@ pub async fn download_page(
     }
     let stall = opts.stall_timeout;
     if opts.ubit.is_empty() {
+        let cfg = if opts.config_dir.is_empty() {
+            std::env::temp_dir().join("peartube-ubit")
+        } else {
+            std::path::PathBuf::from(&opts.config_dir)
+        };
+        let audio = opts
+            .audio
+            .then(|| audio_config(&cfg))
+            .transpose()
+            .map_err(|error| IdentifyError::new(error.to_string()))?;
+        let cfg = audio.as_ref().map_or(cfg, |dir| dir.path().to_owned());
         let cancel = ubit::CancelToken::new();
         let abort_guard = controller.clone().map(|ctrl| {
             let cancel = cancel.clone();
@@ -1362,11 +1419,6 @@ pub async fn download_page(
                 cancel.cancel();
             })
         });
-        let cfg = if opts.config_dir.is_empty() {
-            Some(std::env::temp_dir().join("peartube-ubit"))
-        } else {
-            Some(std::path::PathBuf::from(&opts.config_dir))
-        };
         let on_progress = opts.on_progress.take().map(|mut cb| {
             Box::new(move |p: ubit::Progress| {
                 cb(DownloadProgress {
@@ -1380,7 +1432,7 @@ pub async fn download_page(
                 page_url,
                 std::path::Path::new(out_dir),
                 ubit::DownloadOptions {
-                    config_dir: cfg,
+                    config_dir: Some(cfg),
                     connections: 8,
                     stall_timeout: stall,
                     cancel: Some(cancel),
@@ -1414,15 +1466,11 @@ pub async fn download_page(
             }
         };
     }
-    let args = [
-        "get",
-        page_url,
-        "--no-library",
-        "--no-playlist",
-        "--json",
-        "-o",
-        out_dir,
-    ];
+    let mut args = vec!["get", page_url, "--no-library", "--no-playlist", "--json"];
+    if opts.audio {
+        args.push("-a");
+    }
+    args.extend(["-o", out_dir]);
     let mut child = ubit_command(&opts.ubit, &args, &opts.config_dir)
         .spawn()
         .map_err(|_| missing_ubit())?;

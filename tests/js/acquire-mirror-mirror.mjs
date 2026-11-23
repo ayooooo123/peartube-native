@@ -25,6 +25,10 @@ function load (file, rewrites, out) {
     if (!text.includes(`from ${from}`)) throw new Error(`unstubbed import ${from}`)
     text = text.split(`from ${from}`).join(`from ${to}`)
   }
+  // A module the app imports by a relative path does not exist beside the copy: name it here, where the cause is
+  // plain, and not as a missing file under `.gen`.
+  const unmapped = text.match(/from '\.\.?\/[^']+'/g)
+  if (unmapped) throw new Error(`the app's ${file} imports ${unmapped.join(', ')}: add it to the rewrites`)
   const path = join(gen, out)
   writeFileSync(path, text)
   return import(`file://${path}?v=${Math.random()}`)
@@ -47,6 +51,8 @@ const mirrorRewrites = {
   "'./protocol.js'": app_url('src/protocol.js'),
   "'./tags.js'": app_url('src/tags.js'),
   "'./providers/soulseek.js'": app_url('src/providers/soulseek.js'),
+  "'./providers/staging.js'": app_url('src/providers/staging.js'),
+  "'./providers/youtube.js'": app_url('src/providers/youtube.js'),
   "'./hiverelay.js'": stub('acquire-mirror-plants.mjs'),
   "'./traffic.js'": stub('acquire-mirror-plants.mjs'),
   "'./art.js'": stub('acquire-mirror-plants.mjs')
@@ -150,7 +156,7 @@ async function settleRechunk (node) {
   throw new Error('startup count never ran')
 }
 
-const PORTED = ['http-acquire', 'channel-backfill', 'blob-rechunk', 'watch-dir', 'feed-mirror', 'soulseek']
+const PORTED = ['http-acquire', 'channel-backfill', 'blob-rechunk', 'watch-dir', 'feed-mirror', 'soulseek', 'youtube']
 
 async function harness (seedJobs = [], watchDir = null) {
   fsStub.reset()

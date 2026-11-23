@@ -20,6 +20,9 @@ use hyper_util::rt::TokioExecutor;
 use peartube_native::http::{
     Acquirer, Api, ArtLookup, BlobAddr, CastBridge, HttpError, Mirror, Options, ProviderCall,
 };
+use peartube_native::mirror::sources::{
+    OnSource, SearchReply, SearchSummary, SourceError, SourcePart,
+};
 use peartube_native::node::api::*;
 use peartube_native::node::{Node, PutSource};
 use peartube_native::protocol::Music;
@@ -699,12 +702,72 @@ impl Acquirer for FakeAcquirer {
 /// the first album track and the film (deleted) and for the second track (kept).
 struct FakeMirror {
     library: bool,
+    slow_source: Option<Arc<tokio::sync::Notify>>,
 }
 
 const PROVIDER_JOB: &str = "11111111-1111-1111-1111-111111111111";
 
 fn provider_job(status: &str) -> Value {
     json!({ "jobId": PROVIDER_JOB, "plugin": "soulseek", "status": status })
+}
+
+impl peartube_native::http::SourceSearch for FakeMirror {
+    fn search<'a>(
+        &'a self,
+        payload: Value,
+        mut emit: Option<OnSource<'a>>,
+    ) -> futures_util::future::BoxFuture<'a, Result<SearchReply, HttpError>> {
+        Box::pin(async move {
+            let query = payload["query"].as_str().unwrap_or_default();
+            if query.is_empty() || payload.get("stream").is_some() {
+                return Err(HttpError::new(400, "query is required"));
+            }
+            let fast = SourcePart {
+                source: "youtube".into(),
+                results: vec![json!({ "title": query, "source": "youtube" })],
+                truncated: false,
+                error: None,
+            };
+            if let Some(emit) = emit.as_mut() {
+                emit(&fast);
+            }
+            if let Some(wait) = &self.slow_source {
+                wait.notified().await;
+            }
+            if query == "interrupted" {
+                return Err(HttpError::new(400, "Host closed"));
+            }
+            let slow = SourcePart {
+                source: "soulseek".into(),
+                results: Vec::new(),
+                truncated: false,
+                error: Some(SourceError {
+                    source: "soulseek".into(),
+                    status: 503,
+                    message: "No peer".into(),
+                }),
+            };
+            if let Some(emit) = emit {
+                emit(&slow);
+            }
+            Ok(SearchReply {
+                summary: SearchSummary {
+                    query: query.into(),
+                    sources: vec![slow.source, fast.source],
+                    by_source: Map::from_iter([
+                        ("soulseek".into(), 0.into()),
+                        ("youtube".into(), 1.into()),
+                    ]),
+                    truncated: Map::from_iter([
+                        ("soulseek".into(), false.into()),
+                        ("youtube".into(), false.into()),
+                    ]),
+                    errors: slow.error.into_iter().collect(),
+                },
+                results: fast.results,
+            })
+        })
+    }
 }
 
 impl Mirror for FakeMirror {
@@ -718,6 +781,12 @@ impl Mirror for FakeMirror {
         payload: Value,
     ) -> futures_util::future::BoxFuture<'a, Result<Value, HttpError>> {
         Box::pin(async move { Ok(json!({ "plugin": plugin, "payload": payload })) })
+    }
+
+    fn source_search(
+        self: Arc<Self>,
+    ) -> Result<Arc<dyn peartube_native::http::SourceSearch>, HttpError> {
+        Ok(self)
     }
 
     fn provider<'a>(
@@ -769,6 +838,29 @@ impl Mirror for FakeMirror {
                     Some((format!("{id}/{sha256}"), file))
                 })
                 .collect()
+        })
+    }
+
+    fn provider_thumb<'a>(
+        &'a self,
+        name: &'a str,
+        id: &'a str,
+    ) -> futures_util::future::BoxFuture<
+        'a,
+        Result<Option<peartube_native::providers::youtube::Picture>, HttpError>,
+    > {
+        Box::pin(async move {
+            if id == "broken" {
+                return Err(HttpError::new(503, "Picture unavailable"));
+            }
+            Ok(
+                (self.library && name == "youtube" && id == "dQw4w9WgXcQ").then(|| {
+                    peartube_native::providers::youtube::Picture {
+                        content_type: "image/jpeg".to_owned(),
+                        bytes: Bytes::from_static(b"\xff\xd8\0\xfe"),
+                    }
+                }),
+            )
         })
     }
 }
@@ -848,7 +940,10 @@ fn full_options(token: Option<&str>) -> Options {
         || json!({ "lan": null, "apiUrl": "http://relay.local:8174" }),
     ));
     options.acquirer = Some(Arc::new(FakeAcquirer { known_only: false }));
-    options.mirror = Some(Arc::new(FakeMirror { library: false }));
+    options.mirror = Some(Arc::new(FakeMirror {
+        library: false,
+        slow_source: None,
+    }));
     options.cast = Some(Arc::new(FakeCast));
     options.on_sources_changed = Some(Arc::new(|_sources| {}));
     options
@@ -881,6 +976,11 @@ async fn call(addr: SocketAddr, recorded: &Recorded) -> (u16, BTreeMap<String, S
         Client::builder(TokioExecutor::new()).build_http();
     let response = client.request(request).await.expect("response");
     let status = response.status().as_u16();
+    let image = response
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|t| t.starts_with("image/"));
     let mut seen = BTreeMap::new();
     for (name, value) in response.headers() {
         let name = name.as_str();
@@ -899,7 +999,8 @@ async fn call(addr: SocketAddr, recorded: &Recorded) -> (u16, BTreeMap<String, S
                 | "cross-origin-resource-policy"
                 | "cross-origin-opener-policy"
                 | "cross-origin-embedder-policy"
-        ) {
+        ) || (image && name == "content-length")
+        {
             seen.insert(
                 name.to_owned(),
                 value.to_str().unwrap_or_default().to_owned(),
@@ -912,7 +1013,11 @@ async fn call(addr: SocketAddr, recorded: &Recorded) -> (u16, BTreeMap<String, S
         .await
         .expect("body")
         .to_bytes();
-    let body = String::from_utf8_lossy(&body).into_owned();
+    let body = if image {
+        peartube_native::private_overlay::to_hex(&body)
+    } else {
+        String::from_utf8_lossy(&body).into_owned()
+    };
     (status, seen, body)
 }
 
@@ -1004,8 +1109,60 @@ async fn token_scenario_matches_the_app() {
 async fn library_scenario_matches_the_app() {
     let mut options = full_options(None);
     options.acquirer = Some(Arc::new(FakeAcquirer { known_only: true }));
-    options.mirror = Some(Arc::new(FakeMirror { library: true }));
+    options.mirror = Some(Arc::new(FakeMirror {
+        library: true,
+        slow_source: None,
+    }));
     replay("library", options, Some(Arc::new(Fake::library(STREAM)))).await;
+}
+
+#[tokio::test]
+async fn fast_source_reaches_the_client_while_the_peer_is_still_searching() {
+    let gate = Arc::new(tokio::sync::Notify::new());
+    let api = Api::<Fake>::new(Options {
+        mirror: Some(Arc::new(FakeMirror {
+            library: true,
+            slow_source: Some(gate.clone()),
+        })),
+        ..Options::default()
+    });
+    let server = api.bind("127.0.0.1:0".parse().unwrap()).await.unwrap();
+    let client: Client<HttpConnector, Full<Bytes>> =
+        Client::builder(TokioExecutor::new()).build_http();
+    let req = Request::post(format!("http://{}/v1/search/sources", server.addr()))
+        .header("host", HOST)
+        .body(Full::new(Bytes::from_static(
+            br#"{"query":"music","stream":true}"#,
+        )))
+        .unwrap();
+    let reference = reference();
+    let wire = reference
+        .scenarios
+        .iter()
+        .flat_map(|s| &s.responses)
+        .find(|r| {
+            r.path == "/v1/search/sources"
+                && r.body.starts_with("event: source")
+                && r.body.contains("event: done")
+        })
+        .unwrap();
+    let (first, rest) = wire.body.split_at(wire.body.find("\n\n").unwrap() + 2);
+    tokio::time::timeout(Duration::from_secs(5), async {
+        let mut body = client.request(req).await.unwrap().into_body();
+        let mut received = Vec::new();
+        while received.len() < first.len() {
+            received.extend(body.frame().await.unwrap().unwrap().into_data().unwrap());
+        }
+        assert_eq!(received, first.as_bytes());
+        gate.notify_one();
+        assert_eq!(
+            body.collect().await.unwrap().to_bytes().as_ref(),
+            rest.as_bytes()
+        );
+    })
+    .await
+    .expect("the first complete event must arrive before the second source is released");
+    server.close().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]

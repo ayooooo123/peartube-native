@@ -1198,6 +1198,7 @@
       "method": "GET",
       "userAgent": "PearTube",
       "maxBytes": null,
+      "binary": false,
       "timeoutMs": null,
       "requests": [
         {
@@ -1229,6 +1230,7 @@
       "method": "GET",
       "userAgent": "Custom/1",
       "maxBytes": null,
+      "binary": false,
       "timeoutMs": null,
       "requests": [
         {
@@ -1261,6 +1263,7 @@
       "method": "HEAD",
       "userAgent": "PearTube",
       "maxBytes": null,
+      "binary": false,
       "timeoutMs": null,
       "requests": [
         {
@@ -1327,6 +1330,7 @@
       "method": "GET",
       "userAgent": "PearTube",
       "maxBytes": null,
+      "binary": false,
       "timeoutMs": null,
       "requests": [
         {
@@ -1417,6 +1421,7 @@
       "method": "GET",
       "userAgent": "PearTube",
       "maxBytes": null,
+      "binary": false,
       "timeoutMs": null,
       "requests": [
         {
@@ -1471,6 +1476,7 @@
       "method": "GET",
       "userAgent": "PearTube",
       "maxBytes": null,
+      "binary": false,
       "timeoutMs": 120,
       "requests": [
         {
@@ -1492,6 +1498,7 @@
       "method": "GET",
       "userAgent": "PearTube",
       "maxBytes": null,
+      "binary": false,
       "timeoutMs": null,
       "requests": [],
       "error": {
@@ -1507,12 +1514,156 @@
       "method": "GET",
       "userAgent": "PearTube",
       "maxBytes": null,
+      "binary": false,
       "timeoutMs": null,
       "requests": [],
       "error": {
         "message": "Not a valid link",
         "status": null,
         "code": null
+      }
+    },
+    {
+      "name": "bytes that are not text come as text",
+      "url": "{BASE}/bytes",
+      "routes": [
+        {
+          "path": "/bytes",
+          "status": 200,
+          "headers": {
+            "content-type": "image/jpeg"
+          },
+          "bodyHex": "ffd8ffe000104a46494600c3a9ff"
+        }
+      ],
+      "method": "GET",
+      "userAgent": "PearTube",
+      "maxBytes": null,
+      "binary": false,
+      "timeoutMs": null,
+      "requests": [
+        {
+          "method": "GET",
+          "path": "/bytes",
+          "userAgent": "PearTube"
+        }
+      ],
+      "out": {
+        "status": 200,
+        "urlPath": "/bytes",
+        "contentType": "image/jpeg",
+        "body": "����\u0000\u0010JFIF\u0000é�"
+      }
+    },
+    {
+      "name": "binary keeps the bytes",
+      "url": "{BASE}/bytes",
+      "routes": [
+        {
+          "path": "/bytes",
+          "status": 200,
+          "headers": {
+            "content-type": "image/jpeg"
+          },
+          "bodyHex": "ffd8ffe000104a46494600c3a9ff"
+        }
+      ],
+      "method": "GET",
+      "userAgent": "PearTube",
+      "maxBytes": null,
+      "binary": true,
+      "timeoutMs": null,
+      "requests": [
+        {
+          "method": "GET",
+          "path": "/bytes",
+          "userAgent": "PearTube"
+        }
+      ],
+      "out": {
+        "status": 200,
+        "urlPath": "/bytes",
+        "contentType": "image/jpeg",
+        "body": {
+          "hex": "ffd8ffe000104a46494600c3a9ff"
+        }
+      }
+    },
+    {
+      "name": "binary keeps the bytes across a redirect",
+      "url": "{BASE}/to",
+      "routes": [
+        {
+          "path": "/to",
+          "status": 302,
+          "headers": {
+            "location": "/bytes"
+          }
+        },
+        {
+          "path": "/bytes",
+          "status": 200,
+          "headers": {
+            "content-type": "image/jpeg"
+          },
+          "bodyHex": "ffd8ffe000104a46494600c3a9ff"
+        }
+      ],
+      "method": "GET",
+      "userAgent": "PearTube",
+      "maxBytes": null,
+      "binary": true,
+      "timeoutMs": null,
+      "requests": [
+        {
+          "method": "GET",
+          "path": "/to",
+          "userAgent": "PearTube"
+        },
+        {
+          "method": "GET",
+          "path": "/bytes",
+          "userAgent": "PearTube"
+        }
+      ],
+      "out": {
+        "status": 200,
+        "urlPath": "/bytes",
+        "contentType": "image/jpeg",
+        "body": {
+          "hex": "ffd8ffe000104a46494600c3a9ff"
+        }
+      }
+    },
+    {
+      "name": "binary keeps an empty body",
+      "url": "{BASE}/none",
+      "routes": [
+        {
+          "path": "/none",
+          "status": 204,
+          "headers": {}
+        }
+      ],
+      "method": "GET",
+      "userAgent": "PearTube",
+      "maxBytes": null,
+      "binary": true,
+      "timeoutMs": null,
+      "requests": [
+        {
+          "method": "GET",
+          "path": "/none",
+          "userAgent": "PearTube"
+        }
+      ],
+      "out": {
+        "status": 204,
+        "urlPath": "/none",
+        "contentType": null,
+        "body": {
+          "hex": ""
+        }
       }
     }
   ],
@@ -2085,6 +2236,7 @@
       "configDir": "",
       "stallTimeout": 30000,
       "cancelled": null,
+      "audio": false,
       "plan": {
         "stdout": [
           "{\"event\":\"progress\",\"downloaded\":10,\"total\":100}\n{\"event\":\"pro",
@@ -2128,6 +2280,7 @@
       "configDir": "",
       "stallTimeout": 30000,
       "cancelled": null,
+      "audio": false,
       "plan": {
         "stdout": [
           "{\"event\":\"error\",\"error\":\"HTTP 403 forbidden\"}\n"
@@ -2159,6 +2312,7 @@
       "configDir": "",
       "stallTimeout": 30000,
       "cancelled": null,
+      "audio": false,
       "plan": {
         "stdout": [],
         "stderr": [
@@ -2191,6 +2345,7 @@
       "configDir": "",
       "stallTimeout": 30000,
       "cancelled": null,
+      "audio": false,
       "plan": {
         "stdout": [
           "{\"event\":\"progress\",\"downloaded\":5}\n"
@@ -2227,6 +2382,7 @@
       "configDir": "",
       "stallTimeout": 30000,
       "cancelled": null,
+      "audio": false,
       "plan": {
         "stdout": [
           "{\"event\":\"done\",\"path\":\"/out/a.mkv\",\"size\":12.5}\n"
@@ -2257,6 +2413,7 @@
       "configDir": "",
       "stallTimeout": 30000,
       "cancelled": null,
+      "audio": false,
       "plan": {
         "stdout": [
           "{\"event\":\"done\",\"path\":\"/out/b.mkv\",\"size\":0}\n"
@@ -2287,6 +2444,7 @@
       "configDir": "",
       "stallTimeout": 30000,
       "cancelled": null,
+      "audio": false,
       "plan": {
         "stdout": [
           "{\"event\":\"done\",\"path\":7,\"size\":3}\n"
@@ -2318,6 +2476,7 @@
       "configDir": "",
       "stallTimeout": 120,
       "cancelled": null,
+      "audio": false,
       "plan": {
         "stdout": [
           "{\"event\":\"progress\",\"downloaded\":1}\n"
@@ -2354,6 +2513,7 @@
       "configDir": "",
       "stallTimeout": 30000,
       "cancelled": "before",
+      "audio": false,
       "plan": null,
       "progress": [],
       "error": {
@@ -2372,6 +2532,7 @@
       "configDir": "",
       "stallTimeout": 30000,
       "cancelled": "progress",
+      "audio": false,
       "plan": {
         "stdout": [
           "{\"event\":\"progress\",\"downloaded\":1}\n"
@@ -2408,6 +2569,7 @@
       "configDir": "/tmp/ubit-config",
       "stallTimeout": 30000,
       "cancelled": null,
+      "audio": false,
       "plan": {
         "stdout": [
           "{\"event\":\"done\",\"path\":\"/out/c.mkv\",\"size\":1}\n"
@@ -2430,6 +2592,38 @@
           "{OUT}"
         ],
         "configDir": "/tmp/ubit-config"
+      }
+    },
+    {
+      "name": "audio only is asked for with -a",
+      "url": "https://vid.example/page",
+      "configDir": "",
+      "stallTimeout": 30000,
+      "cancelled": null,
+      "audio": true,
+      "plan": {
+        "stdout": [
+          "{\"event\":\"done\",\"path\":\"/out/d.m4a\",\"size\":9}\n"
+        ],
+        "exit": 0
+      },
+      "progress": [],
+      "out": {
+        "path": "/out/d.m4a",
+        "size": 9
+      },
+      "observed": {
+        "argv": [
+          "get",
+          "{BASE}",
+          "--no-library",
+          "--no-playlist",
+          "--json",
+          "-a",
+          "-o",
+          "{OUT}"
+        ],
+        "configDir": null
       }
     }
   ],
@@ -2950,7 +3144,7 @@
         ],
         "match": "imdb:tt0133093",
         "plain": {
-          "id": "clip:4f3acf17a675774c",
+          "id": "clip:e2e2914dc89310c1",
           "title": "The Matrix"
         }
       }

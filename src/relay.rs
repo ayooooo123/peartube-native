@@ -3,12 +3,15 @@
 //!
 //! The API stays up for the whole process. The node, acquirer and plugins open from the current
 //! settings and reopen in this process when a setting that shapes the node changes; live settings
-//! apply in place. Opens, reopens and live changes run one at a time.
+//! apply in place. Opens, reopens and live changes run one at a time, and each runs to its end once
+//! it has started, whatever happens to the request that asked for it. The plugins start after the
+//! node answers, outside those steps: a reopen or a stop closes their host and waits for one file
+//! of a folder import, not for the whole import.
 
 use std::collections::HashMap;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 
 use futures_util::future::BoxFuture;
@@ -23,7 +26,8 @@ use crate::cast::traits::CastPeer;
 use crate::cast::{CastController, ControllerOptions};
 use crate::http::{self, Api, ApiServer, BlobAddr, HttpError, Options};
 use crate::mirror::{
-    ArtFeed, LocalMirrorFiles, MirrorConfig, MirrorHost, MirrorOptions, SoulseekSettings,
+    ArtFeed, ArtPictures, LocalMirrorFiles, MirrorConfig, MirrorHost, MirrorOptions,
+    SoulseekSettings, YoutubeSettings,
 };
 use crate::node::Node;
 use crate::node::core::{CoreNode, NodeStreams, create_node};
@@ -31,7 +35,7 @@ use crate::private_overlay::dht::DhtOptions;
 use crate::private_overlay::peeroxide::open_dht;
 use crate::private_overlay::{GuardOptions, PrivateGuard, create_private_guard, to_hex};
 use crate::protocol::API_PORT;
-use crate::providers::soulseek;
+use crate::providers::{soulseek, youtube};
 use crate::replicate::{ReplicateConfig, Replicator};
 use crate::settings::Settings;
 use crate::traffic::TrafficGate;
@@ -45,7 +49,10 @@ type Shared<T> = Arc<Mutex<Option<T>>>;
 struct Open {
     node: Arc<CoreNode>,
     acquirer: Acquirer<CoreNode>,
+    /// `mirrorHost`: the plugin host, from the moment its plugins are registered.
     mirror: Arc<MirrorHost<CoreNode>>,
+    /// `mirrorStarting`: true once the host's start runs have ended, or a close has ended them.
+    started: tokio::sync::watch::Receiver<bool>,
     changes: tokio::task::JoinHandle<()>,
     replication: Replication,
     /// The files global search may offer.
@@ -55,12 +62,14 @@ struct Open {
 /// `p2p-replicate` and the traffic gate whose `peersBusy` it waits on.
 struct Replication {
     replicator: Replicator,
-    traffic: TrafficGate,
-    detach_traffic: Box<dyn Fn() + Send + Sync>,
     /// `scheduleReplicate`: catalog changes ask for a pass, 2 s later and one at a time.
     kick: Arc<tokio::sync::Notify>,
     kicker: tokio::task::JoinHandle<()>,
 }
+
+const RUNNING: u8 = 0;
+const STOPPING: u8 = 1;
+const STOPPED: u8 = 2;
 
 struct Inner {
     env: HashMap<String, String>,
@@ -71,7 +80,11 @@ struct Inner {
     /// The serial lifecycle: `Some` while a node is open.
     open: tokio::sync::Mutex<Option<Open>>,
     acquirer: Shared<Acquirer<CoreNode>>,
+    /// `state.mirror`: the plugin host once it has started; the API reaches the plugins through it.
     mirror: Shared<Arc<MirrorHost<CoreNode>>>,
+    /// `mirrorHost`: the same host from the moment it exists, so that a shutdown can close it
+    /// while it starts.
+    host: Shared<Arc<MirrorHost<CoreNode>>>,
     /// `state.cast`: the cast stack, open with the node (`null` between opens).
     cast: Shared<Arc<CastController>>,
     /// `lanHost()` as the cast stack reads it: the setting, else the detected LAN address.
@@ -81,7 +94,7 @@ struct Inner {
     /// `privateGuard`: the forwarder for other peers' private routing, with the settings it runs.
     guard: Arc<Mutex<Option<(String, PrivateGuard)>>>,
     retry_pending: AtomicBool,
-    shutting_down: AtomicBool,
+    shutdown_state: AtomicU8,
 }
 
 /// The relay process. Cloning shares it.
@@ -177,7 +190,7 @@ impl Relay {
                                 .upgrade()
                                 .ok_or_else(|| HttpError::new(503, "The relay is shutting down"))?;
                             Relay(inner)
-                                .reopen()
+                                .restart()
                                 .await
                                 .map_err(|e| HttpError::new(400, e))
                         }) as BoxFuture<'static, _>
@@ -249,12 +262,13 @@ impl Relay {
                 open: tokio::sync::Mutex::new(None),
                 acquirer: Arc::new(Mutex::new(None)),
                 mirror: Arc::new(Mutex::new(None)),
+                host: Arc::new(Mutex::new(None)),
                 cast: Arc::new(Mutex::new(None)),
                 cast_host: cast_host.clone(),
                 extra: extra.clone(),
                 guard: guard.clone(),
                 retry_pending: AtomicBool::new(false),
-                shutting_down: AtomicBool::new(false),
+                shutdown_state: AtomicU8::new(RUNNING),
             }
         });
         let relay = Relay(relay);
@@ -292,16 +306,27 @@ impl Relay {
 
     /// The first open; the process logs `relay ready` once it returns.
     pub async fn start(&self) -> Result<Value, String> {
-        let mut open = self.0.open.lock().await;
-        self.open_locked(&mut open).await?;
-        if let Err(error) = self.apply_guard().await {
-            log("private guard failed to start", json!({ "error": error }));
-        }
-        let status = match open.as_ref() {
-            Some(open) => serde_json::to_value(open.node.status().await).unwrap_or(Value::Null),
-            None => Value::Null,
-        };
-        Ok(status)
+        let relay = self.clone();
+        run_to_end(async move {
+            let started = {
+                let mut open = relay.turn().await?;
+                relay.open_locked(&mut open).await?;
+                open.as_ref().map(|open| open.started.clone())
+            };
+            // `await mirrorStarting`, outside the serial lifecycle: the relay is ready once its
+            // plugins have started, and a restart or a stop can end the start runs before that.
+            if let Some(started) = started {
+                wait_started(started).await;
+            }
+            // `serial(applyGuard)`: a step asked for after a shutdown refuses at once, and its
+            // refusal is a guard failure the owner sees, like any other. A step admitted before
+            // the signal runs to its end and reports what it finds.
+            if let Err(error) = relay.start_guard().await {
+                log("private guard failed to start", json!({ "error": error }));
+            }
+            Ok(relay.status().await.unwrap_or(Value::Null))
+        })
+        .await
     }
 
     /// Where the API listens: HTTP first, then HTTPS when a certificate is configured.
@@ -323,16 +348,34 @@ impl Relay {
 
     /// SIGTERM: stop the API, close what is open and return.
     pub async fn shutdown(&self) {
-        if self.0.shutting_down.swap(true, Ordering::SeqCst) {
+        if self.0.shutdown_state.fetch_max(STOPPING, Ordering::SeqCst) != RUNNING {
             return;
         }
         let servers: Vec<ApiServer> = std::mem::take(&mut *self.0.servers.lock().unwrap());
         for server in servers {
             server.close().await;
         }
+        // The plugins stop first, without a wait for the step in flight: a step that waits for the
+        // start runs (a live setting for the plugins) then ends with them, between files.
+        let host = self.0.host.lock().unwrap().clone();
+        if let Some(host) = &host {
+            // End a startup import between files before waiting for the step that uses it.
+            host.close().await;
+        }
         let mut open = self.0.open.lock().await;
-        self.close_locked(&mut open).await;
+        self.close_locked(&mut open, host.as_ref()).await;
         self.stop_guard().await;
+        // Still holding the node lock: nothing that arrives behind this stop may reopen storage.
+        self.0.shutdown_state.store(STOPPED, Ordering::SeqCst);
+    }
+
+    /// `serial(applyGuard)` once the plugins start: the guard opens when the settings want one.
+    /// A step asked for after a shutdown has begun refuses at once; a step admitted before the
+    /// signal runs to its end and reports the error it then finds, whatever a shutdown does
+    /// meanwhile.
+    async fn start_guard(&self) -> Result<(), String> {
+        let _turn = self.turn().await?;
+        self.apply_guard().await
     }
 
     /// `applyGuard()`: the guard runs on its own HyperDHT and port with a fresh key each
@@ -401,10 +444,31 @@ impl Relay {
         self.0.settings.lock().await.get(key)
     }
 
-    async fn open_locked(&self, open: &mut Option<Open>) -> Result<(), String> {
-        if self.0.shutting_down.load(Ordering::SeqCst) {
+    /// The check `serial` makes when a step is asked for: after a shutdown has begun, no step
+    /// starts any more work.
+    fn running(&self) -> Result<(), String> {
+        if self.0.shutdown_state.load(Ordering::SeqCst) == RUNNING {
+            Ok(())
+        } else {
+            Err("The relay is shutting down".into())
+        }
+    }
+
+    /// `serial(fn)`: the lifecycle steps run one at a time, in the order they were asked for. A
+    /// step that is asked for after a shutdown has begun refuses at once; a step that was asked
+    /// for before it runs when its turn comes.
+    async fn turn(&self) -> Result<tokio::sync::MutexGuard<'_, Option<Open>>, String> {
+        self.running()?;
+        let open = self.0.open.lock().await;
+        // A task can be preempted between admission and joining the queue. An admitted task
+        // ahead of the final stop still runs; one behind it cannot reopen a closed relay.
+        if self.0.shutdown_state.load(Ordering::SeqCst) == STOPPED {
             return Err("The relay is shutting down".into());
         }
+        Ok(open)
+    }
+
+    async fn open_locked(&self, open: &mut Option<Open>) -> Result<(), String> {
         let snapshot = self.0.settings.lock().await.snapshot();
         // The snapshot holds each value JSON-encoded, the form `markApplied` compares.
         let cfg = |key: &str| {
@@ -575,80 +639,105 @@ impl Relay {
             self.0.storage.clone(),
             global_search,
         );
-        let mirror = Arc::new(
-            MirrorHost::start(
-                node.clone(),
-                Some(acquirer.clone()),
-                Arc::new(LocalMirrorFiles),
-                Arc::new(NodeStreams),
-                Arc::new(NodeStreams),
-                Arc::new(ArtFeed {
-                    allow_private_urls: matches!(
-                        self.0
-                            .env
-                            .get("PEARTUBE_ALLOW_PRIVATE_URLS")
-                            .map(String::as_str),
-                        Some("1" | "true")
-                    ),
-                }),
-                vec![seeder, media_check.clone()],
-                MirrorOptions {
-                    storage: self.0.storage.display().to_string(),
-                    mirror_channel: js_truthy(&cfg("publishChannel")),
-                    rechunk: js_truthy(&cfg("rechunk")),
-                    watch_dir: self
-                        .0
-                        .env
-                        .get("PEARTUBE_WATCH_DIR")
-                        .cloned()
-                        .and_then(non_empty),
-                    feeds: strings(&cfg("feeds")),
-                    soulseek: SoulseekSettings {
-                        user: text(&cfg("slskUser")),
-                        pass: text(&cfg("slskPass")),
-                        server: text(&cfg("slskServer")),
-                        listen_port: cfg("slskListenPort")
-                            .as_u64()
-                            .and_then(|port| u16::try_from(port).ok())
-                            .unwrap_or(soulseek::DEFAULT_LISTEN_PORT),
-                        share: js_truthy(&cfg("slskShare")),
-                        share_max_files: cfg("slskShareMaxFiles")
-                            .as_u64()
-                            .and_then(|files| u32::try_from(files).ok())
-                            .unwrap_or(soulseek::DEFAULT_SHARE_MAX_FILES),
-                        backend: soulseek::client::network(),
-                        ..SoulseekSettings::default()
-                    },
-                    plugins_dir: None,
-                    start_runs: if hiverelay_enabled {
-                        vec!["hiverelay-seed".to_owned()]
-                    } else {
-                        Vec::new()
-                    },
-                    onchange: Some(notify.clone()),
-                    ..MirrorOptions::default()
-                },
-            )
-            .await,
+        let allow_private_urls = matches!(
+            self.0
+                .env
+                .get("PEARTUBE_ALLOW_PRIVATE_URLS")
+                .map(String::as_str),
+            Some("1" | "true")
         );
-        *self.0.mirror.lock().unwrap() = Some(mirror.clone());
+        let mirror = Arc::new(MirrorHost::open(
+            node.clone(),
+            Some(acquirer.clone()),
+            Arc::new(LocalMirrorFiles),
+            Arc::new(NodeStreams),
+            Arc::new(NodeStreams),
+            Arc::new(ArtFeed { allow_private_urls }),
+            vec![seeder, media_check.clone()],
+            MirrorOptions {
+                storage: self.0.storage.display().to_string(),
+                mirror_channel: js_truthy(&cfg("publishChannel")),
+                rechunk: js_truthy(&cfg("rechunk")),
+                watch_dir: self
+                    .0
+                    .env
+                    .get("PEARTUBE_WATCH_DIR")
+                    .cloned()
+                    .and_then(non_empty),
+                feeds: strings(&cfg("feeds")),
+                soulseek: SoulseekSettings {
+                    user: text(&cfg("slskUser")),
+                    pass: text(&cfg("slskPass")),
+                    server: text(&cfg("slskServer")),
+                    listen_port: cfg("slskListenPort")
+                        .as_u64()
+                        .and_then(|port| u16::try_from(port).ok())
+                        .unwrap_or(soulseek::DEFAULT_LISTEN_PORT),
+                    share: js_truthy(&cfg("slskShare")),
+                    share_max_files: cfg("slskShareMaxFiles")
+                        .as_u64()
+                        .and_then(|files| u32::try_from(files).ok())
+                        .unwrap_or(soulseek::DEFAULT_SHARE_MAX_FILES),
+                    backend: soulseek::client::network(),
+                    ..SoulseekSettings::default()
+                },
+                youtube: YoutubeSettings {
+                    backend: Some(Arc::new(youtube::Ubit {
+                        config_dir: self.ubit_config(),
+                        ubit: ubit_bin(&self.0.env),
+                    })),
+                    fetch: Arc::new(ArtPictures { allow_private_urls }),
+                    ..YoutubeSettings::default()
+                },
+                plugins_dir: None,
+                start_runs: if hiverelay_enabled {
+                    vec!["hiverelay-seed".to_owned()]
+                } else {
+                    Vec::new()
+                },
+                stop_traffic: Some(Box::new({
+                    let gate = traffic.clone();
+                    move || {
+                        detach_traffic();
+                        gate.stop();
+                    }
+                })),
+                onchange: Some(notify.clone()),
+                ..MirrorOptions::default()
+            },
+        ));
+        // `onstarting`: from here on a stop can close the host, also while it starts.
+        *self.0.host.lock().unwrap() = Some(mirror.clone());
         node.serve_search(search_serve(&media_check, global_search));
-        if global_search {
-            let mirror = mirror.clone();
-            tokio::spawn(async move {
-                let _ = mirror.run("media-check", json!({})).await;
-            });
-        }
+        let (done, started) = tokio::sync::watch::channel(false);
         let replication = self
             .start_replication(
                 &node,
                 &mirror,
+                started.clone(),
                 notify.clone(),
                 traffic,
-                detach_traffic,
                 hiverelay_enabled,
             )
             .await;
+        // Plugins start after the node answers: the channel backfill and the folder import can
+        // take a while on a large library.
+        tokio::spawn({
+            let (host, slot, notify) = (mirror.clone(), self.0.mirror.clone(), notify.clone());
+            async move {
+                host.startup().await;
+                // `state.mirror = mirror`: the API reaches the plugins from here on.
+                *slot.lock().unwrap() = Some(host.clone());
+                if global_search && !host.is_closed() {
+                    let host = host.clone();
+                    tokio::spawn(async move {
+                        let _ = host.run("media-check", json!({})).await;
+                    });
+                }
+                let _ = done.send(true);
+                notify();
+            }
+        });
 
         let mut changes = node.onchange();
         let kick = replication.kick.clone();
@@ -662,6 +751,7 @@ impl Relay {
             node,
             acquirer,
             mirror,
+            started,
             changes,
             replication,
             media_check,
@@ -670,20 +760,19 @@ impl Relay {
         Ok(())
     }
 
-    #[allow(clippy::too_many_arguments)] // the node, its plugins, and the one gate they share
     async fn start_replication(
         &self,
         node: &Arc<CoreNode>,
         mirror: &Arc<MirrorHost<CoreNode>>,
+        started: tokio::sync::watch::Receiver<bool>,
         onchange: Arc<dyn Fn() + Send + Sync>,
         traffic: TrafficGate,
-        detach_traffic: Box<dyn Fn() + Send + Sync>,
         hiverelay: bool,
     ) -> Replication {
         let replicator = Replicator::new(
             node.clone(),
             self.0.storage.clone(),
-            traffic.clone(),
+            traffic,
             self.replicate_config().await,
             Some(onchange),
         );
@@ -692,6 +781,8 @@ impl Relay {
         let kicker = {
             let (mirror, kick, replicator) = (mirror.clone(), kick.clone(), replicator.clone());
             tokio::spawn(async move {
+                // `scheduleReplicate` runs `state.mirror?.run(...)`: nothing while the plugins start.
+                wait_started(started).await;
                 loop {
                     kick.notified().await;
                     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
@@ -708,8 +799,6 @@ impl Relay {
         kick.notify_one();
         Replication {
             replicator,
-            traffic,
-            detach_traffic,
             kick,
             kicker,
         }
@@ -726,11 +815,16 @@ impl Relay {
     }
 
     /// The node keeps serving until the plugins have stopped.
-    async fn close_locked(&self, open: &mut Option<Open>) {
+    async fn close_locked(
+        &self,
+        open: &mut Option<Open>,
+        stopped_host: Option<&Arc<MirrorHost<CoreNode>>>,
+    ) {
         let Some(Open {
             node,
             acquirer,
             mirror,
+            started,
             changes,
             replication,
             media_check: _,
@@ -738,7 +832,12 @@ impl Relay {
         else {
             return;
         };
-        mirror.close().await;
+        if !stopped_host.is_some_and(|host| Arc::ptr_eq(host, &mirror)) {
+            mirror.close().await;
+        }
+        // `await mirrorStarting`: the closed host starts nothing more, and a folder import in
+        // flight ends between files.
+        wait_started(started).await;
         // The cast stack closes before the node it drives, as `stop()` does.
         self.0.api.set_cast(None);
         let cast = self.0.cast.lock().unwrap().take();
@@ -746,9 +845,8 @@ impl Relay {
             cast.close().await;
         }
         replication.kicker.abort();
-        (replication.detach_traffic)();
-        replication.traffic.stop();
         *self.0.mirror.lock().unwrap() = None;
+        *self.0.host.lock().unwrap() = None;
         *self.0.acquirer.lock().unwrap() = None;
         acquirer.close();
         changes.abort();
@@ -761,15 +859,15 @@ impl Relay {
     }
 
     async fn reopen(&self) -> Result<(), String> {
-        let mut open = self.0.open.lock().await;
+        let mut open = self.turn().await?;
         self.reopen_locked(&mut open).await
     }
 
     async fn reopen_locked(&self, open: &mut Option<Open>) -> Result<(), String> {
-        self.close_locked(open).await;
+        self.close_locked(open, None).await;
         let result = self.open_locked(open).await;
         if let Err(error) = &result
-            && !self.0.shutting_down.load(Ordering::SeqCst)
+            && self.running().is_ok()
         {
             log("restart failed", json!({ "error": error }));
             if !self.0.retry_pending.swap(true, Ordering::Relaxed) {
@@ -786,7 +884,7 @@ impl Relay {
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
         let mut open = self.0.open.lock().await;
         self.0.retry_pending.store(false, Ordering::Relaxed);
-        if open.is_some() || self.0.shutting_down.load(Ordering::SeqCst) {
+        if open.is_some() || self.running().is_err() {
             return;
         }
         if let Err(error) = self.open_locked(&mut open).await {
@@ -796,9 +894,20 @@ impl Relay {
         }
     }
 
-    /// `state.applySettings(changed)`: live settings apply in place; any other change reopens.
+    /// `state.restart()`: reopens the node, then runs the guard step, which brings back a guard
+    /// that is wanted and does not run. The client gets the reason when one of them fails.
+    async fn restart(&self) -> Result<(), String> {
+        let mut open = self.turn().await?;
+        self.reopen_locked(&mut open).await?;
+        self.apply_guard().await?;
+        self.notify("update");
+        Ok(())
+    }
+
+    /// `state.applySettings(changed)`: live settings apply in place; any other change reopens
+    /// the node.
     async fn apply_settings(&self, changed: Vec<String>) -> Result<(), String> {
-        let mut open = self.0.open.lock().await;
+        let mut open = self.turn().await?;
         let live = {
             let settings = self.0.settings.lock().await;
             changed.iter().all(|key| settings.is_live(key))
@@ -813,6 +922,7 @@ impl Relay {
             current.mirror.clone(),
         );
         let media_check = current.media_check.clone();
+        let started = current.started.clone();
         let (replicator, kick) = (
             current.replication.replicator.clone(),
             current.replication.kick.clone(),
@@ -841,7 +951,24 @@ impl Relay {
             let sources = node.list_sources().await;
             self.sync_directory(&node, &sources).await?;
         }
-        if has(&["rechunk"]) && js_truthy(&self.cfg("rechunk").await) {
+        // `await mirrorStarting`: these changes go to the plugins, which must have started.
+        let convert = has(&["rechunk"]) && js_truthy(&self.cfg("rechunk").await);
+        if convert
+            || has(&[
+                "feeds",
+                "replicate",
+                "replicateSources",
+                "replicateFreeGb",
+                "replicateMbps",
+                "globalSearch",
+                "slskUser",
+                "slskPass",
+                "slskServer",
+            ])
+        {
+            wait_started(started).await;
+        }
+        if convert {
             let mirror = mirror.clone();
             tokio::spawn(async move {
                 let _ = mirror.run("blob-rechunk", Value::Null).await;
@@ -1064,6 +1191,26 @@ impl Relay {
     }
 }
 
+/// Runs one lifecycle step on its own task and waits for it there. `bin/relay.js` gets this from
+/// its promises: a step that has started runs to its end, even when what asked for it goes away.
+/// The first open runs through it, so a signal while the node opens does not cut the open; the
+/// API's routes get the same from `http::finish_node_change`. A step that is cut in the middle of
+/// a close leaves a node that nothing closes.
+async fn run_to_end<T: Send + 'static>(step: impl Future<Output = T> + Send + 'static) -> T {
+    match tokio::spawn(step).await {
+        Ok(output) => output,
+        Err(error) if error.is_panic() => std::panic::resume_unwind(error.into_panic()),
+        // Cancelled: the runtime is going away, and it drops this caller too.
+        Err(_) => std::future::pending().await,
+    }
+}
+
+/// `await mirrorStarting`: the plugin host's start runs have ended, or a close has ended them.
+async fn wait_started(mut started: tokio::sync::watch::Receiver<bool>) {
+    // A start that went away without a word has ended too.
+    let _ = started.wait_for(|done| *done).await;
+}
+
 /// `lanAddress(os.networkInterfaces())`: Wi-Fi or Ethernet, never loopback.
 fn detect_lan_host() -> Option<Ipv4Addr> {
     let interfaces = if_addrs::get_if_addrs().ok()?;
@@ -1223,6 +1370,20 @@ fn mirror_error(error: crate::mirror::MirrorError) -> HttpError {
     HttpError::new(error.status.unwrap_or(500), error.message)
 }
 
+impl http::SourceSearch for MirrorHost<CoreNode> {
+    fn search<'a>(
+        &'a self,
+        query: Value,
+        on_source: Option<crate::mirror::sources::OnSource<'a>>,
+    ) -> BoxFuture<'a, Result<crate::mirror::sources::SearchReply, HttpError>> {
+        Box::pin(async move {
+            self.search_sources(query, on_source)
+                .await
+                .map_err(mirror_error)
+        })
+    }
+}
+
 impl http::Mirror for MirrorBridge {
     fn list(&self) -> Value {
         Value::Array(self.current().map(|m| m.list()).unwrap_or_default())
@@ -1237,6 +1398,10 @@ impl http::Mirror for MirrorBridge {
             let mirror = self.open()?;
             mirror.run(plugin, payload).await.map_err(mirror_error)
         })
+    }
+
+    fn source_search(self: Arc<Self>) -> Result<Arc<dyn http::SourceSearch>, HttpError> {
+        Ok(self.open()?)
     }
 
     fn provider<'a>(
@@ -1279,6 +1444,19 @@ impl http::Mirror for MirrorBridge {
                 Some(mirror) => mirror.forget_imported(&gone).await,
                 None => Vec::new(),
             }
+        })
+    }
+
+    fn provider_thumb<'a>(
+        &'a self,
+        name: &'a str,
+        id: &'a str,
+    ) -> BoxFuture<'a, Result<Option<youtube::Picture>, HttpError>> {
+        Box::pin(async move {
+            Ok(match self.current() {
+                Some(mirror) => mirror.provider_thumb(name, id).await,
+                None => None,
+            })
         })
     }
 }
@@ -1422,6 +1600,67 @@ pub async fn start_standalone_guard(
     })
 }
 
+/// The relay process, `bin/relay.js` without its guard-only branch: listen, open the node, serve
+/// until `stop` resolves, then close what is open. Returns the exit code.
+///
+/// `stop` counts from the open on, not only once the relay is ready: a signal that arrives while
+/// the node opens lets the open finish and then closes its node.
+pub async fn run(env: HashMap<String, String>, stop: impl Future<Output = ()>) -> i32 {
+    let api_port = port(&env, "PEARTUBE_API_PORT", API_PORT);
+    let relay = match Relay::listen(env).await {
+        Ok(relay) => relay,
+        Err(error) => {
+            log("relay failed to start", json!({ "error": error }));
+            return 1;
+        }
+    };
+    tokio::pin!(stop);
+    let opened = tokio::select! {
+        opened = relay.start() => Some(opened),
+        () = &mut stop => None,
+    };
+    let heartbeat = match opened {
+        Some(Ok(mut status)) => {
+            if let Some(status) = status.as_object_mut() {
+                status.insert("api".into(), json!(api_port));
+            }
+            log("relay ready", status);
+            let relay = relay.clone();
+            let heartbeat = tokio::spawn(async move {
+                let mut every = tokio::time::interval(std::time::Duration::from_secs(60));
+                every.tick().await;
+                loop {
+                    every.tick().await;
+                    if let Some(status) = relay.status().await {
+                        log("heartbeat", status);
+                    }
+                }
+            });
+            stop.await;
+            Some(heartbeat)
+        }
+        Some(Err(error)) => {
+            log("relay failed to open its node", json!({ "error": error }));
+            relay.shutdown().await;
+            return 1;
+        }
+        // The open goes on, on its own task: the shutdown waits for it and closes its node.
+        None => None,
+    };
+    if let Some(heartbeat) = heartbeat {
+        heartbeat.abort();
+    }
+    // A stuck close must not keep the container from stopping (JS: a 3 s kill timer). Only a
+    // shutdown that hangs ends as a failure; a clean one exits 0.
+    match tokio::time::timeout(std::time::Duration::from_secs(3), relay.shutdown()).await {
+        Ok(()) => 0,
+        Err(_) => {
+            log("relay shutdown timed out", json!({}));
+            1
+        }
+    }
+}
+
 /// `bin/relay.js`'s guard-only branch: run the forwarder until a signal or the parent leaves.
 pub async fn guard_only(env: HashMap<String, String>) -> Result<(), String> {
     // Read before the first await: a relay that dies while the guard is still opening would
@@ -1446,7 +1685,7 @@ pub async fn guard_only(env: HashMap<String, String>) -> Result<(), String> {
     // without saying so. Its `shutdown()` closes the guard, so the wait ends here, not only the
     // heartbeat above.
     tokio::select! {
-        _ = wait_for_signal() => {}
+        () = signals() => {}
         _ = parent_gone(pid), if follow => {}
     }
     heartbeat.abort();
@@ -1500,24 +1739,28 @@ async fn parent_gone(pid: Option<u32>) {
     }
 }
 
-async fn wait_for_signal() {
+/// A future that resolves at the first SIGTERM or SIGINT. This call installs the handlers, not the
+/// future's first poll: a signal counts from here on.
+pub fn signals() -> impl Future<Output = ()> {
     #[cfg(unix)]
-    {
+    let handlers = {
         use tokio::signal::unix::{SignalKind, signal};
-        let (Ok(mut term), Ok(mut int)) = (
+        (
             signal(SignalKind::terminate()),
             signal(SignalKind::interrupt()),
-        ) else {
-            let _ = tokio::signal::ctrl_c().await;
+        )
+    };
+    async move {
+        #[cfg(unix)]
+        if let (Ok(mut term), Ok(mut int)) = handlers {
+            tokio::select! {
+                _ = term.recv() => {}
+                _ = int.recv() => {}
+            }
             return;
-        };
-        tokio::select! {
-            _ = term.recv() => {}
-            _ = int.recv() => {}
         }
+        let _ = tokio::signal::ctrl_c().await;
     }
-    #[cfg(not(unix))]
-    let _ = tokio::signal::ctrl_c().await;
 }
 
 fn read_tls(env: &HashMap<String, String>, storage: &Path) -> Option<tokio_rustls::TlsAcceptor> {
@@ -1646,4 +1889,76 @@ pub fn log(msg: &str, fields: Value) {
         line.extend(fields.clone());
     }
     println!("{line}");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use futures_util::FutureExt;
+
+    /// `serial(applyGuard)`: a guard step asked for before a shutdown runs when its turn comes
+    /// and reports the settings error it then finds; a step asked for after the shutdown refuses
+    /// at once with the shutdown error, which the startup logs like any other failure.
+    #[tokio::test]
+    async fn a_queued_guard_step_finishes_and_a_new_one_refuses_after_a_shutdown() {
+        let storage = tempfile::tempdir().expect("a temporary storage folder");
+        let env = HashMap::from([
+            ("PEARTUBE_API_HOST".to_owned(), "127.0.0.1".to_owned()),
+            ("PEARTUBE_API_PORT".to_owned(), "0".to_owned()),
+            ("PEARTUBE_HTTPS_PORT".to_owned(), "0".to_owned()),
+            (
+                "PEARTUBE_STORAGE".to_owned(),
+                storage.path().display().to_string(),
+            ),
+            ("PEARTUBE_PRIVATE_GUARD".to_owned(), "1".to_owned()),
+            ("PEARTUBE_PRIVATE_GUARD_PORT".to_owned(), "49001".to_owned()),
+            ("PEARTUBE_DHT_PORT".to_owned(), "49001".to_owned()),
+        ]);
+        let relay = Relay::listen(env)
+            .await
+            .expect("the API listens on loopback");
+
+        // Hold the settings without changing them: the first guard step stops at its first
+        // setting read, with the lifecycle turn still in hand. The second is in line behind it.
+        let settings = relay.0.settings.lock().await;
+        let mut admitted = std::pin::pin!(relay.start_guard());
+        assert!(admitted.as_mut().now_or_never().is_none());
+        let mut queued = std::pin::pin!(relay.start_guard());
+        assert!(queued.as_mut().now_or_never().is_none());
+        assert!(
+            relay.0.open.try_lock().is_err(),
+            "the admitted step holds the lifecycle turn"
+        );
+
+        // One poll sets the shutdown flag, then waits for the turn that the steps hold.
+        let mut shutdown = std::pin::pin!(relay.shutdown());
+        assert!(shutdown.as_mut().now_or_never().is_none());
+        assert!(relay.running().is_err());
+
+        // A step asked for after the shutdown refuses at once, without waiting for the turn.
+        let mut refused = std::pin::pin!(relay.start_guard());
+        assert_eq!(
+            refused.as_mut().now_or_never(),
+            Some(Err("The relay is shutting down".to_owned())),
+            "a step asked for after the shutdown did not refuse at once"
+        );
+        assert!(relay.0.open.try_lock().is_err());
+
+        // Released settings let both admitted steps read the equal guard and peer ports and
+        // report the configuration error, not a refusal.
+        drop(settings);
+        for step in [&mut admitted, &mut queued] {
+            let error = tokio::time::timeout(std::time::Duration::from_secs(5), step.as_mut())
+                .await
+                .expect("an admitted guard step completes")
+                .expect_err("the equal ports do not start a guard");
+            assert_eq!(
+                error,
+                "privateGuardPort: use a different port from the peer port"
+            );
+        }
+        tokio::time::timeout(std::time::Duration::from_secs(5), shutdown.as_mut())
+            .await
+            .expect("the shutdown completes");
+    }
 }

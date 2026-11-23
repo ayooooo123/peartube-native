@@ -47,12 +47,16 @@ hyper-util = { version = "0.1", features = ["client-legacy", "http1", "tokio"] }
 # The order `localeCompare` gives search hits that tie (providers/soulseek/rank.rs): the CLDR root
 # collation. ICU4X's normalizer and properties are here already, through `url`.
 icu_collator = "2"
+# The letters and digits `albumKey` keeps (`\p{L}`, `\p{N}`) are Unicode general categories. The standard
+# library has no test for them: `char::is_alphanumeric` also accepts vowel signs, which are marks.
+icu_properties = { version = "2", features = ["compiled_data"] }
 # The Soulseek client the app's `peartube-soulseek-bare` addon wraps, at the commit that addon builds.
 peartube-soulseek = { git = "https://github.com/ayooooo123/peartube-soulseek", rev = "cc9b2fb3dbfc4e4e756e1c8e8932a65adf04fe85", optional = true }
 # The relay's HTTPS listener (hyper-rustls already builds it for the client).
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
 unicode-normalization = "0.1"
 url = "2"
+tempfile = "3"
 ubit = { git = "https://github.com/ayooooo123/ubit", rev = "a243219e3b98387e80526122a28f91b0b533be10" }
 
 [target.'cfg(unix)'.dependencies]
@@ -68,7 +72,6 @@ sha2 = { version = "0.10", features = ["asm"] }
 # A reference holds the app's numbers with every digit: read them exactly (the default parser may be
 # one unit in the last place off on a 17-digit number, as it was on a FLAC duration).
 serde_json = { version = "1", features = ["float_roundtrip"] }
-tempfile = "3"
 # The paused clock tests/soulseek_provider.rs runs the provider's watchdog on.
 tokio = { version = "1", features = ["test-util"] }
 

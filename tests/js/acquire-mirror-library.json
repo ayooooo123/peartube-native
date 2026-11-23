@@ -1,6 +1,41 @@
 {
   "sessions": [
     {
+      "name": "source search",
+      "watchDir": false,
+      "before": [],
+      "searchPlugins": [
+        { "name": "soulseek", "delay": 15, "reply": { "truncated": 1, "candidates": [
+          { "filename": "Album\\Two.flac", "rank": 9 },
+          { "filename": "Album\\One.Mp3", "rank": 1 },
+          { "filename": "song.WMA", "title": "", "lossy": false },
+          { "filename": "record.AAC" }, { "filename": "record.OpUs" },
+          { "filename": "record.ogg" }, { "filename": "record.m4a" }, { "filename": "record.wav" }
+        ] }, "queries": { "deadline": { "hold": true, "reply": { "candidates": [{ "title": "late" }] } },
+          "args": { "args": true }, "bad rows": { "reply": { "candidates": [null] } } } },
+        { "name": "youtube", "reply": { "candidates": [
+          { "title": "Fast result", "lossy": true, "source": "wrong" },
+          { "filename": "other.aac", "lossy": null }
+        ] } },
+        { "name": "unavailable", "error": "Please try again. ", "repeat": 23, "status": 429 }
+      ],
+      "steps": [
+        { "searchSources": { "query": "  all  " } },
+        { "searchSources": { "query": "some", "sources": ["youtube", "soulseek", "youtube"] } },
+        { "searchSources": { "query": "  args ", "sources": ["soulseek"], "limit": "5", "timeoutMs": 8000, "other": true } },
+        { "searchSources": { "query": ["args"], "sources": ["soulseek"], "limit": 0 } },
+        { "searchSources": { "query": "deadline", "sources": ["soulseek", "youtube"], "timeoutMs": 1 } },
+        { "releaseSearch": true },
+        { "searchSources": { "query": "bad rows", "sources": ["soulseek", "youtube"] } },
+        { "searchSources": { "query": " " } },
+        { "searchSources": { "query": true, "sources": [] } },
+        { "searchSources": { "query": 4, "sources": "youtube" } },
+        { "searchSources": { "query": "x", "sources": [3] } },
+        { "searchSources": { "query": "x", "sources": ["watch-dir"] } },
+        { "searchSources": { "query": "x", "sources": ["", "youtube"] } }
+      ]
+    },
+    {
       "name": "albums",
       "watchDir": true,
       "before": [
@@ -234,6 +269,81 @@
         { "forget": [{ "row": 0 }, { "row": 1 }] },
         { "tree": true },
         { "ledger": true }
+      ]
+    },
+    {
+      "name": "a pin names the artist",
+      "watchDir": true,
+      "before": [
+        { "write": "import/Pinned/.peartube-album.json", "text": "{\"release\":\"yt:0123456789abcdef0123\",\"title\":\"Pinned Album\",\"artist\":\"Pin Artist\"}\n" },
+        { "write": "import/Pinned/01 - First.m4a", "text": "no tags the importer reads" },
+        { "write": "import/Pinned/02 - Second.flac", "pad": 10, "flac": [["TITLE", "Second"], ["ARTIST", "Tag Artist"], ["TRACKNUMBER", "2"]] },
+        { "write": "import/Pinned/03 - Third.flac", "pad": 10, "flac": [["TITLE", "Third"], ["TRACKNUMBER", "3"]] },
+        { "write": "import/Plain/.peartube-album.json", "text": "{\"release\":\"album:0123456789abcdef0123\",\"title\":\"Plain\"}\n" },
+        { "write": "import/Plain/01 - Only.flac", "text": "not tagged either" },
+        { "write": "import/Long/.peartube-album.json", "text": "{\"release\":\"mb:0123456789abcdef0123456789abcdef\",\"artist\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAéééééééééé\"}\n" },
+        { "write": "import/Long/01 - Only.m4a", "text": "a long name" },
+        { "write": "import/Not Text/.peartube-album.json", "text": "{\"release\":\"album:aaaaaaaaaaaaaaaaaaaa\",\"artist\":7}\n" },
+        { "write": "import/Not Text/01 - Only.flac", "text": "an artist that is a number" },
+        { "write": "import/Odd/.peartube-album.json", "text": "{\"release\":\"yt:0123456789ABCDEF0123\",\"artist\":\"Nobody\"}\n" },
+        { "write": "import/Odd/01 - Only.flac", "pad": 10, "flac": [["ALBUM", "Odd"], ["TITLE", "Only"], ["TRACKNUMBER", "1"]] }
+      ],
+      "steps": [
+        { "run": "watch-dir" },
+        { "ledger": true },
+        { "list": true }
+      ]
+    },
+    {
+      "name": "a save waits for the import",
+      "watchDir": true,
+      "importWaitMs": 1200,
+      "soulseek": { "slskUser": "alice", "slskPass": "hunter2secret" },
+      "before": [],
+      "steps": [
+        { "write": "import/Held.mkv", "text": "held" },
+        { "hold": true },
+        { "begin": "sweep", "run": "watch-dir" },
+        { "until": { "parked": 1 } },
+        { "begin": "save", "provider": "mirror", "name": "soulseek", "payload": { "username": "tagged", "wait": true, "files": ["@@x\\whatever\\zz.flac"] } },
+        { "until": { "job": 1, "status": "announcing", "phase": "waiting" } },
+        { "job": 1 },
+        { "tree": true },
+        { "cancel": 1 },
+        { "end": "save" },
+        { "tree": true },
+        { "release": true },
+        { "end": "sweep" },
+        { "run": "watch-dir" },
+        { "write": "import/Other Album/06 - Naima.flac", "pad": 10, "flac": [["ALBUM", "Other Album"], ["ARTIST", "Someone"], ["TITLE", "Naima"], ["TRACKNUMBER", "6"]] },
+        { "provider": "mirror", "name": "soulseek", "payload": { "username": "tagged", "wait": true, "files": ["@@x\\whatever\\zz.flac"] } },
+        { "jobs": true },
+        { "tree": true },
+        { "write": "import/Held2.mkv", "text": "held again" },
+        { "hold": true },
+        { "begin": "sweep2", "run": "watch-dir" },
+        { "until": { "parked": 1 } },
+        { "begin": "save2", "provider": "mirror", "name": "soulseek", "payload": { "username": "tagged", "wait": true, "files": ["@@x\\whatever\\zz.flac"] } },
+        { "until": { "job": 3, "status": "announcing", "phase": "waiting" } },
+        { "clock": 1200 },
+        { "end": "save2" },
+        { "job": 3 },
+        { "tree": true },
+        { "release": true },
+        { "end": "sweep2" },
+        { "run": "watch-dir" },
+        { "write": "import/Held3.mkv", "text": "held a third time" },
+        { "hold": true },
+        { "begin": "sweep3", "run": "watch-dir" },
+        { "until": { "parked": 1 } },
+        { "begin": "save3", "provider": "mirror", "name": "soulseek", "payload": { "username": "tagged", "files": ["@@x\\whatever\\zz.flac"] } },
+        { "until": { "job": 4, "status": "announcing", "phase": "waiting" } },
+        { "close": true },
+        { "release": true },
+        { "end": "sweep3" },
+        { "end": "save3" },
+        { "jobs": true },
+        { "tree": true }
       ]
     }
   ]

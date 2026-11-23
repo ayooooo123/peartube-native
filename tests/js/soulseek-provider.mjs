@@ -6,11 +6,12 @@
 // Time moves in steps of the scenario's `tick`, and every scripted event falls on a step, so a timer fires at the
 // same instant here and under tokio's paused clock.
 import { mock } from 'node:test'
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { basename, dirname, join, resolve } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import { TICK, fakeAddon, network as scenario, sha, tree } from './soulseek-network.mjs'
+import { fakeHost } from './provider-host.mjs'
+import { TICK, fakeAddon, network as scenario, tree } from './soulseek-network.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const APP = process.env.PEARTUBE_APP || resolve(here, '../../../peartube')
@@ -20,38 +21,6 @@ const NOW = 1_700_000_000_000
 // Lets every promise chain and the plugin's own `await`s run before the clock moves again.
 const flush = async () => { for (let i = 0; i < 40; i++) await new Promise(resolve => setImmediate(resolve)) }
 const tick = async () => { mock.timers.tick(TICK); await flush() }
-const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
-
-// What the mirror host's scan answers: one item for each media file it has not reported before.
-function fakeScan (log) {
-  const seen = new Set()
-  let busy = 0
-  return {
-    busy (times) { busy = times },
-    async run (dir) {
-      log.push({ scan: basename(dir) })
-      await sleep(TICK)
-      if (busy > 0) {
-        busy--
-        return { scanned: 0, ingested: 0, busy: true, items: [] }
-      }
-      const items = []
-      let scanned = 0
-      for (const folder of readdirSync(dir).sort()) {
-        if (folder.startsWith('.') || !statSync(join(dir, folder)).isDirectory()) continue
-        for (const name of readdirSync(join(dir, folder)).sort()) {
-          if (name.startsWith('.') || name.endsWith('.json')) continue
-          scanned++
-          if (seen.has(`${folder}/${name}`)) continue
-          seen.add(`${folder}/${name}`)
-          const bytes = readFileSync(join(dir, folder, name))
-          items.push({ file: name, size: bytes.length, sha256: sha(bytes) })
-        }
-      }
-      return { scanned, ingested: items.length, items }
-    }
-  }
-}
 
 async function runSession (session) {
   // Every session has its own clock: the timers a session leaves behind go with it.
@@ -60,7 +29,7 @@ async function runSession (session) {
   const storage = join(root, 'storage')
   mkdirSync(storage)
   const log = []
-  const scan = fakeScan(log)
+  const host = fakeHost(log, session.importFolder ? join(root, 'import') : join(storage, 'staging'), TICK)
   let changes = 0
   const start = Date.now()
   const plug = createSoulseekPlugin({
@@ -68,7 +37,7 @@ async function runSession (session) {
     ...(session.importFolder ? { stagingRoot: join(root, 'import'), stagingLabel: 'import folder' } : {}),
     ...session.options,
     onchange: () => { changes++ },
-    ...(session.scan === false ? {} : { scanStaging: dir => scan.run(dir) }),
+    ...(session.scan === false ? {} : { placeAndScan: host.placeAndScan }),
     loadAddon: session.backend === 'none'
       ? async () => { throw new Error('No prebuild found for platform') }
       : async () => fakeAddon(session, log)
@@ -137,8 +106,11 @@ async function runSession (session) {
       plug.configure(step.configure)
       await flush()
       put(i, null)
-    } else if (step.busy !== undefined) {
-      scan.busy(step.busy)
+    } else if (step.hold !== undefined) {
+      host.hold(step.hold)
+      put(i, null)
+    } else if (step.limit !== undefined) {
+      host.limit(step.limit)
       put(i, null)
     } else if (step.tree) {
       put(i, tree(root))

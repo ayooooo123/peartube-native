@@ -1,45 +1,12 @@
-//! Where a mirrored album or a lone track goes in the import folder, named from what the peer and
-//! the file say (`safeSegment`, `peerFolderHint`, `formatAlbumDir` and `placeSingleTrack` in
-//! `src/providers/soulseek.js`).
-//!
-//! A name cut at its length limit inside a surrogate pair ends in U+FFFD here; the app's string
-//! holds half a pair until the file system call or `toWellFormed` replaces it with the same.
+//! Where a lone track goes in the import folder, named from what the peer and the file say
+//! (`peerFolderHint` and `placeSingleTrack` in `src/providers/soulseek.js`). The folder and file
+//! names themselves are cut by [`crate::providers::staging`].
 
 use sha2::{Digest, Sha256};
 
 use crate::protocol::{MAX_TITLE, is_js_space, js_trim, truncate_utf16};
+use crate::providers::staging::{format_album_dir, safe_segment, split_ext};
 use crate::tags::{Tags, album_key, year_in};
-
-/// One path segment that every file system takes: no separators, reserved or control characters,
-/// no leading dots or `@` (a hidden or system folder), at most 140 UTF-16 units, no trailing dots
-/// or spaces (`safeSegment`). `fallback` when nothing is left.
-pub(crate) fn safe_segment(raw: &str, fallback: &str) -> String {
-    let reserved = |c: char| {
-        matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|') || c <= '\u{1f}'
-    };
-    let spaced = one_space_for(raw, reserved);
-    let shown = spaced.trim_start_matches(|c: char| c == '.' || c == '@' || is_js_space(c));
-    let single = one_space_for(shown, is_js_space);
-    let cut = truncate_utf16(js_trim(&single), 140);
-    let clean = cut.trim_end_matches(|c: char| c == '.' || is_js_space(c));
-    if clean.is_empty() { fallback } else { clean }.to_owned()
-}
-
-/// `text` with every run of characters `matches` accepts replaced by one space.
-fn one_space_for(text: &str, matches: impl Fn(char) -> bool) -> String {
-    let mut out = String::with_capacity(text.len());
-    let mut in_run = false;
-    for c in text.chars() {
-        let hit = matches(c);
-        if !hit {
-            out.push(c);
-        } else if !in_run {
-            out.push(' ');
-        }
-        in_run = hit;
-    }
-    out
-}
 
 /// The album a peer's folder names (`peerFolderHint`). `artist` or `album` may be empty.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -169,31 +136,6 @@ fn split_at_dashes(text: &str) -> Vec<&str> {
     }
     parts.push(&text[start..]);
     parts
-}
-
-/// The folder an album is mirrored into (`formatAlbumDir`): `Artist - Album (Year)`, else the
-/// caller's title (its ` · ` as ` - `), else the album alone.
-pub(crate) fn format_album_dir(
-    artist: &str,
-    album: &str,
-    year: Option<u32>,
-    fallback_title: &str,
-) -> String {
-    let dated = |name: String| match year {
-        Some(year) => format!("{name} ({year})"),
-        None => name,
-    };
-    if !artist.is_empty() && !album.is_empty() {
-        return safe_segment(&dated(format!("{artist} - {album}")), "Mirrored Album");
-    }
-    if !fallback_title.is_empty() {
-        // The app also takes the space around each dot; the segment's one-space rule does that here.
-        return safe_segment(&fallback_title.replace('·', " - "), "Mirrored Album");
-    }
-    if !album.is_empty() {
-        return safe_segment(&dated(album.to_owned()), "Mirrored Album");
-    }
-    "Unknown Artist - Mirrored Album".to_owned()
 }
 
 /// What names one mirrored track (`placeSingleTrack`'s argument).
@@ -338,15 +280,6 @@ pub fn place_single_track(track: LoneTrack<'_>) -> Result<Placed, String> {
 /// `text` when it says something: the app reads an empty string as none.
 fn said(text: Option<&str>) -> Option<&str> {
     text.filter(|text| !text.is_empty())
-}
-
-/// A file name as its stem and its extension with the dot (`basename(name, ext)` and
-/// `extname(name)`): a name that only starts with its dot, and "..", have no extension.
-pub(crate) fn split_ext(name: &str) -> (&str, &str) {
-    match name.rfind('.') {
-        Some(dot) if dot > 0 && name != ".." => name.split_at(dot),
-        _ => (name, ""),
-    }
 }
 
 /// `stem` after a vinyl side and number ("A1", "b12"): one letter from A to H, then one or two

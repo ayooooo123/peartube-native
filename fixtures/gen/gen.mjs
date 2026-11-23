@@ -438,7 +438,7 @@ const isSystemViewKey = ['peer/x', 'source/x', 'meta/x', 'writer/x', 'revoked/x'
   key => ({ key, value: protocol.isSystemViewKey(key) })
 )
 
-const mediaFile = ['film.mp4', 'FILM.MKV', 'song.flac', 'notes.txt', 'noext', 'a.mp4.txt', 'x.m2ts'].map(
+const mediaFile = ['film.mp4', 'FILM.MKV', 'song.flac', 'notes.txt', 'noext', 'a.mp4.txt', 'x.m2ts', 'song.m4a', 'SONG.M4A', 'book.m4b', 'm4a'].map(
   name => ({ name, value: isMedia(name) })
 )
 

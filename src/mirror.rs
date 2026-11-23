@@ -10,6 +10,7 @@
 //!
 //! The filesystem and remote-feed fetches sit behind small traits so a test can script them.
 
+pub mod sources;
 pub mod watch;
 
 use std::future::Future;
@@ -32,7 +33,9 @@ use crate::node::Node;
 use crate::node::api::{PutMeta, SearchOptions};
 use crate::protocol::{is_hex64, is_id};
 use crate::providers::soulseek::client::Backend;
-use crate::providers::soulseek::{self, Provider, SoulseekError, StagingScan};
+use crate::providers::soulseek::{self, Provider, SoulseekError};
+use crate::providers::staging::PlaceAndScan;
+use crate::providers::youtube;
 
 /// What a mirror plugin run may ask its host for, as `ctxFor(name)` in the app.
 pub struct Ctx<N: Node> {
@@ -299,6 +302,14 @@ pub trait MirrorProvider<N: Node>: Send + Sync {
     fn list_jobs(&self) -> Vec<Value>;
     fn get_job(&self, job_id: &str) -> Option<Value>;
     fn cancel_job(&self, job_id: &str) -> Option<Value>;
+    /// A result's picture, served by the relay (`thumbnail(id)`). A provider without pictures has
+    /// none.
+    fn thumbnail<'a>(
+        &'a self,
+        _id: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Option<youtube::Picture>> + Send + 'a>> {
+        Box::pin(async { None })
+    }
 }
 
 /// One directory entry, as `statSync` reports it.
@@ -478,6 +489,48 @@ impl FeedFetch for ArtFeed {
     }
 }
 
+/// The host's `fetchBytes`: the guarded fetch with the reply's bytes, 8 s and 512 KiB at most, for
+/// the pictures of a provider's results.
+pub struct ArtPictures {
+    pub allow_private_urls: bool,
+}
+
+impl Default for ArtPictures {
+    fn default() -> Self {
+        Self {
+            allow_private_urls: crate::ssrf::private_urls_allowed(),
+        }
+    }
+}
+
+impl youtube::Fetch for ArtPictures {
+    fn fetch(
+        &self,
+        url: &str,
+    ) -> Pin<Box<dyn Future<Output = Result<youtube::Fetched, String>> + Send>> {
+        let url = url.to_owned();
+        let allow_private = self.allow_private_urls;
+        Box::pin(async move {
+            let reply = art::send_bytes(
+                &url,
+                art::SendOptions {
+                    timeout: Duration::from_millis(8000),
+                    max_bytes: Some(512 * 1024),
+                    allow_private,
+                    ..art::SendOptions::default()
+                },
+            )
+            .await
+            .map_err(|error| error.message().to_owned())?;
+            Ok(youtube::Fetched {
+                status: reply.status,
+                content_type: reply.header("content-type").map(str::to_owned),
+                body: reply.body,
+            })
+        })
+    }
+}
+
 /// `fetchJson`: a 2xx JSON reply, or an error naming the feed by host and path (never its query or credentials).
 pub async fn fetch_json(
     feed: &dyn FeedFetch,
@@ -549,6 +602,26 @@ impl Default for SoulseekSettings {
     }
 }
 
+/// The YouTube provider's ways out: the relay's `ubit` calls (`youtube: { info, download }`) and
+/// the host's guarded fetch for result pictures. Without a backend the plugin reports
+/// `unavailable`.
+#[derive(Clone)]
+pub struct YoutubeSettings {
+    pub backend: Option<Arc<dyn youtube::Backend>>,
+    pub fetch: Arc<dyn youtube::Fetch>,
+    pub random: Arc<dyn RandomSource>,
+}
+
+impl Default for YoutubeSettings {
+    fn default() -> Self {
+        Self {
+            backend: None,
+            fetch: Arc::new(ArtPictures::default()),
+            random: Arc::new(OsRandom),
+        }
+    }
+}
+
 /// `createMirrorHost`'s options.
 pub struct MirrorOptions {
     pub storage: String,
@@ -557,12 +630,18 @@ pub struct MirrorOptions {
     pub watch_dir: Option<String>,
     pub feeds: Vec<String>,
     pub soulseek: SoulseekSettings,
+    pub youtube: YoutubeSettings,
     pub plugins_dir: Option<String>,
     pub poll_interval_ms: u64,
+    /// How long a provider's finished save waits for another import to finish before it gives up
+    /// with nothing placed.
+    pub import_wait_ms: u64,
     /// Plugins to run once the host is up, by name, as `relay.js` runs `hiverelay-seed`.
     pub start_runs: Vec<String>,
     pub onchange: Option<Arc<dyn Fn() + Send + Sync>>,
-    pub onstarting: Option<Arc<dyn Fn() + Send + Sync>>,
+    /// Runs once, after every plugin has stopped: detach the relay's traffic listener and stop
+    /// its gate.
+    pub stop_traffic: Option<Box<dyn FnOnce() + Send + Sync>>,
     pub now_ms: Arc<dyn Fn() -> u64 + Send + Sync>,
 }
 
@@ -575,11 +654,13 @@ impl Default for MirrorOptions {
             watch_dir: None,
             feeds: Vec::new(),
             soulseek: SoulseekSettings::default(),
+            youtube: YoutubeSettings::default(),
             plugins_dir: None,
             poll_interval_ms: 60_000,
+            import_wait_ms: 120_000,
             start_runs: Vec::new(),
             onchange: None,
-            onstarting: None,
+            stop_traffic: None,
             now_ms: Arc::new(system_now_ms),
         }
     }
@@ -1069,7 +1150,7 @@ where
 }
 
 /// The `soulseek` plugin: the provider behind the host's plugin and provider calls. Its mirrors land
-/// in the folder `watch-dir` sweeps, and each asks for that sweep once its files are in place.
+/// in the folder `watch-dir` sweeps, placed and imported in one step once no other import holds it.
 struct SoulseekPlugin {
     provider: Provider,
     watch: Arc<WatchState>,
@@ -1077,21 +1158,22 @@ struct SoulseekPlugin {
     staging_root: String,
 }
 
-impl SoulseekPlugin {
-    fn scan<N>(&self, ctx: &Ctx<N>) -> StagingScan
-    where
-        N: Node + 'static,
-        N::Error: From<AcquireError>,
-    {
-        let (watch, ctx, root) = (self.watch.clone(), ctx.clone(), self.staging_root.clone());
-        Arc::new(move || {
-            let (watch, ctx, root) = (watch.clone(), ctx.clone(), root.clone());
-            Box::pin(async move {
-                let prefix = watch.prefix_of(&root);
-                Ok(watch.scan(Some(&root), &ctx, prefix).await)
-            })
+/// The host's `placeAndScan` as a provider whose saves land in `root` is given it.
+fn place_and_scan<N>(watch: &Arc<WatchState>, ctx: &Ctx<N>, root: &str) -> PlaceAndScan
+where
+    N: Node + 'static,
+    N::Error: From<AcquireError>,
+{
+    let (watch, ctx, root) = (watch.clone(), ctx.clone(), root.to_owned());
+    Arc::new(move |place, cancelled| {
+        let (watch, ctx, root) = (watch.clone(), ctx.clone(), root.clone());
+        Box::pin(async move {
+            let prefix = watch.prefix_of(&root);
+            watch
+                .place_and_scan(&root, &ctx, prefix, place, cancelled)
+                .await
         })
-    }
+    })
 }
 
 fn provider_error(error: SoulseekError) -> MirrorError {
@@ -1123,8 +1205,9 @@ where
         ctx: &'a Ctx<N>,
     ) -> Pin<Box<dyn Future<Output = Result<Value, MirrorError>> + Send + 'a>> {
         Box::pin(async move {
+            let host = place_and_scan(&self.watch, ctx, &self.staging_root);
             self.provider
-                .run(&payload, Some(self.scan(ctx)))
+                .run(&payload, Some(host))
                 .await
                 .map_err(provider_error)
         })
@@ -1157,8 +1240,9 @@ where
 
     fn mirror<'a>(&'a self, payload: Value, ctx: &'a Ctx<N>) -> ProviderFuture<'a> {
         Box::pin(async move {
+            let host = place_and_scan(&self.watch, ctx, &self.staging_root);
             self.provider
-                .mirror(&payload, Some(self.scan(ctx)))
+                .mirror(&payload, Some(host))
                 .await
                 .map_err(provider_error)
         })
@@ -1177,6 +1261,104 @@ where
     }
 }
 
+/// The `youtube` plugin: the provider behind the host's plugin and provider calls. Its saves land
+/// where the Soulseek provider's mirrors land, placed and imported in the same way.
+struct YoutubePlugin {
+    provider: youtube::Provider,
+    watch: Arc<WatchState>,
+    /// Where saves land.
+    staging_root: String,
+}
+
+fn youtube_error(error: youtube::YoutubeError) -> MirrorError {
+    MirrorError {
+        message: error.message,
+        status: error.status,
+    }
+}
+
+impl<N: Node + 'static> MirrorPlugin<N> for YoutubePlugin
+where
+    N::Error: From<AcquireError>,
+{
+    fn name(&self) -> &str {
+        youtube::NAME
+    }
+
+    fn description(&self) -> &str {
+        youtube::DESCRIPTION
+    }
+
+    fn run<'a>(
+        &'a self,
+        payload: Value,
+        ctx: &'a Ctx<N>,
+    ) -> Pin<Box<dyn Future<Output = Result<Value, MirrorError>> + Send + 'a>> {
+        Box::pin(async move {
+            let host = place_and_scan(&self.watch, ctx, &self.staging_root);
+            self.provider
+                .run(&payload, Some(host))
+                .await
+                .map_err(youtube_error)
+        })
+    }
+
+    fn stop<'a>(&'a self) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
+        Box::pin(self.provider.stop())
+    }
+
+    fn info(&self) -> Value {
+        self.provider.info()
+    }
+
+    fn provider(&self) -> Option<&dyn MirrorProvider<N>> {
+        Some(self)
+    }
+}
+
+impl<N: Node + 'static> MirrorProvider<N> for YoutubePlugin
+where
+    N::Error: From<AcquireError>,
+{
+    fn search<'a>(&'a self, payload: Value, _ctx: &'a Ctx<N>) -> ProviderFuture<'a> {
+        Box::pin(async move { self.provider.search(&payload).await.map_err(youtube_error) })
+    }
+
+    /// The app's plugin has no `browse`: the host answers as for a provider it does not know.
+    fn browse<'a>(&'a self, _payload: Value, _ctx: &'a Ctx<N>) -> ProviderFuture<'a> {
+        Box::pin(async { Err(unknown_provider(youtube::NAME)) })
+    }
+
+    fn mirror<'a>(&'a self, payload: Value, ctx: &'a Ctx<N>) -> ProviderFuture<'a> {
+        Box::pin(async move {
+            let host = place_and_scan(&self.watch, ctx, &self.staging_root);
+            self.provider
+                .mirror(&payload, Some(host))
+                .await
+                .map_err(youtube_error)
+        })
+    }
+
+    fn list_jobs(&self) -> Vec<Value> {
+        self.provider.list_jobs()
+    }
+
+    fn get_job(&self, job_id: &str) -> Option<Value> {
+        self.provider.get_job(job_id)
+    }
+
+    fn cancel_job(&self, job_id: &str) -> Option<Value> {
+        self.provider.cancel_job(job_id)
+    }
+
+    fn thumbnail<'a>(
+        &'a self,
+        id: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Option<youtube::Picture>> + Send + 'a>> {
+        Box::pin(self.provider.thumbnail(id))
+    }
+}
+
 /// What `configure` may change while the host runs; `None` leaves a value as it is.
 #[derive(Debug, Clone, Default)]
 pub struct MirrorConfig {
@@ -1188,6 +1370,18 @@ pub struct MirrorConfig {
 
 /// One registered mirror plugin, with the name it was registered under.
 pub type Plugin<N> = Arc<dyn MirrorPlugin<N>>;
+
+/// What the start runs read: [`MirrorHost::open`] keeps it for [`MirrorHost::startup`].
+struct Startup<N: Node> {
+    mirror_channel: bool,
+    rechunk: bool,
+    watch_dir: Option<String>,
+    staging_dir: String,
+    start_runs: Vec<String>,
+    poll_interval_ms: u64,
+    files: Arc<dyn MirrorFiles>,
+    rechunk_factory: Arc<dyn RechunkOptionsFactory<N>>,
+}
 
 /// `createMirrorHost`'s returned handle.
 pub struct MirrorHost<N: Node> {
@@ -1205,6 +1399,8 @@ pub struct MirrorHost<N: Node> {
     onchange: Option<Arc<dyn Fn() + Send + Sync>>,
     tasks: Mutex<Vec<JoinHandle<()>>>,
     poll_task: Mutex<Option<JoinHandle<()>>>,
+    stop_traffic: Mutex<Option<Box<dyn FnOnce() + Send + Sync>>>,
+    startup: Mutex<Option<Startup<N>>>,
     ctx: Ctx<N>,
 }
 
@@ -1212,9 +1408,10 @@ impl<N: Node + 'static> MirrorHost<N>
 where
     N::Error: From<AcquireError>,
 {
-    /// `createMirrorHost`: register the built-ins, then run the startup backfill, folder import, feeds and timer.
+    /// `createMirrorHost` up to `onstarting`: the host with its plugins registered. It runs
+    /// nothing until [`MirrorHost::startup`], and it can be closed before that or while that runs.
     #[allow(clippy::too_many_arguments)] // the reference's host arguments, plus the relay's plugins
-    pub async fn start(
+    pub fn open(
         node: Arc<N>,
         acquirer: Option<Acquirer<N>>,
         files: Arc<dyn MirrorFiles>,
@@ -1231,6 +1428,7 @@ where
             ledger: Mutex::new(watch::load_ledger(&*files, &opts.storage)),
             state_file: format!("{}/mirror-watch.json", opts.storage),
             scanning: AtomicBool::new(false),
+            import_wait_ms: opts.import_wait_ms,
             watch_dir: Mutex::new(opts.watch_dir.clone()),
             staging_dir: staging_dir.clone(),
             closed: closed.clone(),
@@ -1254,14 +1452,14 @@ where
                 "sweptAs": if staged { "staging:" } else { "watch-dir" },
             })
         );
+        let staging_label = match (staged, &opts.watch_dir) {
+            (false, _) => "import folder",
+            (true, Some(_)) => "storage (import folder is read-only)",
+            (true, None) => "storage",
+        };
         let soulseek = Provider::new(soulseek::Options {
             staging_root: Some(staging_root.clone()),
-            staging_label: match (staged, &opts.watch_dir) {
-                (false, _) => "import folder",
-                (true, Some(_)) => "storage (import folder is read-only)",
-                (true, None) => "storage",
-            }
-            .to_owned(),
+            staging_label: staging_label.to_owned(),
             user: opts.soulseek.user.clone(),
             pass: opts.soulseek.pass.clone(),
             server: opts.soulseek.server.clone(),
@@ -1273,6 +1471,18 @@ where
                 opts.storage.clone(),
                 opts.soulseek.backend.clone(),
                 opts.soulseek.random.clone(),
+                opts.now_ms.clone(),
+            )
+        });
+        let youtube = youtube::Provider::new(youtube::Options {
+            staging_root: Some(staging_root.clone()),
+            staging_label: staging_label.to_owned(),
+            fetch: Some(opts.youtube.fetch.clone()),
+            onchange: opts.onchange.clone(),
+            ..youtube::Options::new(
+                opts.storage.clone(),
+                opts.youtube.backend.clone(),
+                opts.youtube.random.clone(),
                 opts.now_ms.clone(),
             )
         });
@@ -1311,6 +1521,17 @@ where
             onchange: opts.onchange.clone(),
             tasks: Mutex::new(Vec::new()),
             poll_task: Mutex::new(None),
+            stop_traffic: Mutex::new(opts.stop_traffic),
+            startup: Mutex::new(Some(Startup {
+                mirror_channel: opts.mirror_channel,
+                rechunk: opts.rechunk,
+                watch_dir: opts.watch_dir,
+                staging_dir,
+                start_runs: opts.start_runs,
+                poll_interval_ms: opts.poll_interval_ms,
+                files,
+                rechunk_factory: rechunk_factory.clone(),
+            })),
             ctx,
         };
         host.register(Arc::new(HttpAcquirePlugin {
@@ -1320,7 +1541,7 @@ where
         host.register(Arc::new(BlobRechunkPlugin {
             acquirer,
             progress: host.rechunk_progress.clone(),
-            factory: rechunk_factory.clone(),
+            factory: rechunk_factory,
         }));
         host.register(Arc::new(WatchDirPlugin {
             state: host.watch_state.clone(),
@@ -1335,29 +1556,41 @@ where
         host.register(Arc::new(SoulseekPlugin {
             provider: soulseek,
             watch: host.watch_state.clone(),
+            staging_root: staging_root.clone(),
+        }));
+        host.register(Arc::new(YoutubePlugin {
+            provider: youtube,
+            watch: host.watch_state.clone(),
             staging_root,
         }));
+        host
+    }
 
-        if let Some(onstarting) = &opts.onstarting {
-            onstarting();
+    /// The rest of `createMirrorHost`: the startup backfill, the folder import, the feeds, the
+    /// start runs and the poll timer. The backfill runs even when the host is already closed, as
+    /// the app's does; the work after it starts only on a host that is not closed, and the folder
+    /// import ends between files. Only the first call does the work.
+    pub async fn startup(&self) {
+        let Some(startup) = self.startup.lock().expect("mirror startup").take() else {
+            return;
+        };
+        if startup.mirror_channel {
+            let _ = self.run("channel-backfill", Value::Null).await;
         }
-        if opts.mirror_channel {
-            let _ = host.run("channel-backfill", Value::Null).await;
-        }
-        if opts.rechunk {
-            host.spawn_run("blob-rechunk", Value::Null);
-        } else if !host.is_closed() {
+        if startup.rechunk && !self.is_closed() {
+            self.spawn_run("blob-rechunk", Value::Null);
+        } else if !self.is_closed() {
             // Count legacy blobs without moving any, so the UI offers the migration only when there is something.
-            let progress = host.rechunk_progress.clone();
-            let node = host.node.clone();
-            let options = rechunk_factory.make(RechunkOptions {
+            let progress = self.rechunk_progress.clone();
+            let node = self.node.clone();
+            let options = startup.rechunk_factory.make(RechunkOptions {
                 id: None,
                 foreground: false,
                 limit: Some(0),
                 on_migrate: Box::new(|_, _| {}),
                 on_progress: Box::new(|_| {}),
             });
-            let handle = tokio::spawn(async move {
+            self.background(async move {
                 if let Ok(Value::Object(result)) = node
                     .rechunk_legacy_blobs(options)
                     .await
@@ -1375,35 +1608,69 @@ where
                     }
                 }
             });
-            host.tasks.lock().expect("mirror tasks").push(handle);
         }
-        if let Some(dir) = opts.watch_dir.clone().filter(|_| !host.is_closed()) {
-            files.mkdirs(&dir);
-            let _ = host.run("watch-dir", Value::Null).await;
+        if let Some(dir) = startup.watch_dir.as_deref().filter(|_| !self.is_closed()) {
+            startup.files.mkdirs(dir);
+            let _ = self.run("watch-dir", Value::Null).await;
         }
-        let own_staging = opts
+        let own_staging = startup
             .watch_dir
             .as_deref()
-            .is_none_or(|dir| watch::resolved(dir) != watch::resolved(&staging_dir));
-        if files.exists(&staging_dir) && own_staging && !host.is_closed() {
-            host.watch_state
-                .scan(Some(&staging_dir), &host.ctx, "staging:")
+            .is_none_or(|dir| watch::resolved(dir) != watch::resolved(&startup.staging_dir));
+        if startup.files.exists(&startup.staging_dir) && own_staging && !self.is_closed() {
+            self.watch_state
+                .scan(Some(&startup.staging_dir), &self.ctx, "staging:")
                 .await;
         }
-        if !host.feeds.lock().expect("feeds").is_empty() && !host.is_closed() {
-            host.spawn_run("feed-mirror", Value::Null);
+        if !self.feeds.lock().expect("feeds").is_empty() && !self.is_closed() {
+            self.spawn_run("feed-mirror", Value::Null);
         }
-        for name in &opts.start_runs {
-            if !host.is_closed() {
-                host.spawn_run(name, Value::Null);
+        for name in &startup.start_runs {
+            if !self.is_closed() {
+                self.spawn_run(name, Value::Null);
             }
         }
-        host.start_poll_timer(opts.poll_interval_ms);
+        self.start_poll_timer(startup.poll_interval_ms);
+    }
+
+    /// `createMirrorHost`: [`MirrorHost::open`], then [`MirrorHost::startup`].
+    #[allow(clippy::too_many_arguments)] // as `open`
+    pub async fn start(
+        node: Arc<N>,
+        acquirer: Option<Acquirer<N>>,
+        files: Arc<dyn MirrorFiles>,
+        factory: Arc<dyn PutStreamFactory<N>>,
+        rechunk_factory: Arc<dyn RechunkOptionsFactory<N>>,
+        feed: Arc<dyn FeedFetch>,
+        extra: Vec<Arc<dyn MirrorPlugin<N>>>,
+        opts: MirrorOptions,
+    ) -> Self {
+        let host = Self::open(
+            node,
+            acquirer,
+            files,
+            factory,
+            rechunk_factory,
+            feed,
+            extra,
+            opts,
+        );
+        host.startup().await;
         host
     }
 
-    fn is_closed(&self) -> bool {
+    /// Closed hosts start no new work; a caller checks this before work of its own on the host.
+    pub fn is_closed(&self) -> bool {
         self.closed.load(Ordering::SeqCst)
+    }
+
+    /// Starts a background task that a close ends. A closed host starts none: its close may
+    /// already have ended the tasks it knew.
+    fn background(&self, task: impl Future<Output = ()> + Send + 'static) {
+        let mut tasks = self.tasks.lock().expect("mirror tasks");
+        if !self.is_closed() {
+            tasks.push(tokio::spawn(task));
+        }
     }
 
     /// `register`: the name must be non-empty; a re-registration replaces the plugin and keeps its stats.
@@ -1481,7 +1748,7 @@ where
         let ctx = self.ctx.clone();
         let now_ms = self.now_ms.clone();
         let name = name.to_owned();
-        let handle = tokio::spawn(async move {
+        self.background(async move {
             {
                 let mut stats = stats.lock().expect("mirror stats");
                 let stat = stats.entry(name.clone()).or_default();
@@ -1497,10 +1764,12 @@ where
                 Err(error) => stat.last_error = Some(error.message),
             }
         });
-        self.tasks.lock().expect("mirror tasks").push(handle);
     }
 
     fn start_poll_timer(&self, poll_interval_ms: u64) {
+        // Checked under the lock a close takes the timer from: the close then finds the timer,
+        // or this finds the host closed.
+        let mut timer = self.poll_task.lock().expect("poll task");
         if poll_interval_ms == 0 || self.is_closed() {
             return;
         }
@@ -1510,7 +1779,7 @@ where
         let now_ms = self.now_ms.clone();
         let ctx = self.ctx.clone();
         // Keep the app's polling interval: the plugin list is small and each poll is cheap.
-        let handle = tokio::spawn(async move {
+        *timer = Some(tokio::spawn(async move {
             loop {
                 tokio::time::sleep(Duration::from_millis(poll_interval_ms)).await;
                 if closed.load(Ordering::SeqCst) {
@@ -1536,8 +1805,7 @@ where
                     }
                 }
             }
-        });
-        *self.poll_task.lock().expect("poll task") = Some(handle);
+        }));
     }
 
     /// `/v1/plugins`: name, description, live info and run stats for every registered plugin.
@@ -1550,6 +1818,7 @@ where
                 let mut out = Map::new();
                 out.insert("name".into(), json!(name));
                 out.insert("description".into(), json!(plugin.description()));
+                out.insert("searchable".into(), json!(plugin.provider().is_some()));
                 if let Value::Object(info) = plugin.info() {
                     for (key, value) in info {
                         out.insert(key, value);
@@ -1600,6 +1869,31 @@ where
         }
     }
 
+    /// Stop polling and start every plugin's stop before waiting. A save that is waiting for
+    /// an import must receive its stop even if the importer's stop is still pending.
+    /// Each call runs the stops again. The first call that finishes releases the traffic gate.
+    pub async fn close(&self) {
+        self.closed.store(true, Ordering::SeqCst);
+        if let Some(handle) = self.poll_task.lock().expect("poll task").take() {
+            handle.abort();
+        }
+        let plugins: Vec<_> = self
+            .plugins
+            .lock()
+            .expect("mirror plugins")
+            .iter()
+            .map(|(_, plugin)| plugin.clone())
+            .collect();
+        futures_util::future::join_all(plugins.iter().map(|plugin| plugin.stop())).await;
+        let traffic = self.stop_traffic.lock().expect("traffic gate").take();
+        if let Some(stop) = traffic {
+            stop();
+        }
+        for handle in self.tasks.lock().expect("mirror tasks").drain(..) {
+            handle.abort();
+        }
+    }
+
     /// `searchProvider(name, payload)`.
     pub async fn search_provider(&self, name: &str, payload: Value) -> Result<Value, MirrorError> {
         let plugin = self.plugin(name);
@@ -1625,6 +1919,12 @@ where
             Some(provider) => provider.mirror(payload, &self.ctx).await,
             None => Err(unknown_provider(name)),
         }
+    }
+
+    /// `providerThumb(name, id)`: a result's picture from the provider `name`, when it has one.
+    pub async fn provider_thumb(&self, name: &str, id: &str) -> Option<youtube::Picture> {
+        let plugin = self.plugin(name)?;
+        plugin.provider()?.thumbnail(id).await
     }
 
     /// `listProviderJobs()`: every provider's mirrors, for `/v1/jobs`.
@@ -1676,23 +1976,6 @@ where
                 }
                 None => return,
             }
-        }
-    }
-
-    /// `close`: stop polling, let every plugin stop, and refuse new work.
-    pub async fn close(&self) {
-        self.closed.store(true, Ordering::SeqCst);
-        if let Some(handle) = self.poll_task.lock().expect("poll task").take() {
-            handle.abort();
-        }
-        let plugins = self.plugins.lock().expect("mirror plugins").clone();
-        for (_, plugin) in plugins {
-            plugin.stop().await;
-        }
-        let handles: Vec<JoinHandle<()>> =
-            self.tasks.lock().expect("mirror tasks").drain(..).collect();
-        for handle in handles {
-            handle.abort();
         }
     }
 

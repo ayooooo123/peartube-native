@@ -22,6 +22,8 @@ for (const [from, to] of Object.entries({
   "'./protocol.js'": app('src/protocol.js'),
   "'./tags.js'": app('src/tags.js'),
   "'./providers/soulseek.js'": app('src/providers/soulseek.js'),
+  "'./providers/staging.js'": app('src/providers/staging.js'),
+  "'./providers/youtube.js'": app('src/providers/youtube.js'),
   "'./hiverelay.js'": plant,
   "'./traffic.js'": plant,
   "'./art.js'": plant
@@ -29,11 +31,17 @@ for (const [from, to] of Object.entries({
   if (!source.includes(`from ${from}`)) throw new Error(`unstubbed import ${from}`)
   source = source.split(`from ${from}`).join(`from ${to}`)
 }
+// A module the app's mirror host imports by a relative path does not exist beside the copy: name it here, where
+// the cause is plain, and not as a missing file under `.gen`.
+const unmapped = source.match(/from '\.\.?\/[^']+'/g)
+if (unmapped) throw new Error(`the app's mirror.js imports ${unmapped.join(', ')}: add it to the rewrites`)
 writeFileSync(join(gen, 'library-host.mjs'), source)
 const { createMirrorHost } = await import(pathToFileURL(join(gen, 'library-host.mjs')).href)
 
+// The clock stands still unless a `clock` step moves it.
 const NOW = 1_700_000_000_000
-Date.now = () => NOW
+let clock = NOW
+Date.now = () => clock
 // A file's modification time when a step names none, in seconds.
 const MTIME = 1_600_000_000
 // The ledger file's text, with the time of every file written during the run (a download) named `<now>`: only
@@ -45,6 +53,9 @@ function makeNode () {
   const node = {
     calls: [],
     refuse: [],
+    // While `held` is set every `put` waits for it, so the import that asked stays under way; `parked` counts them.
+    held: null,
+    parked: 0,
     privateRouting: false,
     closing: false,
     async put (meta, stream) {
@@ -52,6 +63,11 @@ function makeNode () {
       for await (const chunk of stream) chunks.push(Buffer.from(chunk))
       const bytes = Buffer.concat(chunks)
       node.calls.push({ method: 'put', meta: { ...meta }, start: null, progress: [bytes.length] })
+      if (node.held) {
+        node.parked++
+        await node.held.promise
+        node.parked--
+      }
       if (node.refuse.includes(meta.id)) throw new Error(`refused ${meta.id}`)
       return {
         type: 'announce',
@@ -118,8 +134,26 @@ async function runSession (session) {
     hiverelay: null,
     pluginsDir: join(storage, 'plugins'),
     ...session.soulseek,
+    ...(session.importWaitMs ? { importWaitMs: session.importWaitMs } : {}),
     soulseekOpts: { loadAddon: async () => fakeAddon(session, network) }
   })
+
+  // A source can finish out of order, fail or outlive the caller's deadline. Its reply is
+  // independent of the host that groups the rows. A held search only finishes when released.
+  const heldSearches = []
+  let finishedLate = 0
+  for (const source of session.searchPlugins || []) {
+    host.register({ name: source.name, async search (payload) {
+      const plan = source.queries?.[payload.query] ?? source
+      if (plan.delay) await new Promise(resolve => setTimeout(resolve, plan.delay))
+      if (plan.hold) {
+        await new Promise(resolve => heldSearches.push(resolve))
+        finishedLate++
+      }
+      if (plan.error) throw Object.assign(new Error(plan.error.repeat(plan.repeat || 1)), { status: plan.status })
+      return plan.args ? { candidates: [payload] } : plan.reply
+    } })
+  }
 
   // Job ids are random: each is named by the order it was made in.
   const labels = new Map()
@@ -136,11 +170,61 @@ async function runSession (session) {
     result => ({ result }),
     err => ({ error: { message: err?.message ?? String(err), status: err?.status ?? null } })
   )
+  // Calls a `begin` step started and no step has taken the outcome of yet.
+  const pending = new Map()
+  let closed = false
 
+  clock = NOW
   put('start', null)
   for (const [i, step] of session.steps.entries()) {
     if (fileStep(step)) {
       put(i, null)
+    } else if (step.begin) {
+      // A run or a provider call that is not waited for: a later `end` takes its outcome. Nothing of it has
+      // happened when this step is recorded.
+      const call = step.run
+        ? async () => host.run(step.run, step.payload)
+        : async () => host[`${step.provider}Provider`](step.name, step.payload)
+      pending.set(step.begin, outcome(call))
+      put(i, { started: step.begin })
+    } else if (step.end) {
+      put(i, await pending.get(step.end))
+    } else if (step.until) {
+      // Waits, in real time, until as many announces are parked on a hold or a job reads as the step says. A
+      // state that never comes stops the run here, where the step is known.
+      const want = step.until
+      let reached = false
+      for (let n = 0; n < 2000 && !reached; n++) {
+        note()
+        const job = want.job === undefined ? null : host.getProviderJob(idOf(want.job))
+        reached = want.job === undefined
+          ? node.parked === want.parked
+          : Boolean(job) && job.status === want.status && (want.phase === undefined || job.phase === want.phase)
+        if (!reached) await new Promise(resolve => setTimeout(resolve, 5))
+      }
+      if (!reached) throw new Error(`session “${session.name}”, step ${i}: never reached ${JSON.stringify(want)}`)
+      put(i, null)
+    } else if (step.hold) {
+      let free
+      const promise = new Promise(resolve => { free = resolve })
+      node.held = { promise, free }
+      put(i, null)
+    } else if (step.release) {
+      node.held?.free()
+      node.held = null
+      put(i, null)
+    } else if (step.clock !== undefined) {
+      clock += step.clock
+      put(i, null)
+    } else if (step.close) {
+      // What every provider job reads in the tick `close()` was called in, before any plugin's stop has finished,
+      // and once the host has closed.
+      const view = () => host.listProviderJobs().map(job => ({ jobId: job.jobId, status: job.status, phase: job.phase, error: job.error }))
+      const closing = host.close()
+      const atOnce = view()
+      await closing
+      closed = true
+      put(i, { atOnce, closed: view() })
     } else if (step.refuse) {
       node.refuse = step.refuse
       put(i, null)
@@ -153,6 +237,14 @@ async function runSession (session) {
       host.configure(step.configure)
       for (let n = 0; n < 40; n++) await new Promise(resolve => setImmediate(resolve))
       put(i, null)
+    } else if (step.searchSources) {
+      const parts = []
+      const answer = await outcome(() => host.searchSources(step.searchSources, part => parts.push(part)))
+      put(i, { ...answer, parts })
+    } else if (step.releaseSearch) {
+      for (const resume of heldSearches.splice(0)) resume()
+      await new Promise(resolve => setImmediate(resolve))
+      put(i, { finishedLate })
     } else if (step.provider) {
       put(i, await outcome(async () => host[`${step.provider}Provider`](step.name, step.payload)))
     } else if (step.jobs) {
@@ -169,7 +261,7 @@ async function runSession (session) {
         .map(row => ({ id: row.id, sha256: row.sha256 }))
       put(i, [...await host.forgetImported(gone)])
     } else if (step.list) {
-      put(i, host.list().filter(plugin => plugin.name === 'watch-dir' || plugin.name === 'soulseek'))
+      put(i, host.list().filter(plugin => ['watch-dir', 'soulseek', 'youtube'].includes(plugin.name)))
     } else if (step.tree) {
       put(i, { import: existsSync(importDir) ? tree(importDir) : null, staging: existsSync(stagingDir) ? tree(stagingDir) : null })
     } else if (step.ledger) {
@@ -178,7 +270,7 @@ async function runSession (session) {
       throw new Error(`unknown step ${JSON.stringify(step)}`)
     }
   }
-  await host.close()
+  if (!closed) await host.close()
   if (session.readOnly) chmodSync(importDir, 0o755)
   rmSync(root, { recursive: true, force: true })
   let text = JSON.stringify({ name: session.name, trace: out }).split(JSON.stringify(root).slice(1, -1)).join('<root>')
