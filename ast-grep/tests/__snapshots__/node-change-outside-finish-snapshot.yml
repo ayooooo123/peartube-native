@@ -1,0 +1,101 @@
+id: node-change-outside-finish
+snapshots:
+  ? |
+    async fn post_restart(&self) {
+        if let Some(restart) = &self.options.restart {
+            finish_node_change(restart()).await??;
+            restart().await;
+        }
+    }
+  : labels:
+    - source: restart()
+      style: primary
+      start: 137
+      end: 146
+  ? |
+    async fn post_restart(&self) {
+        if let Some(restart) = &self.options.restart {
+            restart().await;
+        }
+    }
+  : labels:
+    - source: restart()
+      style: primary
+      start: 90
+      end: 99
+  ? |
+    async fn put_settings(&self) {
+        if !changed.is_empty()
+            && let Some(apply) = &self.options.apply_settings
+            && let Err(message) = apply(changed.clone()).await
+        {
+            warning = Some(message);
+        }
+    }
+  : labels:
+    - source: apply(changed.clone())
+      style: primary
+      start: 146
+      end: 168
+  ? |
+    async fn put_settings(relay: Relay, changed: Vec<String>) -> Result<(), HttpError> {
+        relay.apply_settings(changed).await.map_err(|e| HttpError::new(500, e))
+    }
+  : labels:
+    - source: relay.apply_settings(changed)
+      style: primary
+      start: 89
+      end: 118
+    - source: Result<(), HttpError>
+      style: secondary
+      start: 61
+      end: 82
+    - source: |-
+        async fn put_settings(relay: Relay, changed: Vec<String>) -> Result<(), HttpError> {
+            relay.apply_settings(changed).await.map_err(|e| HttpError::new(500, e))
+        }
+      style: secondary
+      start: 0
+      end: 162
+  ? |
+    async fn recover_mnemonic(&self) -> Result<Value, HttpError> {
+        self.reopen().await.map_err(|e| HttpError::new(500, e))?;
+        Ok(Value::Null)
+    }
+  : labels:
+    - source: self.reopen()
+      style: primary
+      start: 67
+      end: 80
+    - source: Result<Value, HttpError>
+      style: secondary
+      start: 36
+      end: 60
+    - source: |-
+        async fn recover_mnemonic(&self) -> Result<Value, HttpError> {
+            self.reopen().await.map_err(|e| HttpError::new(500, e))?;
+            Ok(Value::Null)
+        }
+      style: secondary
+      start: 0
+      end: 146
+  ? |
+    fn restart_node<'a>(&'a self) -> BoxFuture<'a, Result<Value, HttpError>> {
+        Box::pin(async move { self.reopen().await.map_err(|e| HttpError::new(500, e)) })
+    }
+  : labels:
+    - source: self.reopen()
+      style: primary
+      start: 101
+      end: 114
+    - source: BoxFuture<'a, Result<Value, HttpError>>
+      style: secondary
+      start: 33
+      end: 72
+    - source: |-
+        fn restart_node<'a>(&'a self) -> BoxFuture<'a, Result<Value, HttpError>> {
+            Box::pin(async move { self.reopen().await.map_err(|e| HttpError::new(500, e)) })
+        }
+      style: secondary
+      start: 0
+      end: 161

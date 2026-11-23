@@ -1,0 +1,101 @@
+id: duration-from-float
+snapshots:
+  ? |
+    async fn nap(secs: f64) {
+        tokio::time::sleep(tokio::time::Duration::from_secs_f64(secs)).await;
+    }
+  : labels:
+    - source: tokio::time::Duration::from_secs_f64(secs)
+      style: primary
+      start: 49
+      end: 91
+  ? |
+    async fn read_paced(count: u64, rate: f64) {
+        tokio::time::sleep(Duration::from_secs_f64(count as f64 / rate)).await;
+    }
+  : labels:
+    - source: Duration::from_secs_f64(count as f64 / rate)
+      style: primary
+      start: 68
+      end: 112
+  ? |
+    fn pace(at: &mut Instant, start: Instant, bytes: u64, mbps: f64) {
+        *at = start + Duration::from_secs_f64(bytes as f64 / (mbps * 125_000.0));
+    }
+  : labels:
+    - source: Duration::from_secs_f64(bytes as f64 / (mbps * 125_000.0))
+      style: primary
+      start: 85
+      end: 143
+  ? |
+    fn scale(d: Duration, k: f32) -> Duration {
+        d.mul_f32(k)
+    }
+  : labels:
+    - source: d.mul_f32(k)
+      style: primary
+      start: 48
+      end: 60
+  ? |
+    fn scale(d: Duration, k: f64) -> Duration {
+        d.mul_f64(k)
+    }
+  : labels:
+    - source: d.mul_f64(k)
+      style: primary
+      start: 48
+      end: 60
+  ? |
+    fn split(d: Duration, n: f32) -> Duration {
+        d.div_f32(n)
+    }
+  : labels:
+    - source: d.div_f32(n)
+      style: primary
+      start: 48
+      end: 60
+  ? |
+    fn split(d: Duration, n: f64) -> Duration {
+        d.div_f64(n)
+    }
+  : labels:
+    - source: d.div_f64(n)
+      style: primary
+      start: 48
+      end: 60
+  ? |
+    fn wait(secs: f32) -> Duration {
+        Duration::from_secs_f32(secs)
+    }
+  : labels:
+    - source: Duration::from_secs_f32(secs)
+      style: primary
+      start: 37
+      end: 66
+  ? |
+    fn wait(secs: f32) -> core::time::Duration {
+        core::time::Duration::from_secs_f32(secs)
+    }
+  : labels:
+    - source: core::time::Duration::from_secs_f32(secs)
+      style: primary
+      start: 49
+      end: 90
+  ? |
+    fn wait(secs: f64) -> Duration {
+        std::time::Duration::from_secs_f64(secs)
+    }
+  : labels:
+    - source: std::time::Duration::from_secs_f64(secs)
+      style: primary
+      start: 37
+      end: 77
+  ? |
+    fn wait(secs: f64) -> time::Duration {
+        time::Duration::from_secs_f64(secs)
+    }
+  : labels:
+    - source: time::Duration::from_secs_f64(secs)
+      style: primary
+      start: 43
+      end: 78

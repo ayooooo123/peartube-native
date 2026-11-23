@@ -1,0 +1,89 @@
+id: duration-from-float
+valid:
+  # try_from_secs_f64 returns a Result, so the repaired benchmark line does not panic.
+  - |
+    async fn read_paced(count: u64, rate: f64) {
+        tokio::time::sleep(Duration::try_from_secs_f64(count as f64 / rate).unwrap_or(Duration::MAX)).await;
+    }
+  # try_from_secs_f32 returns a Result, so it does not panic.
+  - |
+    fn pace(bytes: u32, mbps: f32) -> Duration {
+        Duration::try_from_secs_f32(bytes as f32 / mbps).unwrap_or(Duration::ZERO)
+    }
+  # The function name differs (try_from_secs_f64), so a path prefix does not match.
+  - |
+    fn wait(secs: f64) -> Duration {
+        std::time::Duration::try_from_secs_f64(secs).unwrap_or(Duration::ZERO)
+    }
+  # from_secs and from_millis take integers, not floats.
+  - |
+    fn wait() -> Duration {
+        Duration::from_secs(2) + Duration::from_millis(500)
+    }
+  # as_secs_f64 and checked_mul are not in the pattern list.
+  - |
+    fn helpers(d: Duration) -> (f64, Option<Duration>) {
+        (d.as_secs_f64(), d.checked_mul(2))
+    }
+  # A comment and a string are not calls, so the rule does not match them.
+  - |
+    fn note() -> &'static str {
+        // Duration::from_secs_f64(x) panics on NaN, so use try_from_secs_f64.
+        "Duration::from_secs_f64(x)"
+    }
+invalid:
+  # The benchmark reader: a rate of 0 makes the value infinite, and the call panics.
+  - |
+    async fn read_paced(count: u64, rate: f64) {
+        tokio::time::sleep(Duration::from_secs_f64(count as f64 / rate)).await;
+    }
+  # The pacer in src/replicate.rs: a NaN or a very small mbps makes the call panic.
+  - |
+    fn pace(at: &mut Instant, start: Instant, bytes: u64, mbps: f64) {
+        *at = start + Duration::from_secs_f64(bytes as f64 / (mbps * 125_000.0));
+    }
+  # The f32 form panics on the same values.
+  - |
+    fn wait(secs: f32) -> Duration {
+        Duration::from_secs_f32(secs)
+    }
+  # A std::time path prefix does not stop the panic.
+  - |
+    fn wait(secs: f64) -> Duration {
+        std::time::Duration::from_secs_f64(secs)
+    }
+  # A core::time path prefix with the f32 form.
+  - |
+    fn wait(secs: f32) -> core::time::Duration {
+        core::time::Duration::from_secs_f32(secs)
+    }
+  # A tokio::time path prefix.
+  - |
+    async fn nap(secs: f64) {
+        tokio::time::sleep(tokio::time::Duration::from_secs_f64(secs)).await;
+    }
+  # Any module path before Duration is flagged, for example time::Duration.
+  - |
+    fn wait(secs: f64) -> time::Duration {
+        time::Duration::from_secs_f64(secs)
+    }
+  # mul_f64 panics on a negative or NaN factor.
+  - |
+    fn scale(d: Duration, k: f64) -> Duration {
+        d.mul_f64(k)
+    }
+  # mul_f32 panics on a negative or NaN factor.
+  - |
+    fn scale(d: Duration, k: f32) -> Duration {
+        d.mul_f32(k)
+    }
+  # div_f64 panics on a negative or NaN divisor.
+  - |
+    fn split(d: Duration, n: f64) -> Duration {
+        d.div_f64(n)
+    }
+  # div_f32 panics on a negative or NaN divisor.
+  - |
+    fn split(d: Duration, n: f32) -> Duration {
+        d.div_f32(n)
+    }

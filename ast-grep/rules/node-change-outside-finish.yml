@@ -1,0 +1,41 @@
+id: node-change-outside-finish
+language: rust
+severity: error
+message: This HTTP request path closes or reopens the node outside finish_node_change, so a client disconnect can stop the change half way.
+note: |
+  Run every node change that an HTTP request starts inside http::finish_node_change(...).
+  It spawns the change and waits for it, so a dropped request does not cancel it.
+  See docs/code-rules.md#node-change-outside-finish.
+files:
+  - src/http.rs
+  - src/relay.rs
+  - src/relay/**/*.rs
+utils:
+  # Matches a node that sits inside a call to finish_node_change, at any depth.
+  inside-finish-node-change:
+    inside:
+      kind: call_expression
+      stopBy: end
+      has:
+        field: function
+        regex: '(^|::)finish_node_change$'
+rule:
+  all:
+    - any:
+        # http.rs binds the settings and restart callbacks to the local names apply and restart.
+        - pattern: apply($$$)
+        - pattern: restart($$$)
+        # relay.rs closes or reopens the node with these methods.
+        # A function that returns HttpError answers an HTTP request.
+        - all:
+            - any:
+                - pattern: $R.reopen($$$)
+                - pattern: $R.apply_settings($$$)
+            - inside:
+                kind: function_item
+                stopBy: end
+                has:
+                  field: return_type
+                  regex: '\bHttpError\b'
+    - not:
+        matches: inside-finish-node-change

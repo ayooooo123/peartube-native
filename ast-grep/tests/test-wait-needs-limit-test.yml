@@ -1,0 +1,167 @@
+id: test-wait-needs-limit
+valid:
+  # The repaired read of pull request 22: the time limit wraps the read.
+  - |
+    async fn identity_recovery_finishes_after_client_disconnect() {
+        let mut response = String::new();
+        tokio::time::timeout(Duration::from_secs(10), client.read_to_string(&mut response))
+            .await
+            .expect("new client could not read the identity after disconnect")
+            .unwrap();
+    }
+  # An accept loop inside `tokio::spawn` is a background server, not the wait of the test.
+  - |
+    async fn serve() {
+        tokio::spawn(async move {
+            while let Ok((socket, _)) = listener.accept().await {
+                handle(socket);
+            }
+        });
+    }
+  # A thread `join()` in a plain `fn` blocks no runtime thread.
+  - |
+    fn wait_for_thread() {
+        handle.join().unwrap();
+    }
+  # `join(",")` has an argument, so it is a string join and not a thread join.
+  - |
+    async fn names() {
+        let joined = parts.join(",");
+    }
+  # The wait is inside an async block that `tokio::time::timeout` wraps.
+  - |
+    async fn bounded_recv() {
+        tokio::time::timeout(Duration::from_secs(5), async { rx.recv().await })
+            .await
+            .expect("no message");
+    }
+  # A `timeout` that is imported by name is a time limit too.
+  - |
+    async fn bounded_notified() {
+        timeout(Duration::from_secs(5), async { notify.notified().await })
+            .await
+            .expect("no notice");
+    }
+  # The repair for a blocking `join()`: a blocking thread runs it, and a time limit covers the wait for that thread.
+  - |
+    async fn join_off_the_runtime() {
+        tokio::time::timeout(
+            Duration::from_secs(10),
+            tokio::task::spawn_blocking(move || reader.join().unwrap()),
+        )
+        .await
+        .expect("the reader thread did not finish")
+        .unwrap();
+    }
+  # `read()` without an argument is the tokio `RwLock` guard, not a socket read.
+  - |
+    async fn guard() {
+        let guard = lock.read().await;
+    }
+  # `join_next()` is not a thread join.
+  - |
+    async fn drain() {
+        let next = set.join_next().await;
+    }
+  # `futures::join!` is a macro, and this rule does not read macros.
+  - |
+    async fn both() {
+        futures::join!(first, second);
+    }
+  # An async block in the same `fn` does not make a `join()` outside the block a fault.
+  - |
+    fn probe() {
+        let status = rt.block_on(async { fetch().await });
+        tail.join().expect("tail probe");
+    }
+  # A fake that the code under test calls holds its answer until the test releases it. The test's own wait needs the limit.
+  - |
+    impl Provider for HoldingProvider {
+        async fn put(&self, item: Item) -> Result<(), String> {
+            self.release.notified().await;
+            Ok(())
+        }
+    }
+invalid:
+  # The test of pull request 22 that hung: it read the identity without a time limit.
+  - |
+    async fn identity_recovery_finishes_after_client_disconnect() {
+        let mut client = TcpStream::connect(addr).await.unwrap();
+        client.write_all(get.as_bytes()).await.unwrap();
+        let mut response = String::new();
+        client.read_to_string(&mut response).await.unwrap();
+    }
+  # The join in `disconnect` of src/relay/reopen_tests.rs blocks a runtime thread outside every time limit.
+  - |
+    async fn disconnect() {
+        drop(client);
+        release.send(()).unwrap();
+        reader.join().unwrap();
+    }
+  # A channel receive without a time limit.
+  - |
+    async fn wait_for_command() {
+        let command = rx.recv().await.expect("command");
+    }
+  # A socket accept without a time limit.
+  - |
+    async fn wait_for_client() {
+        let (socket, _) = listener.accept().await.unwrap();
+    }
+  # A notification wait without a time limit.
+  - |
+    async fn wait_for_notice() {
+        notify.notified().await;
+    }
+  # A watch change wait without a time limit.
+  - |
+    async fn wait_for_change() {
+        rx.changed().await.unwrap();
+    }
+  # A read to the end of a stream without a time limit.
+  - |
+    async fn read_all() {
+        client.read_to_end(&mut bytes).await.unwrap();
+    }
+  # An exact read without a time limit.
+  - |
+    async fn read_header() {
+        client.read_exact(&mut header).await.unwrap();
+    }
+  # A line read without a time limit.
+  - |
+    async fn read_head() {
+        reader.read_line(&mut head).await.unwrap();
+    }
+  # A read into a buffer without a time limit.
+  - |
+    async fn read_chunk() {
+        let read = socket.read(&mut chunk).await.unwrap();
+    }
+  # A `join()` in an async block blocks the runtime thread that runs the block.
+  - |
+    fn run() {
+        rt.block_on(async { handle.join().unwrap(); });
+    }
+  # A time limit cannot interrupt a blocking `join()`: `timeout` polls the block first, and the join blocks that poll.
+  - |
+    async fn join_under_a_limit() {
+        tokio::time::timeout(Duration::from_secs(10), async { reader.join().unwrap() })
+            .await
+            .expect("the reader thread did not finish");
+    }
+  # The time limit covers only the wait inside it, so the second wait is a fault.
+  - |
+    async fn one_bounded_one_not() {
+        tokio::time::timeout(Duration::from_secs(5), async { first.recv().await })
+            .await
+            .expect("no first message");
+        second.recv().await;
+    }
+  # A helper of the test harness (an inherent impl) is part of the test, so its wait needs the limit.
+  - |
+    impl Harness {
+        async fn next_event(&mut self) -> Event {
+            self.events.recv().await.expect("event")
+        }
+    }

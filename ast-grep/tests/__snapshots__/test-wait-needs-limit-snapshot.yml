@@ -1,0 +1,161 @@
+id: test-wait-needs-limit
+snapshots:
+  ? |
+    async fn disconnect() {
+        drop(client);
+        release.send(()).unwrap();
+        reader.join().unwrap();
+    }
+  : labels:
+    - source: reader.join()
+      style: primary
+      start: 77
+      end: 90
+    - source: async
+      style: secondary
+      start: 0
+      end: 5
+    - source: |-
+        async fn disconnect() {
+            drop(client);
+            release.send(()).unwrap();
+            reader.join().unwrap();
+        }
+      style: secondary
+      start: 0
+      end: 102
+  ? |
+    async fn identity_recovery_finishes_after_client_disconnect() {
+        let mut client = TcpStream::connect(addr).await.unwrap();
+        client.write_all(get.as_bytes()).await.unwrap();
+        let mut response = String::new();
+        client.read_to_string(&mut response).await.unwrap();
+    }
+  : labels:
+    - source: client.read_to_string(&mut response).await
+      style: primary
+      start: 221
+      end: 263
+  ? |
+    async fn join_under_a_limit() {
+        tokio::time::timeout(Duration::from_secs(10), async { reader.join().unwrap() })
+            .await
+            .expect("the reader thread did not finish");
+    }
+  : labels:
+    - source: reader.join()
+      style: primary
+      start: 90
+      end: 103
+    - source: async { reader.join().unwrap() }
+      style: secondary
+      start: 82
+      end: 114
+  ? |
+    async fn one_bounded_one_not() {
+        tokio::time::timeout(Duration::from_secs(5), async { first.recv().await })
+            .await
+            .expect("no first message");
+        second.recv().await;
+    }
+  : labels:
+    - source: second.recv().await
+      style: primary
+      start: 168
+      end: 187
+  ? |
+    async fn read_all() {
+        client.read_to_end(&mut bytes).await.unwrap();
+    }
+  : labels:
+    - source: client.read_to_end(&mut bytes).await
+      style: primary
+      start: 26
+      end: 62
+  ? |
+    async fn read_chunk() {
+        let read = socket.read(&mut chunk).await.unwrap();
+    }
+  : labels:
+    - source: socket.read(&mut chunk).await
+      style: primary
+      start: 39
+      end: 68
+  ? |
+    async fn read_head() {
+        reader.read_line(&mut head).await.unwrap();
+    }
+  : labels:
+    - source: reader.read_line(&mut head).await
+      style: primary
+      start: 27
+      end: 60
+  ? |
+    async fn read_header() {
+        client.read_exact(&mut header).await.unwrap();
+    }
+  : labels:
+    - source: client.read_exact(&mut header).await
+      style: primary
+      start: 29
+      end: 65
+  ? |
+    async fn wait_for_change() {
+        rx.changed().await.unwrap();
+    }
+  : labels:
+    - source: rx.changed().await
+      style: primary
+      start: 33
+      end: 51
+  ? |
+    async fn wait_for_client() {
+        let (socket, _) = listener.accept().await.unwrap();
+    }
+  : labels:
+    - source: listener.accept().await
+      style: primary
+      start: 51
+      end: 74
+  ? |
+    async fn wait_for_command() {
+        let command = rx.recv().await.expect("command");
+    }
+  : labels:
+    - source: rx.recv().await
+      style: primary
+      start: 48
+      end: 63
+  ? |
+    async fn wait_for_notice() {
+        notify.notified().await;
+    }
+  : labels:
+    - source: notify.notified().await
+      style: primary
+      start: 33
+      end: 56
+  ? |
+    fn run() {
+        rt.block_on(async { handle.join().unwrap(); });
+    }
+  : labels:
+    - source: handle.join()
+      style: primary
+      start: 35
+      end: 48
+    - source: async { handle.join().unwrap(); }
+      style: secondary
+      start: 27
+      end: 60
+  ? |
+    impl Harness {
+        async fn next_event(&mut self) -> Event {
+            self.events.recv().await.expect("event")
+        }
+    }
+  : labels:
+    - source: self.events.recv().await
+      style: primary
+      start: 69
+      end: 93
