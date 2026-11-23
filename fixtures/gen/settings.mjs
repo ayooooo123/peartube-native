@@ -109,6 +109,8 @@ appCase('cache max gb null', { cacheMaxGb: null })
 appCase('cache max gb zero', { cacheMaxGb: 0 })
 appCase('cache max gb garbage', { cacheMaxGb: 'abc' })
 appCase('cache max gb boolean', { cacheMaxGb: true })
+appCase('bootstrap ipv6', { bootstrap: ['[::1]:8001'] })
+appCase('bootstrap port zero', { bootstrap: ['127.0.0.1:0'] })
 appCase('full form', {
   tracker: K,
   mnemonic: '',
@@ -133,7 +135,7 @@ const fixed = normalizeAppSettings({
   tracker: K,
   sources: [K, `peartube://channel/${K2}?name=Other`],
   relayThrough: [K],
-  bootstrap: ['127.0.0.1:8000', '[::1]:8001'],
+  bootstrap: ['127.0.0.1:8000'],
   lanDiscovery: false,
   privateRouting: true,
   cacheMaxGb: 20

@@ -874,18 +874,7 @@
       },
       "requireChannel": false,
       "previous": null,
-      "ok": {
-        "tracker": "",
-        "mnemonic": "",
-        "sources": [],
-        "relayThrough": [],
-        "bootstrap": [
-          "[::1]:9000"
-        ],
-        "lanDiscovery": true,
-        "privateRouting": false,
-        "cacheMaxGb": 10
-      }
+      "err": "Bootstrap node [::1]:9000 is not host:port. IPv6 addresses are not supported."
     },
     {
       "name": "bootstrap missing port",
@@ -916,7 +905,7 @@
       },
       "requireChannel": false,
       "previous": null,
-      "err": "Bootstrap node [object Object] is not host:port."
+      "err": "Bootstrap node [object Object] is not host:port. IPv6 addresses are not supported."
     },
     {
       "name": "mnemonic 12 words messy",
@@ -1289,6 +1278,28 @@
       }
     },
     {
+      "name": "bootstrap ipv6",
+      "raw": {
+        "bootstrap": [
+          "[::1]:8001"
+        ]
+      },
+      "requireChannel": false,
+      "previous": null,
+      "err": "Bootstrap node [::1]:8001 is not host:port. IPv6 addresses are not supported."
+    },
+    {
+      "name": "bootstrap port zero",
+      "raw": {
+        "bootstrap": [
+          "127.0.0.1:0"
+        ]
+      },
+      "requireChannel": false,
+      "previous": null,
+      "err": "Bootstrap node 127.0.0.1:0 is not host:port."
+    },
+    {
       "name": "full form",
       "raw": {
         "tracker": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
@@ -1358,8 +1369,7 @@
           "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
         ],
         "bootstrap": [
-          "127.0.0.1:8000",
-          "[::1]:8001"
+          "127.0.0.1:8000"
         ],
         "lanDiscovery": false,
         "privateRouting": true,
@@ -1388,8 +1398,7 @@
           "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
         ],
         "bootstrap": [
-          "127.0.0.1:8000",
-          "[::1]:8001"
+          "127.0.0.1:8000"
         ],
         "lan": false,
         "privateRouting": true,
@@ -1417,8 +1426,7 @@
           "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
         ],
         "bootstrap": [
-          "127.0.0.1:8000",
-          "[::1]:8001"
+          "127.0.0.1:8000"
         ],
         "lanDiscovery": false,
         "privateRouting": true,
@@ -1447,8 +1455,7 @@
           "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
         ],
         "bootstrap": [
-          "127.0.0.1:8000",
-          "[::1]:8001"
+          "127.0.0.1:8000"
         ],
         "lan": false,
         "privateRouting": true,
@@ -17329,337 +17336,7 @@
             "rechunk": true,
             "cinemetaUrl": "https://meta.example/"
           },
-          "ok": {
-            "changed": [
-              "lan",
-              "lanHost",
-              "dhtPort",
-              "bootstrap",
-              "relayThrough",
-              "privateRouting",
-              "privateGuard",
-              "privateGuardPort",
-              "channel",
-              "allowedPeers",
-              "publishChannel",
-              "directory",
-              "acquireConcurrency",
-              "feeds",
-              "replicate",
-              "replicateSources",
-              "replicateFreeGb",
-              "replicateMbps",
-              "cacheMaxGb",
-              "hiverelays",
-              "hiverelayApiKey",
-              "hiverelayDiscover",
-              "hiverelayReplicas",
-              "hiverelayUploadMbps",
-              "rechunk",
-              "cinemetaUrl"
-            ],
-            "settings": {
-              "lan": {
-                "type": "bool",
-                "live": true,
-                "source": "file",
-                "env": "PEARTUBE_LAN_HOST",
-                "envSet": false,
-                "value": true
-              },
-              "lanHost": {
-                "type": "host",
-                "live": true,
-                "source": "file",
-                "env": "PEARTUBE_LAN_HOST",
-                "envSet": false,
-                "value": "peer.local"
-              },
-              "dhtPort": {
-                "type": "port",
-                "live": false,
-                "source": "file",
-                "env": "PEARTUBE_DHT_PORT",
-                "envSet": false,
-                "value": 49737
-              },
-              "bootstrap": {
-                "type": "hosts",
-                "live": false,
-                "source": "file",
-                "env": "PEARTUBE_BOOTSTRAP",
-                "envSet": false,
-                "value": [
-                  "127.0.0.1:49737",
-                  "[::1]:8080"
-                ]
-              },
-              "relayThrough": {
-                "type": "keys",
-                "live": false,
-                "source": "file",
-                "env": "PEARTUBE_RELAY_THROUGH",
-                "envSet": false,
-                "value": [
-                  "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-                ]
-              },
-              "privateRouting": {
-                "type": "bool",
-                "live": false,
-                "source": "file",
-                "env": "PEARTUBE_PRIVATE_ROUTING",
-                "envSet": false,
-                "value": true
-              },
-              "privateGuard": {
-                "type": "bool",
-                "live": true,
-                "source": "file",
-                "env": "PEARTUBE_PRIVATE_GUARD",
-                "envSet": false,
-                "value": true
-              },
-              "privateGuardPort": {
-                "type": "port",
-                "live": true,
-                "source": "file",
-                "env": "PEARTUBE_PRIVATE_GUARD_PORT",
-                "envSet": false,
-                "value": 49738
-              },
-              "channel": {
-                "type": "key",
-                "live": false,
-                "source": "file",
-                "env": "PEARTUBE_CHANNEL",
-                "envSet": false,
-                "value": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
-              },
-              "allowedPeers": {
-                "type": "keys",
-                "live": true,
-                "source": "file",
-                "env": "PEARTUBE_ALLOWED_PEERS",
-                "envSet": false,
-                "value": [
-                  "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-                  "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-                ]
-              },
-              "publishChannel": {
-                "type": "bool",
-                "live": false,
-                "source": "file",
-                "env": "PEARTUBE_PUBLISH_CHANNEL",
-                "envSet": false,
-                "value": false
-              },
-              "directory": {
-                "type": "bool",
-                "live": true,
-                "source": "file",
-                "env": "PEARTUBE_DIRECTORY",
-                "envSet": false,
-                "value": true
-              },
-              "globalSearch": {
-                "type": "bool",
-                "live": true,
-                "source": "default",
-                "env": "PEARTUBE_GLOBAL_SEARCH",
-                "envSet": false,
-                "value": false
-              },
-              "acquireConcurrency": {
-                "type": "number",
-                "live": true,
-                "source": "file",
-                "env": "PEARTUBE_ACQUIRE_CONCURRENCY",
-                "envSet": false,
-                "value": 16
-              },
-              "feeds": {
-                "type": "urls",
-                "live": true,
-                "source": "file",
-                "env": "PEARTUBE_MIRROR_FEEDS",
-                "envSet": false,
-                "value": [
-                  {
-                    "ref": "#0",
-                    "label": "feed.example/api"
-                  }
-                ]
-              },
-              "replicate": {
-                "type": "bool",
-                "live": true,
-                "source": "file",
-                "env": "PEARTUBE_REPLICATE",
-                "envSet": false,
-                "value": true
-              },
-              "replicateSources": {
-                "type": "keys",
-                "live": true,
-                "source": "file",
-                "env": "PEARTUBE_REPLICATE",
-                "envSet": false,
-                "value": [
-                  "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-                ]
-              },
-              "replicateFreeGb": {
-                "type": "number",
-                "live": true,
-                "source": "file",
-                "env": "PEARTUBE_REPLICATE_FREE_GB",
-                "envSet": false,
-                "value": 50.5
-              },
-              "replicateMbps": {
-                "type": "number",
-                "live": true,
-                "source": "file",
-                "env": "PEARTUBE_REPLICATE_MBPS",
-                "envSet": false,
-                "value": 120
-              },
-              "cacheMaxGb": {
-                "type": "number",
-                "live": true,
-                "source": "file",
-                "env": "PEARTUBE_CACHE_MAX_GB",
-                "envSet": false,
-                "value": 200
-              },
-              "hiverelays": {
-                "type": "urls",
-                "live": false,
-                "source": "file",
-                "env": "PEARTUBE_HIVERELAYS",
-                "envSet": false,
-                "value": [
-                  {
-                    "ref": "#0",
-                    "label": "relay.example/v1"
-                  }
-                ]
-              },
-              "hiverelayApiKey": {
-                "type": "secret",
-                "live": false,
-                "source": "file",
-                "env": "PEARTUBE_HIVERELAY_API_KEY",
-                "envSet": false,
-                "set": true,
-                "value": ""
-              },
-              "hiverelayDiscover": {
-                "type": "bool",
-                "live": false,
-                "source": "file",
-                "env": "PEARTUBE_HIVERELAY_DISCOVER",
-                "envSet": false,
-                "value": true
-              },
-              "hiverelayReplicas": {
-                "type": "number",
-                "live": false,
-                "source": "file",
-                "env": "PEARTUBE_HIVERELAY_REPLICAS",
-                "envSet": false,
-                "value": 5
-              },
-              "hiverelayUploadMbps": {
-                "type": "number",
-                "live": false,
-                "source": "file",
-                "env": "PEARTUBE_HIVERELAY_UPLOAD_MBPS",
-                "envSet": false,
-                "value": 100
-              },
-              "rechunk": {
-                "type": "bool",
-                "live": true,
-                "source": "file",
-                "env": "PEARTUBE_RECHUNK",
-                "envSet": false,
-                "value": true
-              },
-              "cinemetaUrl": {
-                "type": "url",
-                "live": true,
-                "source": "file",
-                "env": "PEARTUBE_CINEMETA_URL",
-                "envSet": false,
-                "value": "https://meta.example"
-              },
-              "slskUser": {
-                "type": "text",
-                "live": true,
-                "source": "default",
-                "env": "PEARTUBE_SLSK_USER",
-                "envSet": false,
-                "value": ""
-              },
-              "slskPass": {
-                "type": "secret",
-                "live": true,
-                "source": "default",
-                "env": "PEARTUBE_SLSK_PASS",
-                "envSet": false,
-                "set": false,
-                "value": ""
-              },
-              "slskServer": {
-                "type": "hostport",
-                "live": true,
-                "source": "default",
-                "env": "PEARTUBE_SLSK_SERVER",
-                "envSet": false,
-                "value": "vps.slsknet.org:2271"
-              },
-              "slskListenPort": {
-                "type": "port",
-                "live": false,
-                "source": "default",
-                "env": "PEARTUBE_SLSK_LISTEN_PORT",
-                "envSet": false,
-                "value": 50300
-              },
-              "slskShare": {
-                "type": "bool",
-                "live": false,
-                "source": "default",
-                "env": "PEARTUBE_SLSK_SHARE",
-                "envSet": false,
-                "value": false
-              },
-              "slskShareMaxFiles": {
-                "type": "number",
-                "live": false,
-                "source": "default",
-                "env": "PEARTUBE_SLSK_SHARE_MAX_FILES",
-                "envSet": false,
-                "value": 2000
-              }
-            },
-            "restartNeeded": [
-              "dhtPort",
-              "bootstrap",
-              "relayThrough",
-              "privateRouting",
-              "channel",
-              "publishChannel",
-              "hiverelays",
-              "hiverelayApiKey",
-              "hiverelayDiscover",
-              "hiverelayReplicas",
-              "hiverelayUploadMbps"
-            ]
-          }
+          "err": "bootstrap: [::1]:8080 must be host:port (IPv6 addresses are not supported)"
         },
         {
           "op": "view",
@@ -17668,106 +17345,98 @@
               "lan": {
                 "type": "bool",
                 "live": true,
-                "source": "file",
+                "source": "default",
                 "env": "PEARTUBE_LAN_HOST",
                 "envSet": false,
-                "value": true
+                "value": false
               },
               "lanHost": {
                 "type": "host",
                 "live": true,
-                "source": "file",
+                "source": "default",
                 "env": "PEARTUBE_LAN_HOST",
                 "envSet": false,
-                "value": "peer.local"
+                "value": ""
               },
               "dhtPort": {
                 "type": "port",
                 "live": false,
-                "source": "file",
+                "source": "default",
                 "env": "PEARTUBE_DHT_PORT",
                 "envSet": false,
-                "value": 49737
+                "value": 0
               },
               "bootstrap": {
                 "type": "hosts",
                 "live": false,
-                "source": "file",
+                "source": "default",
                 "env": "PEARTUBE_BOOTSTRAP",
                 "envSet": false,
-                "value": [
-                  "127.0.0.1:49737",
-                  "[::1]:8080"
-                ]
+                "value": []
               },
               "relayThrough": {
                 "type": "keys",
                 "live": false,
-                "source": "file",
+                "source": "default",
                 "env": "PEARTUBE_RELAY_THROUGH",
                 "envSet": false,
-                "value": [
-                  "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-                ]
+                "value": []
               },
               "privateRouting": {
                 "type": "bool",
                 "live": false,
-                "source": "file",
+                "source": "default",
                 "env": "PEARTUBE_PRIVATE_ROUTING",
                 "envSet": false,
-                "value": true
+                "value": false
               },
               "privateGuard": {
                 "type": "bool",
                 "live": true,
-                "source": "file",
+                "source": "default",
                 "env": "PEARTUBE_PRIVATE_GUARD",
                 "envSet": false,
-                "value": true
+                "value": false
               },
               "privateGuardPort": {
                 "type": "port",
                 "live": true,
-                "source": "file",
+                "source": "default",
                 "env": "PEARTUBE_PRIVATE_GUARD_PORT",
                 "envSet": false,
-                "value": 49738
+                "value": 0
               },
               "channel": {
                 "type": "key",
                 "live": false,
-                "source": "file",
+                "source": "default",
                 "env": "PEARTUBE_CHANNEL",
                 "envSet": false,
-                "value": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
+                "value": ""
               },
               "allowedPeers": {
                 "type": "keys",
                 "live": true,
-                "source": "file",
+                "source": "default",
                 "env": "PEARTUBE_ALLOWED_PEERS",
                 "envSet": false,
-                "value": [
-                  "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-                  "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-                ]
+                "value": []
               },
               "publishChannel": {
                 "type": "bool",
                 "live": false,
-                "source": "file",
+                "source": "default",
                 "env": "PEARTUBE_PUBLISH_CHANNEL",
                 "envSet": false,
-                "value": false
+                "value": true
               },
               "directory": {
                 "type": "bool",
                 "live": true,
-                "source": "file",
+                "source": "default",
                 "env": "PEARTUBE_DIRECTORY",
                 "envSet": false,
-                "value": true
+                "value": false
               },
               "globalSearch": {
                 "type": "bool",
@@ -17780,127 +17449,115 @@
               "acquireConcurrency": {
                 "type": "number",
                 "live": true,
-                "source": "file",
+                "source": "default",
                 "env": "PEARTUBE_ACQUIRE_CONCURRENCY",
                 "envSet": false,
-                "value": 16
+                "value": 4
               },
               "feeds": {
                 "type": "urls",
                 "live": true,
-                "source": "file",
+                "source": "default",
                 "env": "PEARTUBE_MIRROR_FEEDS",
                 "envSet": false,
-                "value": [
-                  {
-                    "ref": "#0",
-                    "label": "feed.example/api"
-                  }
-                ]
+                "value": []
               },
               "replicate": {
                 "type": "bool",
                 "live": true,
-                "source": "file",
+                "source": "default",
                 "env": "PEARTUBE_REPLICATE",
                 "envSet": false,
-                "value": true
+                "value": false
               },
               "replicateSources": {
                 "type": "keys",
                 "live": true,
-                "source": "file",
+                "source": "default",
                 "env": "PEARTUBE_REPLICATE",
                 "envSet": false,
-                "value": [
-                  "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-                ]
+                "value": []
               },
               "replicateFreeGb": {
                 "type": "number",
                 "live": true,
-                "source": "file",
+                "source": "default",
                 "env": "PEARTUBE_REPLICATE_FREE_GB",
                 "envSet": false,
-                "value": 50.5
+                "value": 20
               },
               "replicateMbps": {
                 "type": "number",
                 "live": true,
-                "source": "file",
+                "source": "default",
                 "env": "PEARTUBE_REPLICATE_MBPS",
                 "envSet": false,
-                "value": 120
+                "value": 80
               },
               "cacheMaxGb": {
                 "type": "number",
                 "live": true,
-                "source": "file",
+                "source": "default",
                 "env": "PEARTUBE_CACHE_MAX_GB",
                 "envSet": false,
-                "value": 200
+                "value": 0
               },
               "hiverelays": {
                 "type": "urls",
                 "live": false,
-                "source": "file",
+                "source": "default",
                 "env": "PEARTUBE_HIVERELAYS",
                 "envSet": false,
-                "value": [
-                  {
-                    "ref": "#0",
-                    "label": "relay.example/v1"
-                  }
-                ]
+                "value": []
               },
               "hiverelayApiKey": {
                 "type": "secret",
                 "live": false,
-                "source": "file",
+                "source": "default",
                 "env": "PEARTUBE_HIVERELAY_API_KEY",
                 "envSet": false,
-                "set": true,
+                "set": false,
                 "value": ""
               },
               "hiverelayDiscover": {
                 "type": "bool",
                 "live": false,
-                "source": "file",
+                "source": "default",
                 "env": "PEARTUBE_HIVERELAY_DISCOVER",
                 "envSet": false,
-                "value": true
+                "value": false
               },
               "hiverelayReplicas": {
                 "type": "number",
                 "live": false,
-                "source": "file",
+                "source": "default",
                 "env": "PEARTUBE_HIVERELAY_REPLICAS",
                 "envSet": false,
-                "value": 5
+                "value": 3
               },
               "hiverelayUploadMbps": {
                 "type": "number",
                 "live": false,
-                "source": "file",
+                "source": "default",
                 "env": "PEARTUBE_HIVERELAY_UPLOAD_MBPS",
                 "envSet": false,
-                "value": 100
+                "value": 50
               },
               "rechunk": {
                 "type": "bool",
                 "live": true,
-                "source": "file",
+                "source": "default",
                 "env": "PEARTUBE_RECHUNK",
                 "envSet": false,
-                "value": true
+                "value": false
               },
               "cinemetaUrl": {
                 "type": "url",
                 "live": true,
-                "source": "file",
+                "source": "default",
                 "env": "PEARTUBE_CINEMETA_URL",
                 "envSet": false,
-                "value": "https://meta.example"
+                "value": "https://v3-cinemeta.strem.io"
               },
               "slskUser": {
                 "type": "text",
@@ -17952,51 +17609,39 @@
                 "value": 2000
               }
             },
-            "restartNeeded": [
-              "dhtPort",
-              "bootstrap",
-              "relayThrough",
-              "privateRouting",
-              "channel",
-              "publishChannel",
-              "hiverelays",
-              "hiverelayApiKey",
-              "hiverelayDiscover",
-              "hiverelayReplicas",
-              "hiverelayUploadMbps"
-            ]
+            "restartNeeded": []
           }
         },
         {
           "op": "snapshot",
           "ok": {
-            "lan": "true",
-            "lanHost": "\"peer.local\"",
-            "dhtPort": "49737",
-            "bootstrap": "[\"127.0.0.1:49737\",\"[::1]:8080\"]",
-            "relayThrough": "[\"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\"]",
-            "privateRouting": "true",
-            "privateGuard": "true",
-            "privateGuardPort": "49738",
-            "channel": "\"fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210\"",
-            "allowedPeers": "[\"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\",\"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\"]",
-            "publishChannel": "false",
-            "directory": "true",
+            "lan": "false",
+            "lanHost": "\"\"",
+            "dhtPort": "0",
+            "bootstrap": "[]",
+            "relayThrough": "[]",
+            "privateRouting": "false",
+            "privateGuard": "false",
+            "privateGuardPort": "0",
+            "channel": "\"\"",
+            "allowedPeers": "[]",
+            "publishChannel": "true",
+            "directory": "false",
             "globalSearch": "false",
-            "acquireConcurrency": "16",
-            "feeds": "[\"https://feed.example/api?x=1\"]",
-            "replicate": "true",
-            "replicateSources": "[\"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\"]",
-            "replicateFreeGb": "50.5",
-            "replicateMbps": "120",
-            "cacheMaxGb": "200",
-            "hiverelays": "[\"https://relay.example/v1=SECRET\"]",
-            "hiverelayApiKey": "\"abc\"",
-            "hiverelayDiscover": "true",
-            "hiverelayReplicas": "5",
-            "hiverelayUploadMbps": "100",
-            "rechunk": "true",
-            "cinemetaUrl": "\"https://meta.example\"",
+            "acquireConcurrency": "4",
+            "feeds": "[]",
+            "replicate": "false",
+            "replicateSources": "[]",
+            "replicateFreeGb": "20",
+            "replicateMbps": "80",
+            "cacheMaxGb": "0",
+            "hiverelays": "[]",
+            "hiverelayApiKey": "\"\"",
+            "hiverelayDiscover": "false",
+            "hiverelayReplicas": "3",
+            "hiverelayUploadMbps": "50",
+            "rechunk": "false",
+            "cinemetaUrl": "\"https://v3-cinemeta.strem.io\"",
             "slskUser": "\"\"",
             "slskPass": "\"\"",
             "slskServer": "\"vps.slsknet.org:2271\"",
@@ -18006,112 +17651,104 @@
           }
         }
       ],
-      "finalFile": "{\n  \"lan\": true,\n  \"lanHost\": \"peer.local\",\n  \"dhtPort\": 49737,\n  \"bootstrap\": [\n    \"127.0.0.1:49737\",\n    \"[::1]:8080\"\n  ],\n  \"relayThrough\": [\n    \"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\"\n  ],\n  \"privateRouting\": true,\n  \"privateGuard\": true,\n  \"privateGuardPort\": 49738,\n  \"channel\": \"fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210\",\n  \"allowedPeers\": [\n    \"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\",\n    \"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\"\n  ],\n  \"publishChannel\": false,\n  \"directory\": true,\n  \"acquireConcurrency\": 16,\n  \"feeds\": [\n    \"https://feed.example/api?x=1\"\n  ],\n  \"replicate\": true,\n  \"replicateSources\": [\n    \"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\"\n  ],\n  \"replicateFreeGb\": 50.5,\n  \"replicateMbps\": 120,\n  \"cacheMaxGb\": 200,\n  \"hiverelays\": [\n    \"https://relay.example/v1=SECRET\"\n  ],\n  \"hiverelayApiKey\": \"abc\",\n  \"hiverelayDiscover\": true,\n  \"hiverelayReplicas\": 5,\n  \"hiverelayUploadMbps\": 100,\n  \"rechunk\": true,\n  \"cinemetaUrl\": \"https://meta.example\"\n}",
+      "finalFile": null,
       "reloadedView": {
         "settings": {
           "lan": {
             "type": "bool",
             "live": true,
-            "source": "file",
+            "source": "default",
             "env": "PEARTUBE_LAN_HOST",
             "envSet": false,
-            "value": true
+            "value": false
           },
           "lanHost": {
             "type": "host",
             "live": true,
-            "source": "file",
+            "source": "default",
             "env": "PEARTUBE_LAN_HOST",
             "envSet": false,
-            "value": "peer.local"
+            "value": ""
           },
           "dhtPort": {
             "type": "port",
             "live": false,
-            "source": "file",
+            "source": "default",
             "env": "PEARTUBE_DHT_PORT",
             "envSet": false,
-            "value": 49737
+            "value": 0
           },
           "bootstrap": {
             "type": "hosts",
             "live": false,
-            "source": "file",
+            "source": "default",
             "env": "PEARTUBE_BOOTSTRAP",
             "envSet": false,
-            "value": [
-              "127.0.0.1:49737",
-              "[::1]:8080"
-            ]
+            "value": []
           },
           "relayThrough": {
             "type": "keys",
             "live": false,
-            "source": "file",
+            "source": "default",
             "env": "PEARTUBE_RELAY_THROUGH",
             "envSet": false,
-            "value": [
-              "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-            ]
+            "value": []
           },
           "privateRouting": {
             "type": "bool",
             "live": false,
-            "source": "file",
+            "source": "default",
             "env": "PEARTUBE_PRIVATE_ROUTING",
             "envSet": false,
-            "value": true
+            "value": false
           },
           "privateGuard": {
             "type": "bool",
             "live": true,
-            "source": "file",
+            "source": "default",
             "env": "PEARTUBE_PRIVATE_GUARD",
             "envSet": false,
-            "value": true
+            "value": false
           },
           "privateGuardPort": {
             "type": "port",
             "live": true,
-            "source": "file",
+            "source": "default",
             "env": "PEARTUBE_PRIVATE_GUARD_PORT",
             "envSet": false,
-            "value": 49738
+            "value": 0
           },
           "channel": {
             "type": "key",
             "live": false,
-            "source": "file",
+            "source": "default",
             "env": "PEARTUBE_CHANNEL",
             "envSet": false,
-            "value": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
+            "value": ""
           },
           "allowedPeers": {
             "type": "keys",
             "live": true,
-            "source": "file",
+            "source": "default",
             "env": "PEARTUBE_ALLOWED_PEERS",
             "envSet": false,
-            "value": [
-              "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-              "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-            ]
+            "value": []
           },
           "publishChannel": {
             "type": "bool",
             "live": false,
-            "source": "file",
+            "source": "default",
             "env": "PEARTUBE_PUBLISH_CHANNEL",
             "envSet": false,
-            "value": false
+            "value": true
           },
           "directory": {
             "type": "bool",
             "live": true,
-            "source": "file",
+            "source": "default",
             "env": "PEARTUBE_DIRECTORY",
             "envSet": false,
-            "value": true
+            "value": false
           },
           "globalSearch": {
             "type": "bool",
@@ -18124,127 +17761,115 @@
           "acquireConcurrency": {
             "type": "number",
             "live": true,
-            "source": "file",
+            "source": "default",
             "env": "PEARTUBE_ACQUIRE_CONCURRENCY",
             "envSet": false,
-            "value": 16
+            "value": 4
           },
           "feeds": {
             "type": "urls",
             "live": true,
-            "source": "file",
+            "source": "default",
             "env": "PEARTUBE_MIRROR_FEEDS",
             "envSet": false,
-            "value": [
-              {
-                "ref": "#0",
-                "label": "feed.example/api"
-              }
-            ]
+            "value": []
           },
           "replicate": {
             "type": "bool",
             "live": true,
-            "source": "file",
+            "source": "default",
             "env": "PEARTUBE_REPLICATE",
             "envSet": false,
-            "value": true
+            "value": false
           },
           "replicateSources": {
             "type": "keys",
             "live": true,
-            "source": "file",
+            "source": "default",
             "env": "PEARTUBE_REPLICATE",
             "envSet": false,
-            "value": [
-              "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-            ]
+            "value": []
           },
           "replicateFreeGb": {
             "type": "number",
             "live": true,
-            "source": "file",
+            "source": "default",
             "env": "PEARTUBE_REPLICATE_FREE_GB",
             "envSet": false,
-            "value": 50.5
+            "value": 20
           },
           "replicateMbps": {
             "type": "number",
             "live": true,
-            "source": "file",
+            "source": "default",
             "env": "PEARTUBE_REPLICATE_MBPS",
             "envSet": false,
-            "value": 120
+            "value": 80
           },
           "cacheMaxGb": {
             "type": "number",
             "live": true,
-            "source": "file",
+            "source": "default",
             "env": "PEARTUBE_CACHE_MAX_GB",
             "envSet": false,
-            "value": 200
+            "value": 0
           },
           "hiverelays": {
             "type": "urls",
             "live": false,
-            "source": "file",
+            "source": "default",
             "env": "PEARTUBE_HIVERELAYS",
             "envSet": false,
-            "value": [
-              {
-                "ref": "#0",
-                "label": "relay.example/v1"
-              }
-            ]
+            "value": []
           },
           "hiverelayApiKey": {
             "type": "secret",
             "live": false,
-            "source": "file",
+            "source": "default",
             "env": "PEARTUBE_HIVERELAY_API_KEY",
             "envSet": false,
-            "set": true,
+            "set": false,
             "value": ""
           },
           "hiverelayDiscover": {
             "type": "bool",
             "live": false,
-            "source": "file",
+            "source": "default",
             "env": "PEARTUBE_HIVERELAY_DISCOVER",
             "envSet": false,
-            "value": true
+            "value": false
           },
           "hiverelayReplicas": {
             "type": "number",
             "live": false,
-            "source": "file",
+            "source": "default",
             "env": "PEARTUBE_HIVERELAY_REPLICAS",
             "envSet": false,
-            "value": 5
+            "value": 3
           },
           "hiverelayUploadMbps": {
             "type": "number",
             "live": false,
-            "source": "file",
+            "source": "default",
             "env": "PEARTUBE_HIVERELAY_UPLOAD_MBPS",
             "envSet": false,
-            "value": 100
+            "value": 50
           },
           "rechunk": {
             "type": "bool",
             "live": true,
-            "source": "file",
+            "source": "default",
             "env": "PEARTUBE_RECHUNK",
             "envSet": false,
-            "value": true
+            "value": false
           },
           "cinemetaUrl": {
             "type": "url",
             "live": true,
-            "source": "file",
+            "source": "default",
             "env": "PEARTUBE_CINEMETA_URL",
             "envSet": false,
-            "value": "https://meta.example"
+            "value": "https://v3-cinemeta.strem.io"
           },
           "slskUser": {
             "type": "text",

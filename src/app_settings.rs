@@ -129,7 +129,12 @@ pub fn normalize_app_settings(
         .collect();
     if let Some(bad) = bootstrap.iter().find(|node| !is_host_port(node)) {
         return Err(AppSettingsError::new(format!(
-            "Bootstrap node {bad} is not host:port."
+            "Bootstrap node {bad} is not host:port.{}",
+            if looks_ipv6(bad) {
+                " IPv6 addresses are not supported."
+            } else {
+                ""
+            }
         )));
     }
     if require_channel && tracker.is_empty() && mnemonic.is_empty() && sources.is_empty() {
@@ -305,16 +310,28 @@ fn cache_max_gb(raw: Option<&Value>) -> f64 {
     }
 }
 
-/// `isHostPort`: a final `:port` in 1..=65535.
+/// `isBootstrapNode`: a host with no whitespace, `:`, `[` or `]`, then `:port` in 1..=65535.
 fn is_host_port(text: &str) -> bool {
-    let Some(colon) = text.rfind(':') else {
+    let Some((host, port)) = text.rsplit_once(':') else {
         return false;
     };
-    if colon == 0 {
+    if host.is_empty()
+        || host
+            .chars()
+            .any(|c| c.is_whitespace() || c == ':' || c == '[' || c == ']')
+        || port.is_empty()
+        || port.len() > 5
+        || !port.chars().all(|c| c.is_ascii_digit())
+    {
         return false;
     }
-    let port = js_number(&text[colon + 1..]);
+    let port = js_number(port);
     port.fract() == 0.0 && port > 0.0 && port < 65536.0
+}
+
+/// `looksIPv6`: only chooses the message the app gives for a node that is not host:port.
+fn looks_ipv6(text: &str) -> bool {
+    text.contains('[') || text.matches(':').count() > 1
 }
 
 /// `/[\\r\\n,]+/` between sources.

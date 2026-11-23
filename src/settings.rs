@@ -950,8 +950,18 @@ fn validate(key: &str, spec: &Spec, value: &Value) -> Result<Value, SettingsErro
                         out.push(Value::String(text.to_lowercase()));
                     }
                     Kind::Hosts => {
-                        if !is_hosts_entry(text) {
-                            return Err(bad(key, format!("{text} must be host:port")));
+                        if !is_bootstrap_node(text) {
+                            return Err(bad(
+                                key,
+                                format!(
+                                    "{text} must be host:port{}",
+                                    if looks_ipv6(text) {
+                                        " (IPv6 addresses are not supported)"
+                                    } else {
+                                        ""
+                                    }
+                                ),
+                            ));
                         }
                         out.push(Value::String(text.to_owned()));
                     }
@@ -1008,17 +1018,26 @@ fn is_host(text: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | ':' | '[' | ']' | '-'))
 }
 
-/// `^[a-z0-9.:[\]-]+:\d{1,5}$`, case-insensitively.
-fn is_hosts_entry(text: &str) -> bool {
+/// `isBootstrapNode` from the app: a host with no whitespace, `:`, `[` or `]`, then `:port` in 1..=65535.
+fn is_bootstrap_node(text: &str) -> bool {
     let Some((host, port)) = text.rsplit_once(':') else {
         return false;
     };
     !host.is_empty()
-        && host
+        && !host
             .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | ':' | '[' | ']' | '-'))
+            .any(|c| c.is_whitespace() || c == ':' || c == '[' || c == ']')
         && (1..=5).contains(&port.len())
         && port.bytes().all(|byte| byte.is_ascii_digit())
+        && port
+            .parse::<u32>()
+            .map(|port| (1..=65535).contains(&port))
+            .unwrap_or(false)
+}
+
+/// `looksIPv6`: only chooses the message the app gives for a host that is not host:port.
+fn looks_ipv6(text: &str) -> bool {
+    text.contains('[') || text.matches(':').count() > 1
 }
 
 /// `^https?:\/\/[^\s]+$`, case-insensitively.
