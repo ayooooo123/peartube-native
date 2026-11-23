@@ -60,8 +60,8 @@ PROFILE = [
     (r'(^|/)\.cargo/config(\.toml)?$', None, None),
     (r'(^|/)\.config/nextest\.toml$', None, None),
     (r'^\.github/workflows/[^/]+\.ya?ml$', None,
-     r'cargo test|cargo nextest|npm test|npm run test|brittle|--test-threads|--include-ignored|--ignored|--skip'
-     r'|RUST_TEST_THREADS|timeout-minutes|gradlew|xcodebuild'),
+     r'cargo test|cargo nextest|npm test|npm run test|node --test|brittle|--test-[a-z]|--include-ignored|--ignored'
+     r'|--skip|RUST_TEST_THREADS|timeout-minutes|gradlew|xcodebuild'),
     (r'(^|/)package\.json$', r'"scripts"\s*:', r'^\s*"test[^"]*"\s*:'),
 ]
 
