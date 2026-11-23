@@ -1,0 +1,125 @@
+id: text-byte-slice
+language: rust
+severity: error
+message: This byte-range index on text panics when the position is inside a multi-byte character.
+note: |-
+  Split text with `strip_prefix`, `strip_suffix`, `split_once`, `char_indices` or `get(range)`.
+  They return `None` or a valid character position, so no input makes them panic.
+  To decode hex, call the one shared function that checks the input first.
+  See docs/code-rules.md#text-byte-slice.
+# ast-grep has no types, so the rule decides that the indexed value is text from the code around the index.
+# It accepts three kinds of evidence: a text parameter, a `let` that makes text, or a use that only text allows.
+# `$S` is the indexed value. A util that uses `$S` sees the value that the rule bound.
+utils:
+  # A text type: `&str`, `&'a mut str`, `String`, `&String`, `Cow<str>`, `Cow<'_, str>`.
+  text-type:
+    regex: |-
+      ^(&\s*('\w+\s+)?(mut\s+)?)*(str|String|(std::borrow::)?Cow<\s*('\w+\s*,\s*)?str\s*>)$
+  # A value that is text because of the call that makes it.
+  text-value:
+    any:
+      - kind: call_expression
+        has:
+          field: function
+          kind: field_expression
+          has:
+            field: field
+            regex: ^(trim|trim_start|trim_end|trim_matches|trim_start_matches|trim_end_matches|as_str|to_lowercase|to_uppercase|to_ascii_lowercase|to_ascii_uppercase|to_string)$
+      - kind: call_expression
+        has: { field: function, regex: '^String::from$' }
+      - kind: macro_invocation
+        has: { field: macro, regex: '^(std::)?format$' }
+  # A string literal of type `&str`. A byte string (`b"..."`) or a C string (`c"..."`) is not text.
+  str-literal:
+    any:
+      - { kind: string_literal, regex: '^"' }
+      - { kind: raw_string_literal, regex: '^r' }
+  # The enclosing function takes `$S` as a text parameter: `fn f(s: &str)`.
+  text-param:
+    inside:
+      kind: function_item
+      stopBy: end
+      has:
+        kind: parameters
+        has:
+          kind: parameter
+          all:
+            - has: { field: pattern, pattern: $S }
+            - has: { field: type, matches: text-type }
+  # The enclosing function declares `$S` as text: `let s: &str = ..;` or `let s = x.trim();`.
+  text-let:
+    inside:
+      kind: function_item
+      stopBy: end
+      has:
+        stopBy: end
+        kind: let_declaration
+        all:
+          - has: { field: pattern, pattern: $S }
+          - any:
+              - has: { field: type, matches: text-type }
+              - has: { field: value, matches: text-value }
+  # The enclosing function turns `$S` into bytes: `let text = text.as_bytes();`. Then `text[..2]` is not on text.
+  rebound-as-bytes:
+    inside:
+      kind: function_item
+      stopBy: end
+      has:
+        stopBy: end
+        kind: let_declaration
+        all:
+          - has:
+              field: pattern
+              any:
+                - pattern: $S
+                - has: { stopBy: end, pattern: $S }
+          - has: { field: value, regex: 'as_bytes\(\)' }
+  # A node that holds a slice and that accepts only text in that place.
+  text-context:
+    any:
+      # `match &t[..2] { "0x" => .. }`
+      - kind: match_expression
+        has:
+          field: body
+          has:
+            kind: match_arm
+            has:
+              field: pattern
+              has:
+                matches: str-literal
+                stopBy: { not: { kind: or_pattern } }
+      # `&t[..2] == "0x"`
+      - kind: binary_expression
+        all:
+          - has: { field: operator, regex: '^(==|!=)$' }
+          - has: { matches: str-literal }
+      # `u8::from_str_radix(&t[..2], 16)`
+      - kind: arguments
+        inside:
+          kind: call_expression
+          has: { field: function, regex: 'from_str_radix$' }
+      # `t[..2].parse::<u8>()`
+      - kind: field_expression
+        has:
+          field: field
+          regex: ^(parse|chars|char_indices|trim|trim_start|trim_end|to_lowercase|to_uppercase|to_string|split_once|split_whitespace|lines)$
+rule:
+  kind: index_expression
+  all:
+    # The index is a range with at least one bound. `t[..]` never panics.
+    - has:
+        nthChild: 2
+        kind: range_expression
+        not: { regex: '^\.\.$' }
+    - has: { nthChild: 1, pattern: $S }
+    - any:
+        - all:
+            - any:
+                - matches: text-param
+                - matches: text-let
+            - not: { matches: rebound-as-bytes }
+        # The slice, or a reference to it, is in a place that accepts only text.
+        - inside: { matches: text-context }
+        - inside:
+            kind: reference_expression
+            inside: { matches: text-context }

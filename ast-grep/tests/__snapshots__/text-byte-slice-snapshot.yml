@@ -1,0 +1,1517 @@
+id: text-byte-slice
+snapshots:
+  ? |
+    fn f(mut s: String) { s.push('x'); let _ = &s[..2]; }
+  : labels:
+    - source: s[..2]
+      style: primary
+      start: 44
+      end: 50
+    - source: ..2
+      style: secondary
+      start: 46
+      end: 49
+    - source: s
+      style: secondary
+      start: 44
+      end: 45
+    - source: s
+      style: secondary
+      start: 9
+      end: 10
+    - source: String
+      style: secondary
+      start: 12
+      end: 18
+    - source: 'mut s: String'
+      style: secondary
+      start: 5
+      end: 18
+    - source: '(mut s: String)'
+      style: secondary
+      start: 4
+      end: 19
+    - source: 'fn f(mut s: String) { s.push(''x''); let _ = &s[..2]; }'
+      style: secondary
+      start: 0
+      end: 53
+  ? |
+    fn f(s: &String) { let _ = &s[..2]; }
+  : labels:
+    - source: s[..2]
+      style: primary
+      start: 28
+      end: 34
+    - source: ..2
+      style: secondary
+      start: 30
+      end: 33
+    - source: s
+      style: secondary
+      start: 28
+      end: 29
+    - source: s
+      style: secondary
+      start: 5
+      end: 6
+    - source: '&String'
+      style: secondary
+      start: 8
+      end: 15
+    - source: 's: &String'
+      style: secondary
+      start: 5
+      end: 15
+    - source: '(s: &String)'
+      style: secondary
+      start: 4
+      end: 16
+    - source: 'fn f(s: &String) { let _ = &s[..2]; }'
+      style: secondary
+      start: 0
+      end: 37
+  ? |
+    fn f(s: &mut str) { let _ = &s[1..3]; }
+  : labels:
+    - source: s[1..3]
+      style: primary
+      start: 29
+      end: 36
+    - source: 1..3
+      style: secondary
+      start: 31
+      end: 35
+    - source: s
+      style: secondary
+      start: 29
+      end: 30
+    - source: s
+      style: secondary
+      start: 5
+      end: 6
+    - source: '&mut str'
+      style: secondary
+      start: 8
+      end: 16
+    - source: 's: &mut str'
+      style: secondary
+      start: 5
+      end: 16
+    - source: '(s: &mut str)'
+      style: secondary
+      start: 4
+      end: 17
+    - source: 'fn f(s: &mut str) { let _ = &s[1..3]; }'
+      style: secondary
+      start: 0
+      end: 39
+  ? |
+    fn f(s: &str) -> &str { &s[..2] }
+  : labels:
+    - source: s[..2]
+      style: primary
+      start: 25
+      end: 31
+    - source: ..2
+      style: secondary
+      start: 27
+      end: 30
+    - source: s
+      style: secondary
+      start: 25
+      end: 26
+    - source: s
+      style: secondary
+      start: 5
+      end: 6
+    - source: '&str'
+      style: secondary
+      start: 8
+      end: 12
+    - source: 's: &str'
+      style: secondary
+      start: 5
+      end: 12
+    - source: '(s: &str)'
+      style: secondary
+      start: 4
+      end: 13
+    - source: 'fn f(s: &str) -> &str { &s[..2] }'
+      style: secondary
+      start: 0
+      end: 33
+  ? |
+    fn f(s: Cow<'_, str>) { let _ = &s[..2]; }
+  : labels:
+    - source: s[..2]
+      style: primary
+      start: 33
+      end: 39
+    - source: ..2
+      style: secondary
+      start: 35
+      end: 38
+    - source: s
+      style: secondary
+      start: 33
+      end: 34
+    - source: s
+      style: secondary
+      start: 5
+      end: 6
+    - source: Cow<'_, str>
+      style: secondary
+      start: 8
+      end: 20
+    - source: 's: Cow<''_, str>'
+      style: secondary
+      start: 5
+      end: 20
+    - source: '(s: Cow<''_, str>)'
+      style: secondary
+      start: 4
+      end: 21
+    - source: 'fn f(s: Cow<''_, str>) { let _ = &s[..2]; }'
+      style: secondary
+      start: 0
+      end: 42
+  ? |
+    fn f(s: Cow<str>) { let _ = &s[..2]; }
+  : labels:
+    - source: s[..2]
+      style: primary
+      start: 29
+      end: 35
+    - source: ..2
+      style: secondary
+      start: 31
+      end: 34
+    - source: s
+      style: secondary
+      start: 29
+      end: 30
+    - source: s
+      style: secondary
+      start: 5
+      end: 6
+    - source: Cow<str>
+      style: secondary
+      start: 8
+      end: 16
+    - source: 's: Cow<str>'
+      style: secondary
+      start: 5
+      end: 16
+    - source: '(s: Cow<str>)'
+      style: secondary
+      start: 4
+      end: 17
+    - source: 'fn f(s: Cow<str>) { let _ = &s[..2]; }'
+      style: secondary
+      start: 0
+      end: 38
+  ? |
+    fn f(s: String) { let _ = &s[1..=3]; }
+  : labels:
+    - source: s[1..=3]
+      style: primary
+      start: 27
+      end: 35
+    - source: 1..=3
+      style: secondary
+      start: 29
+      end: 34
+    - source: s
+      style: secondary
+      start: 27
+      end: 28
+    - source: s
+      style: secondary
+      start: 5
+      end: 6
+    - source: String
+      style: secondary
+      start: 8
+      end: 14
+    - source: 's: String'
+      style: secondary
+      start: 5
+      end: 14
+    - source: '(s: String)'
+      style: secondary
+      start: 4
+      end: 15
+    - source: 'fn f(s: String) { let _ = &s[1..=3]; }'
+      style: secondary
+      start: 0
+      end: 38
+  ? |
+    fn f(x: Foo) -> bool { "0x" != &x[..2] }
+  : labels:
+    - source: x[..2]
+      style: primary
+      start: 32
+      end: 38
+    - source: ..2
+      style: secondary
+      start: 34
+      end: 37
+    - source: x
+      style: secondary
+      start: 32
+      end: 33
+    - source: '!='
+      style: secondary
+      start: 28
+      end: 30
+    - source: '"0x"'
+      style: secondary
+      start: 23
+      end: 27
+    - source: '"0x" != &x[..2]'
+      style: secondary
+      start: 23
+      end: 38
+    - source: '&x[..2]'
+      style: secondary
+      start: 31
+      end: 38
+  ? |
+    fn f(x: Foo) -> bool { &x[..2] == "0x" }
+  : labels:
+    - source: x[..2]
+      style: primary
+      start: 24
+      end: 30
+    - source: ..2
+      style: secondary
+      start: 26
+      end: 29
+    - source: x
+      style: secondary
+      start: 24
+      end: 25
+    - source: ==
+      style: secondary
+      start: 31
+      end: 33
+    - source: '"0x"'
+      style: secondary
+      start: 34
+      end: 38
+    - source: '&x[..2] == "0x"'
+      style: secondary
+      start: 23
+      end: 38
+    - source: '&x[..2]'
+      style: secondary
+      start: 23
+      end: 30
+  ? |
+    fn f(x: Foo) -> bool { &x[..2] == r"0x" }
+  : labels:
+    - source: x[..2]
+      style: primary
+      start: 24
+      end: 30
+    - source: ..2
+      style: secondary
+      start: 26
+      end: 29
+    - source: x
+      style: secondary
+      start: 24
+      end: 25
+    - source: ==
+      style: secondary
+      start: 31
+      end: 33
+    - source: r"0x"
+      style: secondary
+      start: 34
+      end: 39
+    - source: '&x[..2] == r"0x"'
+      style: secondary
+      start: 23
+      end: 39
+    - source: '&x[..2]'
+      style: secondary
+      start: 23
+      end: 30
+  ? |
+    fn f(x: Foo) -> u8 {
+        match &x[..2] {
+            "0x" => 16,
+            _ => 10,
+        }
+    }
+  : labels:
+    - source: x[..2]
+      style: primary
+      start: 32
+      end: 38
+    - source: ..2
+      style: secondary
+      start: 34
+      end: 37
+    - source: x
+      style: secondary
+      start: 32
+      end: 33
+    - source: '"0x"'
+      style: secondary
+      start: 49
+      end: 53
+    - source: '"0x"'
+      style: secondary
+      start: 49
+      end: 53
+    - source: '"0x" => 16,'
+      style: secondary
+      start: 49
+      end: 60
+    - source: '"0x" => 16,'
+      style: secondary
+      start: 49
+      end: 60
+    - source: |-
+        match &x[..2] {
+                "0x" => 16,
+                _ => 10,
+            }
+      style: secondary
+      start: 25
+      end: 83
+    - source: '&x[..2]'
+      style: secondary
+      start: 31
+      end: 38
+  ? |
+    fn f(x: Foo) -> u8 { u8::from_str_radix(&x[..2], 16).unwrap() }
+  : labels:
+    - source: x[..2]
+      style: primary
+      start: 41
+      end: 47
+    - source: ..2
+      style: secondary
+      start: 43
+      end: 46
+    - source: x
+      style: secondary
+      start: 41
+      end: 42
+    - source: u8::from_str_radix
+      style: secondary
+      start: 21
+      end: 39
+    - source: u8::from_str_radix(&x[..2], 16)
+      style: secondary
+      start: 21
+      end: 52
+    - source: (&x[..2], 16)
+      style: secondary
+      start: 39
+      end: 52
+    - source: '&x[..2]'
+      style: secondary
+      start: 40
+      end: 47
+  ? |
+    fn f(x: Foo) { let _ = x[..2].char_indices(); }
+  : labels:
+    - source: x[..2]
+      style: primary
+      start: 23
+      end: 29
+    - source: ..2
+      style: secondary
+      start: 25
+      end: 28
+    - source: x
+      style: secondary
+      start: 23
+      end: 24
+    - source: char_indices
+      style: secondary
+      start: 30
+      end: 42
+    - source: x[..2].char_indices
+      style: secondary
+      start: 23
+      end: 42
+  ? |
+    fn f(x: Foo) { let _ = x[..2].chars(); }
+  : labels:
+    - source: x[..2]
+      style: primary
+      start: 23
+      end: 29
+    - source: ..2
+      style: secondary
+      start: 25
+      end: 28
+    - source: x
+      style: secondary
+      start: 23
+      end: 24
+    - source: chars
+      style: secondary
+      start: 30
+      end: 35
+    - source: x[..2].chars
+      style: secondary
+      start: 23
+      end: 35
+  ? |
+    fn f(x: Foo) { let _ = x[..2].lines(); }
+  : labels:
+    - source: x[..2]
+      style: primary
+      start: 23
+      end: 29
+    - source: ..2
+      style: secondary
+      start: 25
+      end: 28
+    - source: x
+      style: secondary
+      start: 23
+      end: 24
+    - source: lines
+      style: secondary
+      start: 30
+      end: 35
+    - source: x[..2].lines
+      style: secondary
+      start: 23
+      end: 35
+  ? |
+    fn f(x: Foo) { let _ = x[..2].parse::<u8>(); }
+  : labels:
+    - source: x[..2]
+      style: primary
+      start: 23
+      end: 29
+    - source: ..2
+      style: secondary
+      start: 25
+      end: 28
+    - source: x
+      style: secondary
+      start: 23
+      end: 24
+    - source: parse
+      style: secondary
+      start: 30
+      end: 35
+    - source: x[..2].parse
+      style: secondary
+      start: 23
+      end: 35
+  ? |
+    fn f(x: Foo) { let _ = x[..2].split_once(':'); }
+  : labels:
+    - source: x[..2]
+      style: primary
+      start: 23
+      end: 29
+    - source: ..2
+      style: secondary
+      start: 25
+      end: 28
+    - source: x
+      style: secondary
+      start: 23
+      end: 24
+    - source: split_once
+      style: secondary
+      start: 30
+      end: 40
+    - source: x[..2].split_once
+      style: secondary
+      start: 23
+      end: 40
+  ? |
+    fn f(x: Foo) { let _ = x[..2].split_whitespace(); }
+  : labels:
+    - source: x[..2]
+      style: primary
+      start: 23
+      end: 29
+    - source: ..2
+      style: secondary
+      start: 25
+      end: 28
+    - source: x
+      style: secondary
+      start: 23
+      end: 24
+    - source: split_whitespace
+      style: secondary
+      start: 30
+      end: 46
+    - source: x[..2].split_whitespace
+      style: secondary
+      start: 23
+      end: 46
+  ? |
+    fn f(x: Foo) { let _ = x[..2].to_lowercase(); }
+  : labels:
+    - source: x[..2]
+      style: primary
+      start: 23
+      end: 29
+    - source: ..2
+      style: secondary
+      start: 25
+      end: 28
+    - source: x
+      style: secondary
+      start: 23
+      end: 24
+    - source: to_lowercase
+      style: secondary
+      start: 30
+      end: 42
+    - source: x[..2].to_lowercase
+      style: secondary
+      start: 23
+      end: 42
+  ? |
+    fn f(x: Foo) { let _ = x[..2].to_string(); }
+  : labels:
+    - source: x[..2]
+      style: primary
+      start: 23
+      end: 29
+    - source: ..2
+      style: secondary
+      start: 25
+      end: 28
+    - source: x
+      style: secondary
+      start: 23
+      end: 24
+    - source: to_string
+      style: secondary
+      start: 30
+      end: 39
+    - source: x[..2].to_string
+      style: secondary
+      start: 23
+      end: 39
+  ? |
+    fn f(x: Foo) { let _ = x[..2].to_uppercase(); }
+  : labels:
+    - source: x[..2]
+      style: primary
+      start: 23
+      end: 29
+    - source: ..2
+      style: secondary
+      start: 25
+      end: 28
+    - source: x
+      style: secondary
+      start: 23
+      end: 24
+    - source: to_uppercase
+      style: secondary
+      start: 30
+      end: 42
+    - source: x[..2].to_uppercase
+      style: secondary
+      start: 23
+      end: 42
+  ? |
+    fn f(x: Foo) { let _ = x[..2].trim(); }
+  : labels:
+    - source: x[..2]
+      style: primary
+      start: 23
+      end: 29
+    - source: ..2
+      style: secondary
+      start: 25
+      end: 28
+    - source: x
+      style: secondary
+      start: 23
+      end: 24
+    - source: trim
+      style: secondary
+      start: 30
+      end: 34
+    - source: x[..2].trim
+      style: secondary
+      start: 23
+      end: 34
+  ? |
+    fn f(x: Foo) { let _ = x[..2].trim_end(); }
+  : labels:
+    - source: x[..2]
+      style: primary
+      start: 23
+      end: 29
+    - source: ..2
+      style: secondary
+      start: 25
+      end: 28
+    - source: x
+      style: secondary
+      start: 23
+      end: 24
+    - source: trim_end
+      style: secondary
+      start: 30
+      end: 38
+    - source: x[..2].trim_end
+      style: secondary
+      start: 23
+      end: 38
+  ? |
+    fn f(x: Foo) { let _ = x[..2].trim_start(); }
+  : labels:
+    - source: x[..2]
+      style: primary
+      start: 23
+      end: 29
+    - source: ..2
+      style: secondary
+      start: 25
+      end: 28
+    - source: x
+      style: secondary
+      start: 23
+      end: 24
+    - source: trim_start
+      style: secondary
+      start: 30
+      end: 40
+    - source: x[..2].trim_start
+      style: secondary
+      start: 23
+      end: 40
+  ? |
+    fn f(x: Foo) { let t = String::from(x.name()); let _ = &t[..2]; }
+  : labels:
+    - source: t[..2]
+      style: primary
+      start: 56
+      end: 62
+    - source: ..2
+      style: secondary
+      start: 58
+      end: 61
+    - source: t
+      style: secondary
+      start: 56
+      end: 57
+    - source: t
+      style: secondary
+      start: 19
+      end: 20
+    - source: String::from
+      style: secondary
+      start: 23
+      end: 35
+    - source: String::from(x.name())
+      style: secondary
+      start: 23
+      end: 45
+    - source: let t = String::from(x.name());
+      style: secondary
+      start: 15
+      end: 46
+    - source: 'fn f(x: Foo) { let t = String::from(x.name()); let _ = &t[..2]; }'
+      style: secondary
+      start: 0
+      end: 65
+  ? |
+    fn f(x: Foo) { let t = format!("{}", x.name()); let _ = &t[..2]; }
+  : labels:
+    - source: t[..2]
+      style: primary
+      start: 57
+      end: 63
+    - source: ..2
+      style: secondary
+      start: 59
+      end: 62
+    - source: t
+      style: secondary
+      start: 57
+      end: 58
+    - source: t
+      style: secondary
+      start: 19
+      end: 20
+    - source: format
+      style: secondary
+      start: 23
+      end: 29
+    - source: format!("{}", x.name())
+      style: secondary
+      start: 23
+      end: 46
+    - source: let t = format!("{}", x.name());
+      style: secondary
+      start: 15
+      end: 47
+    - source: 'fn f(x: Foo) { let t = format!("{}", x.name()); let _ = &t[..2]; }'
+      style: secondary
+      start: 0
+      end: 66
+  ? |
+    fn f(x: Foo) { let t = x.as_str(); let _ = &t[1..]; }
+  : labels:
+    - source: t[1..]
+      style: primary
+      start: 44
+      end: 50
+    - source: 1..
+      style: secondary
+      start: 46
+      end: 49
+    - source: t
+      style: secondary
+      start: 44
+      end: 45
+    - source: t
+      style: secondary
+      start: 19
+      end: 20
+    - source: as_str
+      style: secondary
+      start: 25
+      end: 31
+    - source: x.as_str
+      style: secondary
+      start: 23
+      end: 31
+    - source: x.as_str()
+      style: secondary
+      start: 23
+      end: 33
+    - source: let t = x.as_str();
+      style: secondary
+      start: 15
+      end: 34
+    - source: 'fn f(x: Foo) { let t = x.as_str(); let _ = &t[1..]; }'
+      style: secondary
+      start: 0
+      end: 53
+  ? |
+    fn f(x: Foo) { let t = x.to_ascii_lowercase(); let _ = &t[1..]; }
+  : labels:
+    - source: t[1..]
+      style: primary
+      start: 56
+      end: 62
+    - source: 1..
+      style: secondary
+      start: 58
+      end: 61
+    - source: t
+      style: secondary
+      start: 56
+      end: 57
+    - source: t
+      style: secondary
+      start: 19
+      end: 20
+    - source: to_ascii_lowercase
+      style: secondary
+      start: 25
+      end: 43
+    - source: x.to_ascii_lowercase
+      style: secondary
+      start: 23
+      end: 43
+    - source: x.to_ascii_lowercase()
+      style: secondary
+      start: 23
+      end: 45
+    - source: let t = x.to_ascii_lowercase();
+      style: secondary
+      start: 15
+      end: 46
+    - source: 'fn f(x: Foo) { let t = x.to_ascii_lowercase(); let _ = &t[1..]; }'
+      style: secondary
+      start: 0
+      end: 65
+  ? |
+    fn f(x: Foo) { let t = x.to_ascii_uppercase(); let _ = &t[1..]; }
+  : labels:
+    - source: t[1..]
+      style: primary
+      start: 56
+      end: 62
+    - source: 1..
+      style: secondary
+      start: 58
+      end: 61
+    - source: t
+      style: secondary
+      start: 56
+      end: 57
+    - source: t
+      style: secondary
+      start: 19
+      end: 20
+    - source: to_ascii_uppercase
+      style: secondary
+      start: 25
+      end: 43
+    - source: x.to_ascii_uppercase
+      style: secondary
+      start: 23
+      end: 43
+    - source: x.to_ascii_uppercase()
+      style: secondary
+      start: 23
+      end: 45
+    - source: let t = x.to_ascii_uppercase();
+      style: secondary
+      start: 15
+      end: 46
+    - source: 'fn f(x: Foo) { let t = x.to_ascii_uppercase(); let _ = &t[1..]; }'
+      style: secondary
+      start: 0
+      end: 65
+  ? |
+    fn f(x: Foo) { let t = x.to_lowercase(); let _ = &t[1..]; }
+  : labels:
+    - source: t[1..]
+      style: primary
+      start: 50
+      end: 56
+    - source: 1..
+      style: secondary
+      start: 52
+      end: 55
+    - source: t
+      style: secondary
+      start: 50
+      end: 51
+    - source: t
+      style: secondary
+      start: 19
+      end: 20
+    - source: to_lowercase
+      style: secondary
+      start: 25
+      end: 37
+    - source: x.to_lowercase
+      style: secondary
+      start: 23
+      end: 37
+    - source: x.to_lowercase()
+      style: secondary
+      start: 23
+      end: 39
+    - source: let t = x.to_lowercase();
+      style: secondary
+      start: 15
+      end: 40
+    - source: 'fn f(x: Foo) { let t = x.to_lowercase(); let _ = &t[1..]; }'
+      style: secondary
+      start: 0
+      end: 59
+  ? |
+    fn f(x: Foo) { let t = x.to_string(); let _ = &t[1..]; }
+  : labels:
+    - source: t[1..]
+      style: primary
+      start: 47
+      end: 53
+    - source: 1..
+      style: secondary
+      start: 49
+      end: 52
+    - source: t
+      style: secondary
+      start: 47
+      end: 48
+    - source: t
+      style: secondary
+      start: 19
+      end: 20
+    - source: to_string
+      style: secondary
+      start: 25
+      end: 34
+    - source: x.to_string
+      style: secondary
+      start: 23
+      end: 34
+    - source: x.to_string()
+      style: secondary
+      start: 23
+      end: 36
+    - source: let t = x.to_string();
+      style: secondary
+      start: 15
+      end: 37
+    - source: 'fn f(x: Foo) { let t = x.to_string(); let _ = &t[1..]; }'
+      style: secondary
+      start: 0
+      end: 56
+  ? |
+    fn f(x: Foo) { let t = x.to_uppercase(); let _ = &t[1..]; }
+  : labels:
+    - source: t[1..]
+      style: primary
+      start: 50
+      end: 56
+    - source: 1..
+      style: secondary
+      start: 52
+      end: 55
+    - source: t
+      style: secondary
+      start: 50
+      end: 51
+    - source: t
+      style: secondary
+      start: 19
+      end: 20
+    - source: to_uppercase
+      style: secondary
+      start: 25
+      end: 37
+    - source: x.to_uppercase
+      style: secondary
+      start: 23
+      end: 37
+    - source: x.to_uppercase()
+      style: secondary
+      start: 23
+      end: 39
+    - source: let t = x.to_uppercase();
+      style: secondary
+      start: 15
+      end: 40
+    - source: 'fn f(x: Foo) { let t = x.to_uppercase(); let _ = &t[1..]; }'
+      style: secondary
+      start: 0
+      end: 59
+  ? |
+    fn f(x: Foo) { let t = x.trim(); let _ = &t[1..]; }
+  : labels:
+    - source: t[1..]
+      style: primary
+      start: 42
+      end: 48
+    - source: 1..
+      style: secondary
+      start: 44
+      end: 47
+    - source: t
+      style: secondary
+      start: 42
+      end: 43
+    - source: t
+      style: secondary
+      start: 19
+      end: 20
+    - source: trim
+      style: secondary
+      start: 25
+      end: 29
+    - source: x.trim
+      style: secondary
+      start: 23
+      end: 29
+    - source: x.trim()
+      style: secondary
+      start: 23
+      end: 31
+    - source: let t = x.trim();
+      style: secondary
+      start: 15
+      end: 32
+    - source: 'fn f(x: Foo) { let t = x.trim(); let _ = &t[1..]; }'
+      style: secondary
+      start: 0
+      end: 51
+  ? |
+    fn f(x: Foo) { let t = x.trim_end(); let _ = &t[1..]; }
+  : labels:
+    - source: t[1..]
+      style: primary
+      start: 46
+      end: 52
+    - source: 1..
+      style: secondary
+      start: 48
+      end: 51
+    - source: t
+      style: secondary
+      start: 46
+      end: 47
+    - source: t
+      style: secondary
+      start: 19
+      end: 20
+    - source: trim_end
+      style: secondary
+      start: 25
+      end: 33
+    - source: x.trim_end
+      style: secondary
+      start: 23
+      end: 33
+    - source: x.trim_end()
+      style: secondary
+      start: 23
+      end: 35
+    - source: let t = x.trim_end();
+      style: secondary
+      start: 15
+      end: 36
+    - source: 'fn f(x: Foo) { let t = x.trim_end(); let _ = &t[1..]; }'
+      style: secondary
+      start: 0
+      end: 55
+  ? |
+    fn f(x: Foo) { let t = x.trim_end_matches('a'); let _ = &t[1..]; }
+  : labels:
+    - source: t[1..]
+      style: primary
+      start: 57
+      end: 63
+    - source: 1..
+      style: secondary
+      start: 59
+      end: 62
+    - source: t
+      style: secondary
+      start: 57
+      end: 58
+    - source: t
+      style: secondary
+      start: 19
+      end: 20
+    - source: trim_end_matches
+      style: secondary
+      start: 25
+      end: 41
+    - source: x.trim_end_matches
+      style: secondary
+      start: 23
+      end: 41
+    - source: x.trim_end_matches('a')
+      style: secondary
+      start: 23
+      end: 46
+    - source: let t = x.trim_end_matches('a');
+      style: secondary
+      start: 15
+      end: 47
+    - source: 'fn f(x: Foo) { let t = x.trim_end_matches(''a''); let _ = &t[1..]; }'
+      style: secondary
+      start: 0
+      end: 66
+  ? |
+    fn f(x: Foo) { let t = x.trim_matches('a'); let _ = &t[1..]; }
+  : labels:
+    - source: t[1..]
+      style: primary
+      start: 53
+      end: 59
+    - source: 1..
+      style: secondary
+      start: 55
+      end: 58
+    - source: t
+      style: secondary
+      start: 53
+      end: 54
+    - source: t
+      style: secondary
+      start: 19
+      end: 20
+    - source: trim_matches
+      style: secondary
+      start: 25
+      end: 37
+    - source: x.trim_matches
+      style: secondary
+      start: 23
+      end: 37
+    - source: x.trim_matches('a')
+      style: secondary
+      start: 23
+      end: 42
+    - source: let t = x.trim_matches('a');
+      style: secondary
+      start: 15
+      end: 43
+    - source: 'fn f(x: Foo) { let t = x.trim_matches(''a''); let _ = &t[1..]; }'
+      style: secondary
+      start: 0
+      end: 62
+  ? |
+    fn f(x: Foo) { let t = x.trim_start(); let _ = &t[1..]; }
+  : labels:
+    - source: t[1..]
+      style: primary
+      start: 48
+      end: 54
+    - source: 1..
+      style: secondary
+      start: 50
+      end: 53
+    - source: t
+      style: secondary
+      start: 48
+      end: 49
+    - source: t
+      style: secondary
+      start: 19
+      end: 20
+    - source: trim_start
+      style: secondary
+      start: 25
+      end: 35
+    - source: x.trim_start
+      style: secondary
+      start: 23
+      end: 35
+    - source: x.trim_start()
+      style: secondary
+      start: 23
+      end: 37
+    - source: let t = x.trim_start();
+      style: secondary
+      start: 15
+      end: 38
+    - source: 'fn f(x: Foo) { let t = x.trim_start(); let _ = &t[1..]; }'
+      style: secondary
+      start: 0
+      end: 57
+  ? |
+    fn f(x: Foo) { let t = x.trim_start_matches('a'); let _ = &t[1..]; }
+  : labels:
+    - source: t[1..]
+      style: primary
+      start: 59
+      end: 65
+    - source: 1..
+      style: secondary
+      start: 61
+      end: 64
+    - source: t
+      style: secondary
+      start: 59
+      end: 60
+    - source: t
+      style: secondary
+      start: 19
+      end: 20
+    - source: trim_start_matches
+      style: secondary
+      start: 25
+      end: 43
+    - source: x.trim_start_matches
+      style: secondary
+      start: 23
+      end: 43
+    - source: x.trim_start_matches('a')
+      style: secondary
+      start: 23
+      end: 48
+    - source: let t = x.trim_start_matches('a');
+      style: secondary
+      start: 15
+      end: 49
+    - source: 'fn f(x: Foo) { let t = x.trim_start_matches(''a''); let _ = &t[1..]; }'
+      style: secondary
+      start: 0
+      end: 68
+  ? |
+    fn f(x: Foo) { let t: &str = x.name(); let _ = &t[..2]; }
+  : labels:
+    - source: t[..2]
+      style: primary
+      start: 48
+      end: 54
+    - source: ..2
+      style: secondary
+      start: 50
+      end: 53
+    - source: t
+      style: secondary
+      start: 48
+      end: 49
+    - source: t
+      style: secondary
+      start: 19
+      end: 20
+    - source: '&str'
+      style: secondary
+      start: 22
+      end: 26
+    - source: 'let t: &str = x.name();'
+      style: secondary
+      start: 15
+      end: 38
+    - source: 'fn f(x: Foo) { let t: &str = x.name(); let _ = &t[..2]; }'
+      style: secondary
+      start: 0
+      end: 57
+  ? |
+    fn f(x: Foo) { let t: String = x.name(); let _ = &t[..2]; }
+  : labels:
+    - source: t[..2]
+      style: primary
+      start: 50
+      end: 56
+    - source: ..2
+      style: secondary
+      start: 52
+      end: 55
+    - source: t
+      style: secondary
+      start: 50
+      end: 51
+    - source: t
+      style: secondary
+      start: 19
+      end: 20
+    - source: String
+      style: secondary
+      start: 22
+      end: 28
+    - source: 'let t: String = x.name();'
+      style: secondary
+      start: 15
+      end: 40
+    - source: 'fn f(x: Foo) { let t: String = x.name(); let _ = &t[..2]; }'
+      style: secondary
+      start: 0
+      end: 59
+  ? |
+    fn f<'a>(s: &'a str) -> &'a str { &s[1..] }
+  : labels:
+    - source: s[1..]
+      style: primary
+      start: 35
+      end: 41
+    - source: 1..
+      style: secondary
+      start: 37
+      end: 40
+    - source: s
+      style: secondary
+      start: 35
+      end: 36
+    - source: s
+      style: secondary
+      start: 9
+      end: 10
+    - source: '&''a str'
+      style: secondary
+      start: 12
+      end: 19
+    - source: 's: &''a str'
+      style: secondary
+      start: 9
+      end: 19
+    - source: '(s: &''a str)'
+      style: secondary
+      start: 8
+      end: 20
+    - source: 'fn f<''a>(s: &''a str) -> &''a str { &s[1..] }'
+      style: secondary
+      start: 0
+      end: 43
+  ? |
+    fn parse_hex32(text: &str) -> Option<[u8; 32]> {
+        if text.len() != 64 {
+            return None;
+        }
+        let mut key = [0u8; 32];
+        for (index, byte) in key.iter_mut().enumerate() {
+            *byte = u8::from_str_radix(&text[index * 2..index * 2 + 2], 16).ok()?;
+        }
+        Some(key)
+    }
+  : labels:
+    - source: text[index * 2..index * 2 + 2]
+      style: primary
+      start: 221
+      end: 251
+    - source: index * 2..index * 2 + 2
+      style: secondary
+      start: 226
+      end: 250
+    - source: text
+      style: secondary
+      start: 221
+      end: 225
+    - source: text
+      style: secondary
+      start: 15
+      end: 19
+    - source: '&str'
+      style: secondary
+      start: 21
+      end: 25
+    - source: 'text: &str'
+      style: secondary
+      start: 15
+      end: 25
+    - source: '(text: &str)'
+      style: secondary
+      start: 14
+      end: 26
+    - source: |-
+        fn parse_hex32(text: &str) -> Option<[u8; 32]> {
+            if text.len() != 64 {
+                return None;
+            }
+            let mut key = [0u8; 32];
+            for (index, byte) in key.iter_mut().enumerate() {
+                *byte = u8::from_str_radix(&text[index * 2..index * 2 + 2], 16).ok()?;
+            }
+            Some(key)
+        }
+      style: secondary
+      start: 0
+      end: 285
+  ? |
+    fn unhex(s: &str) -> Vec<u8> {
+        (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap()).collect()
+    }
+  : labels:
+    - source: s[i..i + 2]
+      style: primary
+      start: 87
+      end: 98
+    - source: i..i + 2
+      style: secondary
+      start: 89
+      end: 97
+    - source: s
+      style: secondary
+      start: 87
+      end: 88
+    - source: s
+      style: secondary
+      start: 9
+      end: 10
+    - source: '&str'
+      style: secondary
+      start: 12
+      end: 16
+    - source: 's: &str'
+      style: secondary
+      start: 9
+      end: 16
+    - source: '(s: &str)'
+      style: secondary
+      start: 8
+      end: 17
+    - source: |-
+        fn unhex(s: &str) -> Vec<u8> {
+            (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap()).collect()
+        }
+      style: secondary
+      start: 0
+      end: 125
+  ? |
+    impl Reader {
+        fn f(&self, s: &str) -> &str { &s[..2] }
+    }
+  : labels:
+    - source: s[..2]
+      style: primary
+      start: 50
+      end: 56
+    - source: ..2
+      style: secondary
+      start: 52
+      end: 55
+    - source: s
+      style: secondary
+      start: 50
+      end: 51
+    - source: s
+      style: secondary
+      start: 30
+      end: 31
+    - source: '&str'
+      style: secondary
+      start: 33
+      end: 37
+    - source: 's: &str'
+      style: secondary
+      start: 30
+      end: 37
+    - source: '(&self, s: &str)'
+      style: secondary
+      start: 22
+      end: 38
+    - source: 'fn f(&self, s: &str) -> &str { &s[..2] }'
+      style: secondary
+      start: 18
+      end: 58
+  ? |
+    pub(crate) fn js_number(s: &str) -> f64 {
+        let t = js_trim(s);
+        if t.len() > 2 {
+            let radix = match &t[..2] {
+                "0x" | "0X" => Some(16),
+                "0o" | "0O" => Some(8),
+                "0b" | "0B" => Some(2),
+                _ => None,
+            };
+        }
+        0.0
+    }
+  : labels:
+    - source: t[..2]
+      style: primary
+      start: 114
+      end: 120
+    - source: ..2
+      style: secondary
+      start: 116
+      end: 119
+    - source: t
+      style: secondary
+      start: 114
+      end: 115
+    - source: '"0x"'
+      style: secondary
+      start: 135
+      end: 139
+    - source: '"0x"'
+      style: secondary
+      start: 135
+      end: 139
+    - source: '"0x" | "0X" => Some(16),'
+      style: secondary
+      start: 135
+      end: 159
+    - source: '"0x" | "0X" => Some(16),'
+      style: secondary
+      start: 135
+      end: 159
+    - source: |-
+        match &t[..2] {
+                    "0x" | "0X" => Some(16),
+                    "0o" | "0O" => Some(8),
+                    "0b" | "0B" => Some(2),
+                    _ => None,
+                }
+      style: secondary
+      start: 107
+      end: 264
+    - source: '&t[..2]'
+      style: secondary
+      start: 113
+      end: 120

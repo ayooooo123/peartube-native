@@ -1,0 +1,263 @@
+id: text-byte-slice
+valid:
+  # The repaired form of the fault from pull request 31: `get` returns `None` for a position inside a character.
+  - |
+    pub(crate) fn js_number(s: &str) -> f64 {
+        let t = js_trim(s);
+        if let Some(prefix) = t.get(..2) {
+            let radix = match prefix {
+                "0x" | "0X" => Some(16),
+                "0o" | "0O" => Some(8),
+                "0b" | "0B" => Some(2),
+                _ => None,
+            };
+        }
+        0.0
+    }
+  # `strip_prefix` has no index.
+  - |
+    fn f(t: &str) -> Option<u32> {
+        let rest = t.strip_prefix("0x")?;
+        u32::from_str_radix(rest, 16).ok()
+    }
+  # `split_once` has no index.
+  - |
+    fn f(text: &str) -> Option<(&str, &str)> {
+        let (key, value) = text.split_once(':')?;
+        Some((key, value))
+    }
+  # A slice of a byte slice cannot split a character.
+  - |
+    fn f(buf: &[u8]) -> &[u8] { &buf[..2] }
+  # A slice of a byte vector cannot split a character.
+  - |
+    fn f(bytes: Vec<u8>) { let x = &bytes[1..]; }
+  # `let` with a byte-slice type.
+  - |
+    fn f(x: Foo) { let t: &[u8] = x.head(); let _ = &t[..2]; }
+  # The index is on the bytes of the text, not on the text.
+  - |
+    fn f(t: &str) -> &[u8] { &t.as_bytes()[..2] }
+  # The function turns the text into bytes before the index.
+  - |
+    fn f(text: &str) -> &[u8] {
+        let text = text.as_bytes();
+        &text[..2]
+    }
+  # The function turns the text into bytes with a tuple `let`.
+  - |
+    fn f(text: &str, phrase: &str) -> bool {
+        let (text, phrase) = (text.as_bytes(), phrase.as_bytes());
+        text[1..].eq_ignore_ascii_case(phrase)
+    }
+  # An index without a range.
+  - |
+    fn f(t: &str, v: &[String], i: usize) -> String { v[i].clone() }
+  # The full range `..` never panics.
+  - |
+    fn f(t: &str) -> &str { &t[..] }
+  # A list of strings is not text.
+  - |
+    fn f(args: &[&str], words: Vec<String>) { let _ = (&args[1..], &words[..2]); }
+  # The slice is of another value than the text parameter and the text `let`.
+  - |
+    fn f(name: &str, buf: Foo) {
+        let t = name.trim();
+        let head = &buf[..2];
+    }
+  # A `let` with an unknown value does not make the value text.
+  - |
+    fn f(x: Foo) { let buf = x.to_vec(); let _ = &buf[..2]; }
+  # `from_utf8` takes bytes.
+  - |
+    fn f(buf: &[u8], n: usize) -> bool { std::str::from_utf8(&buf[..n]).is_ok() }
+  # `iter` is not a text method.
+  - |
+    fn f(buf: Foo) -> bool { buf[..2].iter().all(|b| *b == 0) }
+  # A `match` on bytes with byte-string patterns.
+  - |
+    fn f(buf: Foo) -> u8 {
+        match &buf[..2] {
+            b"0x" => 16,
+            _ => 10,
+        }
+    }
+  # A `match` on a slice of strings, with a slice pattern.
+  - |
+    fn f(words: Foo) {
+        match &words[..2] {
+            ["add", name] => run(name),
+            _ => {}
+        }
+    }
+  # A comparison with a byte string.
+  - |
+    fn f(buf: Foo) -> bool { &buf[..2] == b"ab" }
+  # A comparison with a raw byte string.
+  - |
+    fn f(buf: Foo) -> bool { &buf[..2] == br"ab" }
+invalid:
+  # The fault from pull request 31: `t` comes from `js_trim`, and the `match` has string-literal arms.
+  - |
+    pub(crate) fn js_number(s: &str) -> f64 {
+        let t = js_trim(s);
+        if t.len() > 2 {
+            let radix = match &t[..2] {
+                "0x" | "0X" => Some(16),
+                "0o" | "0O" => Some(8),
+                "0b" | "0B" => Some(2),
+                _ => None,
+            };
+        }
+        0.0
+    }
+  # The hex decoder that six modules copy. The input "a\u{e9}" and 61 zeros is 64 bytes and panics.
+  - |
+    fn parse_hex32(text: &str) -> Option<[u8; 32]> {
+        if text.len() != 64 {
+            return None;
+        }
+        let mut key = [0u8; 32];
+        for (index, byte) in key.iter_mut().enumerate() {
+            *byte = u8::from_str_radix(&text[index * 2..index * 2 + 2], 16).ok()?;
+        }
+        Some(key)
+    }
+  # The hex decoder in a closure.
+  - |
+    fn unhex(s: &str) -> Vec<u8> {
+        (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap()).collect()
+    }
+  # Parameter `&str`, range `..b`.
+  - |
+    fn f(s: &str) -> &str { &s[..2] }
+  # Parameter `&'a str`, range `a..`.
+  - |
+    fn f<'a>(s: &'a str) -> &'a str { &s[1..] }
+  # Parameter `&mut str`, range `a..b`.
+  - |
+    fn f(s: &mut str) { let _ = &s[1..3]; }
+  # Parameter `String`, range `a..=b`.
+  - |
+    fn f(s: String) { let _ = &s[1..=3]; }
+  # Parameter `&String`.
+  - |
+    fn f(s: &String) { let _ = &s[..2]; }
+  # Parameter `mut s: String`.
+  - |
+    fn f(mut s: String) { s.push('x'); let _ = &s[..2]; }
+  # Parameter `Cow<str>`.
+  - |
+    fn f(s: Cow<str>) { let _ = &s[..2]; }
+  # Parameter `Cow<'_, str>`.
+  - |
+    fn f(s: Cow<'_, str>) { let _ = &s[..2]; }
+  # A text parameter next to `&self`.
+  - |
+    impl Reader {
+        fn f(&self, s: &str) -> &str { &s[..2] }
+    }
+  # `let` with the type `&str`.
+  - |
+    fn f(x: Foo) { let t: &str = x.name(); let _ = &t[..2]; }
+  # `let` with the type `String`.
+  - |
+    fn f(x: Foo) { let t: String = x.name(); let _ = &t[..2]; }
+  # `let` with `.trim()`.
+  - |
+    fn f(x: Foo) { let t = x.trim(); let _ = &t[1..]; }
+  # `let` with `.trim_start()`.
+  - |
+    fn f(x: Foo) { let t = x.trim_start(); let _ = &t[1..]; }
+  # `let` with `.trim_end()`.
+  - |
+    fn f(x: Foo) { let t = x.trim_end(); let _ = &t[1..]; }
+  # `let` with `.trim_matches(..)`.
+  - |
+    fn f(x: Foo) { let t = x.trim_matches('a'); let _ = &t[1..]; }
+  # `let` with `.trim_start_matches(..)`.
+  - |
+    fn f(x: Foo) { let t = x.trim_start_matches('a'); let _ = &t[1..]; }
+  # `let` with `.trim_end_matches(..)`.
+  - |
+    fn f(x: Foo) { let t = x.trim_end_matches('a'); let _ = &t[1..]; }
+  # `let` with `.as_str()`.
+  - |
+    fn f(x: Foo) { let t = x.as_str(); let _ = &t[1..]; }
+  # `let` with `.to_lowercase()`.
+  - |
+    fn f(x: Foo) { let t = x.to_lowercase(); let _ = &t[1..]; }
+  # `let` with `.to_uppercase()`.
+  - |
+    fn f(x: Foo) { let t = x.to_uppercase(); let _ = &t[1..]; }
+  # `let` with `.to_ascii_lowercase()`.
+  - |
+    fn f(x: Foo) { let t = x.to_ascii_lowercase(); let _ = &t[1..]; }
+  # `let` with `.to_ascii_uppercase()`.
+  - |
+    fn f(x: Foo) { let t = x.to_ascii_uppercase(); let _ = &t[1..]; }
+  # `let` with `.to_string()`.
+  - |
+    fn f(x: Foo) { let t = x.to_string(); let _ = &t[1..]; }
+  # `let` with `String::from`.
+  - |
+    fn f(x: Foo) { let t = String::from(x.name()); let _ = &t[..2]; }
+  # `let` with `format!`.
+  - |
+    fn f(x: Foo) { let t = format!("{}", x.name()); let _ = &t[..2]; }
+  # A `match` with a string-literal arm.
+  - |
+    fn f(x: Foo) -> u8 {
+        match &x[..2] {
+            "0x" => 16,
+            _ => 10,
+        }
+    }
+  # A comparison with a string literal.
+  - |
+    fn f(x: Foo) -> bool { &x[..2] == "0x" }
+  # A comparison with a raw string literal.
+  - |
+    fn f(x: Foo) -> bool { &x[..2] == r"0x" }
+  # A comparison with `!=` and the string literal on the left.
+  - |
+    fn f(x: Foo) -> bool { "0x" != &x[..2] }
+  # An argument of `from_str_radix`.
+  - |
+    fn f(x: Foo) -> u8 { u8::from_str_radix(&x[..2], 16).unwrap() }
+  # The receiver of `.parse`.
+  - |
+    fn f(x: Foo) { let _ = x[..2].parse::<u8>(); }
+  # The receiver of `.chars()`.
+  - |
+    fn f(x: Foo) { let _ = x[..2].chars(); }
+  # The receiver of `.char_indices()`.
+  - |
+    fn f(x: Foo) { let _ = x[..2].char_indices(); }
+  # The receiver of `.trim()`.
+  - |
+    fn f(x: Foo) { let _ = x[..2].trim(); }
+  # The receiver of `.trim_start()`.
+  - |
+    fn f(x: Foo) { let _ = x[..2].trim_start(); }
+  # The receiver of `.trim_end()`.
+  - |
+    fn f(x: Foo) { let _ = x[..2].trim_end(); }
+  # The receiver of `.to_lowercase()`.
+  - |
+    fn f(x: Foo) { let _ = x[..2].to_lowercase(); }
+  # The receiver of `.to_uppercase()`.
+  - |
+    fn f(x: Foo) { let _ = x[..2].to_uppercase(); }
+  # The receiver of `.to_string()`.
+  - |
+    fn f(x: Foo) { let _ = x[..2].to_string(); }
+  # The receiver of `.split_once(..)`.
+  - |
+    fn f(x: Foo) { let _ = x[..2].split_once(':'); }
+  # The receiver of `.split_whitespace()`.
+  - |
+    fn f(x: Foo) { let _ = x[..2].split_whitespace(); }
+  # The receiver of `.lines()`.
+  - |
+    fn f(x: Foo) { let _ = x[..2].lines(); }

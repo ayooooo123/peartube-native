@@ -1,0 +1,81 @@
+id: node-change-outside-finish
+valid:
+  # Both callbacks run inside finish_node_change, as src/http.rs does today.
+  - |
+    async fn handle(&self) -> Result<Option<Value>, HttpError> {
+        if let Some(apply) = &self.options.apply_settings {
+            finish_node_change(apply(changed.clone())).await?.err();
+        }
+        if let Some(restart) = &self.options.restart {
+            finish_node_change(restart()).await??;
+        }
+        Ok(None)
+    }
+  # reopen runs inside the async block that http::finish_node_change takes as its argument.
+  - |
+    async fn recover_mnemonic(&self) -> Result<Value, HttpError> {
+        let patch = json!({ "channel": claim.channel });
+        let relay = self.clone();
+        http::finish_node_change(async move {
+            let _ = relay.0.settings.lock().await.update(&patch);
+            relay.reopen().await
+        })
+        .await?
+        .map_err(|e| HttpError::new(500, e))?;
+        Ok(Value::Null)
+    }
+  # listen returns Result<Self, String>, so its callbacks are not flagged; http.rs runs them inside finish_node_change.
+  - |
+    async fn listen() -> Result<Self, String> {
+        let options = HttpOptions {
+            restart: Some(Arc::new(move || {
+                Box::pin(async move { Relay(inner).reopen().await.map_err(|e| HttpError::new(400, e)) })
+            })),
+            apply_settings: Some(Arc::new(move |changed| {
+                Box::pin(async move { Relay(inner).apply_settings(changed).await })
+            })),
+        };
+        Ok(Self(options))
+    }
+invalid:
+  # apply runs in the request future, so a client disconnect cancels it (src/http.rs before pull request 22).
+  - |
+    async fn put_settings(&self) {
+        if !changed.is_empty()
+            && let Some(apply) = &self.options.apply_settings
+            && let Err(message) = apply(changed.clone()).await
+        {
+            warning = Some(message);
+        }
+    }
+  # restart runs in the request future (src/http.rs before pull request 22).
+  - |
+    async fn post_restart(&self) {
+        if let Some(restart) = &self.options.restart {
+            restart().await;
+        }
+    }
+  # The second restart runs outside finish_node_change, even though the first one runs inside it.
+  - |
+    async fn post_restart(&self) {
+        if let Some(restart) = &self.options.restart {
+            finish_node_change(restart()).await??;
+            restart().await;
+        }
+    }
+  # reopen runs in a function that returns HttpError (recover_mnemonic in src/relay.rs before the fix).
+  - |
+    async fn recover_mnemonic(&self) -> Result<Value, HttpError> {
+        self.reopen().await.map_err(|e| HttpError::new(500, e))?;
+        Ok(Value::Null)
+    }
+  # apply_settings runs in a function that returns HttpError.
+  - |
+    async fn put_settings(relay: Relay, changed: Vec<String>) -> Result<(), HttpError> {
+        relay.apply_settings(changed).await.map_err(|e| HttpError::new(500, e))
+    }
+  # HttpError nested in the BoxFuture return type still makes this an HTTP request path.
+  - |
+    fn restart_node<'a>(&'a self) -> BoxFuture<'a, Result<Value, HttpError>> {
+        Box::pin(async move { self.reopen().await.map_err(|e| HttpError::new(500, e)) })
+    }

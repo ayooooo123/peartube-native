@@ -1,0 +1,69 @@
+id: test-wait-needs-limit
+language: rust
+severity: error
+message: This wait in a test has no time limit, so a stuck peer or server hangs the test run.
+note: |
+  Put every wait on a socket, channel, notification or task inside `tokio::time::timeout(limit, ...)`.
+  Fail the test with a message when the limit passes, so a stuck peer or server cannot hang the run.
+  Never block a thread with `join()` in async test code, because a timeout cannot stop it. Use `spawn_blocking` under a timeout, or a channel with `recv_timeout`.
+  See docs/code-rules.md#test-wait-needs-limit.
+files:
+  - tests/**/*.rs
+  - src/**/*_tests.rs
+# Known limits of this rule:
+# - ast-grep cannot read inside a macro, so `assert!(rx.recv().await.is_some())` is not matched.
+# - ast-grep cannot follow a variable, so a wait in `let run = async { ... };` is matched even when `timeout(limit, run)` follows.
+#   Write the async block inside the `timeout` call.
+rule:
+  any:
+    # An await on a socket, a channel or a notification.
+    - all:
+        - any:
+            - pattern: $X.recv().await
+            - pattern: $X.accept().await
+            - pattern: $X.notified().await
+            - pattern: $X.changed().await
+            - pattern: $X.read_to_string($$$).await
+            - pattern: $X.read_to_end($$$).await
+            - pattern: $X.read_exact($$$).await
+            - pattern: $X.read_line($$$).await
+            # One argument only, so the tokio RwLock `read()` is not matched.
+            - pattern: $X.read($B).await
+        # An await inside a time limit is bounded.
+        # An await inside a spawned task is a background loop, not the wait of the test.
+        - not:
+            inside:
+              stopBy: end
+              kind: call_expression
+              has:
+                field: function
+                regex: '(^|::)(timeout|spawn|spawn_blocking)$'
+        # An await inside a trait impl is a fake that the code under test calls, not the wait of the test.
+        # The test's own wait for the answer needs the limit.
+        - not:
+            inside:
+              stopBy: end
+              kind: impl_item
+              has:
+                field: trait
+                regex: .
+    # A thread join blocks a runtime thread, so it counts only inside async code.
+    # A time limit does not bound a join: `timeout` polls the future first, and the join blocks that poll.
+    # A join inside `spawn` or `spawn_blocking` is a background task, so it is exempt.
+    - all:
+        - pattern: $H.join()
+        - inside:
+            stopBy: end
+            any:
+              - kind: async_block
+              - kind: function_item
+                has:
+                  kind: function_modifiers
+                  regex: '\basync\b'
+        - not:
+            inside:
+              stopBy: end
+              kind: call_expression
+              has:
+                field: function
+                regex: '(^|::)(spawn|spawn_blocking)$'
