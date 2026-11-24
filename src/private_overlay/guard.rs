@@ -227,20 +227,19 @@ impl Inner {
     }
 
     /// `ownDiversityBucket()`.
-    fn own_diversity_bucket(&self) -> Option<String> {
-        let own = self.dht.remote_address().or_else(|| {
-            *self
-                .server_address
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-        });
-        let own: SocketAddr = own?;
-        let host = own.ip().to_string();
-        let host = match &self.resolve_address {
-            Some(resolve) => resolve(Some(&host), Some(own.port()), &self.key_pair.public_key),
-            None => host,
-        };
-        diversity_bucket_for_address(&host, Some(u32::from(own.port())), self.allow_loopback)
+    async fn own_diversity_bucket(&self) -> Option<String> {
+        let observed = self.dht.observed_address().await;
+        let server_address = *self
+            .server_address
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        resolve_own_diversity_bucket(
+            observed,
+            server_address,
+            self.allow_loopback,
+            self.resolve_address.as_ref(),
+            &self.key_pair.public_key,
+        )
     }
 
     /// `isAdvertisedGuard(pubKey)`, cached for 60s.
@@ -1466,7 +1465,7 @@ impl Inner {
                 return Ok(None);
             };
             if (!caller_bucket.is_empty() && caller_bucket == next_bucket)
-                || self.own_diversity_bucket().as_deref() == Some(next_bucket.as_str())
+                || self.own_diversity_bucket().await.as_deref() == Some(next_bucket.as_str())
             {
                 return Ok(None);
             }
@@ -1565,7 +1564,7 @@ impl Inner {
                 return Err(Error::Rejected("Non-diverse hop"));
             };
             let endpoint_bucket = self.bucket_of_conn(&endpoint_session.conn);
-            if self.own_diversity_bucket().as_deref() == Some(hop_bucket.as_str())
+            if self.own_diversity_bucket().await.as_deref() == Some(hop_bucket.as_str())
                 || (!self.allow_loopback && endpoint_bucket.as_deref() == Some(hop_bucket.as_str()))
             {
                 return Err(Error::Rejected("Non-diverse hop"));
@@ -1622,5 +1621,52 @@ impl Inner {
                 NOT_READY
             }
         }
+    }
+}
+
+/// Selects the guard's own diversity bucket from the DHT's observed public address, falling back
+/// to the bound server address only on loopback testnets (app #589).
+fn resolve_own_diversity_bucket(
+    observed: Option<SocketAddr>,
+    server_address: Option<SocketAddr>,
+    allow_loopback: bool,
+    resolve_address: Option<&ResolveAddress>,
+    public_key: &[u8; 32],
+) -> Option<String> {
+    let own = observed.or_else(|| allow_loopback.then_some(server_address).flatten())?;
+    let host = own.ip().to_string();
+    let host = match resolve_address {
+        Some(resolve) => resolve(Some(&host), Some(own.port()), public_key),
+        None => host,
+    };
+    diversity_bucket_for_address(&host, Some(u32::from(own.port())), allow_loopback)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn own_diversity_bucket_uses_observed_public_host_and_skips_server_fallback_off_loopback() {
+        let key = [0x11u8; 32];
+        let observed = SocketAddr::from(([203, 0, 113, 5], 0));
+        let lan_server = SocketAddr::from(([10, 0, 0, 5], 49737));
+        let loopback_server = SocketAddr::from(([127, 0, 0, 1], 41000));
+
+        assert_eq!(
+            resolve_own_diversity_bucket(Some(observed), Some(lan_server), false, None, &key),
+            Some("ipv4:203.0.113.0/24".to_owned()),
+            "firewalled guard uses the observed public host even with port 0"
+        );
+        assert_eq!(
+            resolve_own_diversity_bucket(None, Some(lan_server), false, None, &key),
+            None,
+            "non-loopback guard does not fall back to the bound server address"
+        );
+        assert_eq!(
+            resolve_own_diversity_bucket(None, Some(loopback_server), true, None, &key),
+            Some("loopback:127.0.0.1:41000".to_owned()),
+            "loopback testnet guard falls back to its bound server address"
+        );
     }
 }

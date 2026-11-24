@@ -28,18 +28,30 @@ use super::dht::{
 };
 use super::{Error, KeyPair, Result};
 
+/// Builds the `peeroxide-dht` configuration for `open_dht`.
+///
+/// Only a loopback testnet has no NAT for certain; everywhere else `peeroxide-dht` probes
+/// reachability itself so a guard behind NAT or a firewall holepunches instead of telling
+/// clients to dial it directly (app #589).
+pub(crate) fn build_dht_config(opts: &DhtOptions) -> DhtConfig {
+    let open = super::is_local_bootstrap(opts.host.as_deref(), &opts.bootstrap);
+    let mut dht_config = DhtConfig::default();
+    dht_config.bootstrap = opts.bootstrap.clone();
+    dht_config.port = opts.port;
+    dht_config.host = opts.host.clone().unwrap_or_else(|| "0.0.0.0".to_owned());
+    dht_config.firewalled = !open;
+    if open {
+        dht_config.ephemeral = Some(false);
+    }
+    dht_config.quick_firewall = true;
+    dht_config
+}
+
 /// Opens a peeroxide-backed DHT (`new HyperDHT({ host, bootstrap, port })`).
 pub async fn open_dht(opts: DhtOptions) -> Result<Arc<dyn Dht>> {
     let runtime = UdxRuntime::new().map_err(|error| Error::dht(error.to_string()))?;
     let mut config = HyperDhtConfig::default();
-    let mut dht_config = DhtConfig::default();
-    dht_config.bootstrap = opts.bootstrap;
-    dht_config.port = opts.port;
-    dht_config.host = opts.host.unwrap_or_else(|| "0.0.0.0".to_owned());
-    // A guard is reachable by design (`firewalled: false`); the swarm lets the probe decide.
-    dht_config.firewalled = false;
-    dht_config.quick_firewall = true;
-    config.dht = dht_config;
+    config.dht = build_dht_config(&opts);
     let runtime_handle = runtime.handle();
     let (join, handle, events) = hyperdht::spawn(&runtime, config)
         .await
@@ -60,7 +72,7 @@ pub async fn open_dht(opts: DhtOptions) -> Result<Arc<dyn Dht>> {
         join: Mutex::new(Some(join)),
         events: Mutex::new(Some(events)),
         local,
-        remote: Mutex::new(remote),
+        remote: Arc::new(Mutex::new(remote)),
         closed: AtomicBool::new(false),
     }))
 }
@@ -72,7 +84,7 @@ struct PeeroxideDht {
     /// The single server-event stream `spawn` returned; the first `createServer` claims it.
     events: Mutex<Option<tokio::sync::mpsc::UnboundedReceiver<hyperdht::ServerEvent>>>,
     local: Option<SocketAddr>,
-    remote: Mutex<Option<SocketAddr>>,
+    remote: Arc<Mutex<Option<SocketAddr>>>,
     closed: AtomicBool,
 }
 
@@ -320,6 +332,20 @@ impl Dht for PeeroxideDht {
 
     fn remote_address(&self) -> Option<SocketAddr> {
         *self.remote.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    fn observed_address(&self) -> BoxFuture<'_, Option<SocketAddr>> {
+        let handle = self.handle.clone();
+        let cached = Arc::clone(&self.remote);
+        Box::pin(async move {
+            if let Ok(Some(peer)) = handle.remote_address().await
+                && let Ok(addr) = format!("{}:{}", peer.host, peer.port).parse::<SocketAddr>()
+            {
+                *cached.lock().unwrap_or_else(|e| e.into_inner()) = Some(addr);
+                return Some(addr);
+            }
+            *cached.lock().unwrap_or_else(|e| e.into_inner())
+        })
     }
 
     fn suspend(&self) -> BoxFuture<'_, Result<()>> {
@@ -613,5 +639,50 @@ impl MessageWrite for SecretWrite {
         Box::pin(async move {
             let _ = self.0.shutdown().await;
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Outside a loopback testnet, `open_dht` must leave `firewalled` true so peeroxide-dht
+    /// probes reachability and holepunches behind NAT instead of telling clients to dial direct.
+    #[test]
+    fn non_local_guard_lets_dht_probe_reachability() {
+        let cfg = build_dht_config(&DhtOptions {
+            host: None,
+            port: 0,
+            bootstrap: vec!["88.99.3.86:49737".to_owned()],
+        });
+        assert!(cfg.firewalled);
+        assert_eq!(cfg.ephemeral, None);
+        assert!(cfg.quick_firewall);
+        assert_eq!(cfg.host, "0.0.0.0");
+
+        let default_public = build_dht_config(&DhtOptions::default());
+        assert!(default_public.firewalled);
+        assert_eq!(default_public.ephemeral, None);
+        assert!(default_public.quick_firewall);
+    }
+
+    /// Loopback testnets have no NAT, so they open unfirewalled immediately.
+    #[test]
+    fn local_testnet_opens_unfirewalled() {
+        let by_host = build_dht_config(&DhtOptions {
+            host: Some("127.0.0.1".to_owned()),
+            port: 0,
+            bootstrap: Vec::new(),
+        });
+        assert!(!by_host.firewalled);
+        assert_eq!(by_host.ephemeral, Some(false));
+
+        let by_bootstrap = build_dht_config(&DhtOptions {
+            host: None,
+            port: 0,
+            bootstrap: vec!["127.0.0.1:49737".to_owned()],
+        });
+        assert!(!by_bootstrap.firewalled);
+        assert_eq!(by_bootstrap.ephemeral, Some(false));
     }
 }

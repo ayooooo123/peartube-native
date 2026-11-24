@@ -381,9 +381,8 @@ impl SwarmInner {
                 .get(&previous_id)
                 .cloned();
             if let Some(previous) = previous.filter(|p| !*p.closed.borrow()) {
-                // Both ends keep the stream the lower key dialled, whatever order they open in.
-                // JS (`!enc.isInitiator && remote < local`) only lets the higher key replace,
-                // so on the lower key it keeps whichever stream opened first; see PARITY.md.
+                // Both ends keep the stream the lower key dialled, whatever order they open in
+                // (matches JS `keepDuplicateInnerStream`).
                 if opened.is_initiator != (remote > self.key_pair.public_key) {
                     drop(active);
                     close();

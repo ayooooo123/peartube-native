@@ -288,6 +288,13 @@ pub trait Dht: Send + Sync {
     fn local_address(&self) -> Option<SocketAddr>;
     /// `dht.remoteAddress()`.
     fn remote_address(&self) -> Option<SocketAddr>;
+    /// Live observed public address (`dht.remoteAddress()` / `dht.host` fallback for firewalled
+    /// guards whose NAT settles after open). Defaults to [`Self::remote_address`] for synchronous
+    /// test doubles.
+    fn observed_address(&self) -> BoxFuture<'_, Option<SocketAddr>> {
+        let addr = self.remote_address();
+        Box::pin(async move { addr })
+    }
     /// `dht.suspend()`.
     fn suspend(&self) -> BoxFuture<'_, Result<(), Error>>;
     /// `dht.resume()`.
