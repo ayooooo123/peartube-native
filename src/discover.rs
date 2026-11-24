@@ -20,9 +20,11 @@ use sha2::{Digest, Sha256};
 use url::Url;
 
 use crate::art::{SendOptions, send_bytes};
-use crate::http::{DiscoverBridge, HttpError, Picture};
+use crate::http::{DiscoverBridge, HttpError};
 use crate::mirror::MirrorHost;
-use crate::node::Node;
+use crate::node::SearchOptions;
+use crate::node::core::Node as CoreNode;
+use crate::providers::youtube::Picture;
 use crate::providers::{rumble, soundcloud};
 
 pub const DISCOVER_SOURCES: &[&str] = &["youtube", "soundcloud", "rumble"];
@@ -140,8 +142,8 @@ impl State {
     }
 }
 
-pub type GetNode = Arc<dyn Fn() -> Option<Arc<Node>> + Send + Sync>;
-pub type GetMirror = Arc<dyn Fn() -> Option<Arc<MirrorHost>> + Send + Sync>;
+pub type GetNode = Arc<dyn Fn() -> Option<Arc<CoreNode>> + Send + Sync>;
+pub type GetMirror = Arc<dyn Fn() -> Option<Arc<MirrorHost<CoreNode>>> + Send + Sync>;
 
 pub struct DiscoverHost {
     file: PathBuf,
@@ -505,7 +507,7 @@ impl DiscoverHost {
             let (status, xml) = self
                 .fetch_text(&feed_url, 1024 * 1024, false)
                 .await
-                .map_err(|e| e.message)?;
+                .map_err(|e| e.message().to_owned())?;
             if !(200..300).contains(&status) {
                 return Err(format!("YouTube feed answered {status}"));
             }
@@ -528,7 +530,7 @@ impl DiscoverHost {
                     percent_encode(&creator.channel_id)
                 ))
                 .await
-                .map_err(|e| e.message)?;
+                .map_err(|e| e.message().to_owned())?;
             let list = data
                 .get("collection")
                 .and_then(Value::as_array)
@@ -618,7 +620,7 @@ impl DiscoverHost {
         let (status, body) = self
             .fetch_text(&creator.url, 2 * 1024 * 1024, true)
             .await
-            .map_err(|e| e.message)?;
+            .map_err(|e| e.message().to_owned())?;
         if !(200..300).contains(&status) {
             return Err(format!("Rumble answered {status}"));
         }
@@ -687,22 +689,20 @@ impl DiscoverHost {
         let Some(node) = (self.get_node)() else {
             return (ids, titles);
         };
-        if let Ok(entries) = node.search(None).await {
-            for e in entries {
-                if !e.id.is_empty() {
-                    ids.insert(e.id.to_ascii_lowercase());
-                }
-                let raw_title = e
-                    .music
-                    .as_ref()
-                    .and_then(|m| m.get("title"))
-                    .and_then(Value::as_str)
-                    .filter(|s| !s.is_empty())
-                    .unwrap_or(&e.title);
-                let n = norm_text(raw_title);
-                if !n.is_empty() {
-                    titles.insert(n);
-                }
+        let entries = node.catalog().search(None, SearchOptions::default()).await;
+        for e in entries {
+            if !e.id.is_empty() {
+                ids.insert(e.id.to_ascii_lowercase());
+            }
+            let raw_title = e
+                .music
+                .as_ref()
+                .and_then(|m| m.title.as_deref())
+                .filter(|s| !s.is_empty())
+                .unwrap_or(&e.title);
+            let n = norm_text(raw_title);
+            if !n.is_empty() {
+                titles.insert(n);
             }
         }
         (ids, titles)
@@ -998,7 +998,7 @@ impl DiscoverBridge for DiscoverHost {
             let res = mirror
                 .search_sources(search_req, None)
                 .await
-                .map_err(|e| HttpError::new(e.status, e.message))?;
+                .map_err(|e| HttpError::new(e.status.unwrap_or(500), e.message))?;
 
             let (lib_ids, lib_titles) = self.library_matcher().await;
             let (followed_urls, followed_names): (HashSet<String>, HashSet<String>) = {
@@ -1146,7 +1146,7 @@ impl DiscoverBridge for DiscoverHost {
                 "sources": active_sources,
                 "creators": creators_out,
                 "items": items,
-                "errors": res.errors,
+                "errors": res.summary.errors,
             }))
         })
     }
