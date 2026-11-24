@@ -1330,7 +1330,7 @@ impl http::Acquirer for AcquirerBridge {
     }
 }
 
-/// `acquirer.add({ id, title, source, channel, private })` from the API's JSON.
+/// `acquirer.add({ id, title, source, channel, private, music })` from the API's JSON.
 fn add_job(request: &Value) -> AddJob {
     let source = &request["source"];
     AddJob {
@@ -1343,12 +1343,14 @@ fn add_job(request: &Value) -> AddJob {
                 .map(|h| h.iter().map(|(k, v)| (k.clone(), js_string(v))).collect())
                 .unwrap_or_default(),
             page: js_truthy(&source["page"]),
+            audio: js_truthy(&source["audio"]),
             private: js_truthy(&source["private"]),
         },
         channel: (!request["channel"].is_null()).then(|| js_truthy(&request["channel"])),
         private: js_truthy(&request["private"]),
         plugin: None,
         existing: None,
+        music: request.get("music").filter(|v| v.is_object()).cloned(),
     }
 }
 

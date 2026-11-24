@@ -16,14 +16,18 @@ const scenario = JSON.parse(readFileSync(join(here, 'acquire-mirror-library.json
 const gen = join(here, '.gen')
 mkdirSync(gen, { recursive: true })
 const plant = `"${pathToFileURL(join(here, 'acquire-mirror-plants.mjs')).href}"`
+const b4aStub = `"${pathToFileURL(join(here, 'acquire-mirror-b4a.mjs')).href}"`
 const app = path => `"${pathToFileURL(join(APP, path)).href}"`
 let source = readFileSync(join(APP, 'src/mirror.js'), 'utf8')
 for (const [from, to] of Object.entries({
+  "'b4a'": b4aStub,
   "'./protocol.js'": app('src/protocol.js'),
   "'./tags.js'": app('src/tags.js'),
   "'./providers/soulseek.js'": app('src/providers/soulseek.js'),
   "'./providers/staging.js'": app('src/providers/staging.js'),
   "'./providers/youtube.js'": app('src/providers/youtube.js'),
+  "'./providers/soundcloud.js'": app('src/providers/soundcloud.js'),
+  "'./providers/rumble.js'": app('src/providers/rumble.js'),
   "'./hiverelay.js'": plant,
   "'./traffic.js'": plant,
   "'./art.js'": plant

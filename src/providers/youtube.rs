@@ -114,6 +114,19 @@ pub trait Backend: Send + Sync {
         controller: Controller,
         on_progress: ProgressFn,
     ) -> BackendFuture<PathBuf>;
+
+    /// `downloadPage` with explicit `audio` mode (used by providers such as Rumble that save both
+    /// video and audio). Defaults to [`Backend::download`].
+    fn download_media(
+        &self,
+        url: &str,
+        out_dir: &Path,
+        _audio: bool,
+        controller: Controller,
+        on_progress: ProgressFn,
+    ) -> BackendFuture<PathBuf> {
+        self.download(url, out_dir, controller, on_progress)
+    }
 }
 
 /// A reply of the relay's guarded fetch.
@@ -124,9 +137,20 @@ pub struct Fetched {
     pub body: Vec<u8>,
 }
 
-/// The relay's guarded fetch (`send` in `src/art.js` with `binary`), for result pictures.
+/// The relay's guarded fetch (`send` in `src/art.js` with `binary`), for result pictures and
+/// provider HTML/API lookups.
 pub trait Fetch: Send + Sync {
     fn fetch(&self, url: &str) -> Pin<Box<dyn Future<Output = Result<Fetched, String>> + Send>>;
+
+    fn fetch_opts(
+        &self,
+        url: &str,
+        _timeout_ms: u64,
+        _max_bytes: usize,
+        _accept: Option<&str>,
+    ) -> Pin<Box<dyn Future<Output = Result<Fetched, String>> + Send>> {
+        self.fetch(url)
+    }
 }
 
 /// A result's picture, as the relay serves it.
@@ -161,6 +185,17 @@ impl Backend for Ubit {
         url: &str,
         out_dir: &Path,
         controller: Controller,
+        on_progress: ProgressFn,
+    ) -> BackendFuture<PathBuf> {
+        self.download_media(url, out_dir, true, controller, on_progress)
+    }
+
+    fn download_media(
+        &self,
+        url: &str,
+        out_dir: &Path,
+        audio: bool,
+        controller: Controller,
         mut on_progress: ProgressFn,
     ) -> BackendFuture<PathBuf> {
         let (ubit, url, config_dir) = (self.ubit.clone(), url.to_owned(), self.config_dir.clone());
@@ -176,7 +211,7 @@ impl Backend for Ubit {
                     on_progress: Some(Box::new(move |progress: DownloadProgress| {
                         on_progress(progress.bytes.0 as u64);
                     })),
-                    audio: true,
+                    audio,
                     ..DownloadOptions::default()
                 },
             )

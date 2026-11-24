@@ -594,6 +594,10 @@ pub fn file_name(raw: &str, headers: &[(String, String)]) -> Result<String, Iden
 pub enum Link {
     File {
         name: String,
+        #[serde(default)]
+        site: String,
+        #[serde(rename = "audioOnly", default)]
+        audio_only: bool,
         size: Option<JsNumber>,
         #[serde(rename = "contentType")]
         content_type: Option<String>,
@@ -601,6 +605,8 @@ pub enum Link {
     Page {
         name: String,
         site: String,
+        #[serde(rename = "audioOnly", default)]
+        audio_only: bool,
         uploader: String,
         duration: Option<JsNumber>,
         thumbnail: Option<String>,
@@ -628,6 +634,28 @@ impl Link {
         }
     }
 
+    /// The site label reported or guessed from the link's host.
+    pub fn site(&self) -> &str {
+        match self {
+            Self::File { site, .. } | Self::Page { site, .. } => site,
+        }
+    }
+
+    /// Whether the link is audio-only (SoundCloud, Bandcamp, Mixcloud, audio file, or audio-only formats).
+    pub fn audio_only(&self) -> bool {
+        match self {
+            Self::File { audio_only, .. } | Self::Page { audio_only, .. } => *audio_only,
+        }
+    }
+
+    /// The uploader/author reported for a page link, empty for a file.
+    pub fn uploader(&self) -> &str {
+        match self {
+            Self::File { .. } => "",
+            Self::Page { uploader, .. } => uploader,
+        }
+    }
+
     /// The resolution the page reported, empty for a file.
     pub fn resolution(&self) -> &str {
         match self {
@@ -643,6 +671,56 @@ impl Link {
             Self::Page { page_id, .. } => Some(page_id),
         }
     }
+}
+
+fn host_of(raw: &str) -> String {
+    Url::parse(raw)
+        .ok()
+        .and_then(|u| u.host_str().map(str::to_ascii_lowercase))
+        .map(|h| h.strip_prefix("www.").unwrap_or(&h).to_owned())
+        .unwrap_or_default()
+}
+
+fn guess_site(raw_url: &str, reported: &str) -> String {
+    let trimmed = js_trim(reported);
+    if !trimmed.is_empty() {
+        return trimmed.to_owned();
+    }
+    let host = host_of(raw_url);
+    if host.is_empty() {
+        return String::new();
+    }
+    if host == "soundcloud.com" || host.ends_with(".soundcloud.com") || host == "on.soundcloud.com"
+    {
+        return "SoundCloud".to_owned();
+    }
+    if host == "bandcamp.com" || host.ends_with(".bandcamp.com") {
+        return "Bandcamp".to_owned();
+    }
+    if host == "mixcloud.com" || host.ends_with(".mixcloud.com") {
+        return "Mixcloud".to_owned();
+    }
+    if host == "rumble.com" || host.ends_with(".rumble.com") {
+        return "Rumble".to_owned();
+    }
+    if host == "youtube.com" || host.ends_with(".youtube.com") || host == "youtu.be" {
+        return "YouTube".to_owned();
+    }
+    host
+}
+
+fn is_audio_site(site: &str) -> bool {
+    matches!(
+        site.to_ascii_lowercase().as_str(),
+        "soundcloud" | "bandcamp" | "mixcloud"
+    )
+}
+
+fn is_audio_file(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    [".m4a", ".mp3", ".flac", ".ogg", ".opus", ".wav", ".aac"]
+        .iter()
+        .any(|ext| lower.ends_with(ext))
 }
 
 /// How `probe` may run `ubit`.
@@ -870,6 +948,7 @@ pub async fn probe(url: &str, opts: &ProbeOptions) -> Result<Link, IdentifyError
         head.as_ref().map_or(&[][..], |response| &response.headers),
     )?;
     let looks_media = content_type.starts_with("video/")
+        || content_type.starts_with("audio/")
         || content_type.contains("matroska")
         || (crate::protocol::is_media_file(&name) && !content_type.starts_with("text/"));
     if let Some(head) = &head {
@@ -879,7 +958,10 @@ pub async fn probe(url: &str, opts: &ProbeOptions) -> Result<Link, IdentifyError
                 .map(js_number)
                 .filter(|size| *size != 0.0 && size.is_finite())
                 .map(JsNumber);
+            let audio_only = content_type.starts_with("audio/") || is_audio_file(&name);
             return Ok(Link::File {
+                site: guess_site(&final_url, ""),
+                audio_only,
                 name,
                 size,
                 content_type: (!content_type.is_empty()).then(|| content_type.clone()),
@@ -920,9 +1002,27 @@ pub async fn probe(url: &str, opts: &ProbeOptions) -> Result<Link, IdentifyError
         .max(0.0);
     let size =
         opt_number(info.get("filesize")).or_else(|| (largest != 0.0).then_some(JsNumber(largest)));
+    let page_id = info
+        .get("webpageURL")
+        .filter(|value| js_truthy(value))
+        .map_or_else(|| url.to_owned(), js_string);
+    let site = guess_site(&page_id, &string_field(&info, "site"));
+    let has_audio_only_formats = !formats.is_empty()
+        && height == 0.0
+        && formats.iter().all(|format| {
+            let h = js_num(format.get("height"));
+            let no_video_height = !(h.is_finite() && h > 0.0);
+            let vcodec = format.get("vcodec").and_then(Value::as_str).unwrap_or("");
+            no_video_height && (vcodec.is_empty() || vcodec == "none")
+        });
+    let audio_only = info.get("audioOnly").is_some_and(js_truthy)
+        || info.get("isAudioOnly").is_some_and(js_truthy)
+        || is_audio_site(&site)
+        || has_audio_only_formats;
     Ok(Link::Page {
         name: string_field(&info, "title"),
-        site: string_field(&info, "site"),
+        site,
+        audio_only,
         uploader: match string_field(&info, "author") {
             empty if empty.is_empty() => string_field(&info, "uploader"),
             author => author,
@@ -939,10 +1039,7 @@ pub async fn probe(url: &str, opts: &ProbeOptions) -> Result<Link, IdentifyError
         } else {
             String::new()
         },
-        page_id: info
-            .get("webpageURL")
-            .filter(|value| js_truthy(value))
-            .map_or_else(|| url.to_owned(), js_string),
+        page_id,
     })
 }
 
@@ -1580,6 +1677,13 @@ pub struct Identification {
     #[serde(rename = "match")]
     pub matched: Option<String>,
     pub plain: Plain,
+    pub site: String,
+    #[serde(rename = "audioOnly")]
+    pub audio_only: bool,
+    #[serde(rename = "suggestedAudio")]
+    pub suggested_audio: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub music: Option<crate::protocol::Music>,
 }
 
 /// How `identify` reaches Cinemeta and `ubit`.
@@ -1618,8 +1722,10 @@ pub async fn identify(url: &str, opts: &IdentifyOptions) -> Result<Identificatio
     if !link.resolution().is_empty() {
         parsed.resolution = link.resolution().to_owned();
     }
+    let audio_only = link.audio_only();
     // Page titles are free text; only ones that read like a release (a year or an episode) get suggestions.
-    let lookup = link.kind() == "file" || parsed.year.is_some() || parsed.season.is_some();
+    let lookup =
+        !audio_only && (link.kind() == "file" || parsed.year.is_some() || parsed.season.is_some());
     let candidates = if lookup {
         cinemeta_search_with(
             &opts.cinemeta_url,
@@ -1637,21 +1743,59 @@ pub async fn identify(url: &str, opts: &IdentifyOptions) -> Result<Identificatio
         (Some(season), Some(number)) => format!(" S{season:02}E{number:02}"),
         _ => String::new(),
     };
-    let plain_title = {
-        let name = if link.kind() == "page" {
-            link.name().to_owned()
+    let mut music: Option<crate::protocol::Music> = None;
+    let plain = if link.kind() == "page" && audio_only {
+        let page_id = link.page_id().unwrap_or(url);
+        let host = host_of(page_id);
+        let is_sc = link.site().eq_ignore_ascii_case("soundcloud")
+            || host == "soundcloud.com"
+            || host.ends_with(".soundcloud.com");
+        let digest = Sha256::digest(page_id.as_bytes());
+        let hash12: String = digest.iter().take(6).map(|b| format!("{b:02x}")).collect();
+        let track_title = js_trim(if !link.name().is_empty() {
+            link.name()
         } else {
-            format!("{}{episode}", parsed.title)
-        };
-        if name.is_empty() {
+            &parsed.title
+        })
+        .to_owned();
+        let author = js_trim(link.uploader()).to_owned();
+        let raw_music = serde_json::json!({
+            "title": track_title,
+            "artist": if author.is_empty() { Value::Null } else { Value::String(author.clone()) },
+        });
+        music = crate::protocol::clean_music(Some(&raw_music));
+        let prefix = if is_sc { "sc" } else { "clip" };
+        let combined = if !author.is_empty()
+            && !track_title.is_empty()
+            && !track_title.starts_with(&format!("{author} · "))
+        {
+            format!("{author} · {track_title}")
+        } else if !track_title.is_empty() {
+            track_title
+        } else {
             parsed.title.clone()
-        } else {
-            name
+        };
+        Plain {
+            id: format!("{prefix}:{hash12}:s01e01"),
+            title: combined,
         }
-    };
-    let plain = Plain {
-        id: clip_id(link.page_id(), url),
-        title: plain_title,
+    } else {
+        let plain_title = {
+            let name = if link.kind() == "page" {
+                link.name().to_owned()
+            } else {
+                format!("{}{episode}", parsed.title)
+            };
+            if name.is_empty() {
+                parsed.title.clone()
+            } else {
+                name
+            }
+        };
+        Plain {
+            id: clip_id(link.page_id(), url),
+            title: plain_title,
+        }
     };
     let candidates: Vec<Match> = candidates
         .into_iter()
@@ -1668,11 +1812,16 @@ pub async fn identify(url: &str, opts: &IdentifyOptions) -> Result<Identificatio
         .iter()
         .find(|candidate| strong(&candidate.candidate, &parsed))
         .map(|candidate| candidate.id.clone());
+    let site = link.site().to_owned();
     Ok(Identification {
         link,
         parsed,
         candidates,
         matched,
         plain,
+        site,
+        audio_only,
+        suggested_audio: audio_only,
+        music,
     })
 }

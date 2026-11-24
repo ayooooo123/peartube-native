@@ -32,8 +32,10 @@ use crate::art;
 use crate::node::Node;
 use crate::node::api::{PutMeta, SearchOptions};
 use crate::protocol::{is_hex64, is_id};
+use crate::providers::rumble;
 use crate::providers::soulseek::client::Backend;
 use crate::providers::soulseek::{self, Provider, SoulseekError};
+use crate::providers::soundcloud;
 use crate::providers::staging::PlaceAndScan;
 use crate::providers::youtube;
 
@@ -115,6 +117,7 @@ where
                 private: false,
                 plugin: Some(spec.plugin),
                 existing: spec.existing,
+                music: None,
             })
             .map_err(|error| MirrorError::plain(error.message()))?;
         self.changed();
@@ -508,14 +511,28 @@ impl youtube::Fetch for ArtPictures {
         &self,
         url: &str,
     ) -> Pin<Box<dyn Future<Output = Result<youtube::Fetched, String>> + Send>> {
+        self.fetch_opts(url, 8000, 512 * 1024, None)
+    }
+
+    fn fetch_opts(
+        &self,
+        url: &str,
+        timeout_ms: u64,
+        max_bytes: usize,
+        accept: Option<&str>,
+    ) -> Pin<Box<dyn Future<Output = Result<youtube::Fetched, String>> + Send>> {
         let url = url.to_owned();
         let allow_private = self.allow_private_urls;
+        let headers = accept
+            .map(|value| vec![("accept".to_owned(), value.to_owned())])
+            .unwrap_or_default();
         Box::pin(async move {
             let reply = art::send_bytes(
                 &url,
                 art::SendOptions {
-                    timeout: Duration::from_millis(8000),
-                    max_bytes: Some(512 * 1024),
+                    headers,
+                    timeout: Duration::from_millis(timeout_ms),
+                    max_bytes: Some(max_bytes as u64),
                     allow_private,
                     ..art::SendOptions::default()
                 },
@@ -751,6 +768,10 @@ where
                     url: url.to_owned(),
                     headers,
                     page: source.get("page").and_then(Value::as_bool).unwrap_or(false),
+                    audio: source
+                        .get("audio")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false),
                     private: source
                         .get("private")
                         .and_then(Value::as_bool)
@@ -1048,6 +1069,7 @@ impl FeedMirrorPlugin {
                     url: url.to_owned(),
                     headers: merged,
                     page: false,
+                    audio: false,
                     private: false,
                 },
                 channel: ctx.mirror_channel,
@@ -1359,6 +1381,182 @@ where
     }
 }
 
+/// The `soundcloud` plugin: searches SoundCloud and saves tracks via `ubit` into staging.
+struct SoundcloudPlugin {
+    provider: soundcloud::Provider,
+    watch: Arc<WatchState>,
+    staging_root: String,
+}
+
+impl<N: Node + 'static> MirrorPlugin<N> for SoundcloudPlugin
+where
+    N::Error: From<AcquireError>,
+{
+    fn name(&self) -> &str {
+        soundcloud::NAME
+    }
+
+    fn description(&self) -> &str {
+        soundcloud::DESCRIPTION
+    }
+
+    fn run<'a>(
+        &'a self,
+        payload: Value,
+        ctx: &'a Ctx<N>,
+    ) -> Pin<Box<dyn Future<Output = Result<Value, MirrorError>> + Send + 'a>> {
+        Box::pin(async move {
+            let host = place_and_scan(&self.watch, ctx, &self.staging_root);
+            self.provider
+                .run(&payload, Some(host))
+                .await
+                .map_err(youtube_error)
+        })
+    }
+
+    fn stop<'a>(&'a self) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
+        Box::pin(self.provider.stop())
+    }
+
+    fn info(&self) -> Value {
+        self.provider.info()
+    }
+
+    fn provider(&self) -> Option<&dyn MirrorProvider<N>> {
+        Some(self)
+    }
+}
+
+impl<N: Node + 'static> MirrorProvider<N> for SoundcloudPlugin
+where
+    N::Error: From<AcquireError>,
+{
+    fn search<'a>(&'a self, payload: Value, _ctx: &'a Ctx<N>) -> ProviderFuture<'a> {
+        Box::pin(async move { self.provider.search(&payload).await.map_err(youtube_error) })
+    }
+
+    fn browse<'a>(&'a self, _payload: Value, _ctx: &'a Ctx<N>) -> ProviderFuture<'a> {
+        Box::pin(async { Err(unknown_provider(soundcloud::NAME)) })
+    }
+
+    fn mirror<'a>(&'a self, payload: Value, ctx: &'a Ctx<N>) -> ProviderFuture<'a> {
+        Box::pin(async move {
+            let host = place_and_scan(&self.watch, ctx, &self.staging_root);
+            self.provider
+                .mirror(&payload, Some(host))
+                .await
+                .map_err(youtube_error)
+        })
+    }
+
+    fn list_jobs(&self) -> Vec<Value> {
+        self.provider.list_jobs()
+    }
+
+    fn get_job(&self, job_id: &str) -> Option<Value> {
+        self.provider.get_job(job_id)
+    }
+
+    fn cancel_job(&self, job_id: &str) -> Option<Value> {
+        self.provider.cancel_job(job_id)
+    }
+
+    fn thumbnail<'a>(
+        &'a self,
+        id: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Option<youtube::Picture>> + Send + 'a>> {
+        Box::pin(self.provider.thumbnail(id))
+    }
+}
+
+/// The `rumble` plugin: searches Rumble and saves videos or audio via `ubit` into staging.
+struct RumblePlugin {
+    provider: rumble::Provider,
+    watch: Arc<WatchState>,
+    staging_root: String,
+}
+
+impl<N: Node + 'static> MirrorPlugin<N> for RumblePlugin
+where
+    N::Error: From<AcquireError>,
+{
+    fn name(&self) -> &str {
+        rumble::NAME
+    }
+
+    fn description(&self) -> &str {
+        rumble::DESCRIPTION
+    }
+
+    fn run<'a>(
+        &'a self,
+        payload: Value,
+        ctx: &'a Ctx<N>,
+    ) -> Pin<Box<dyn Future<Output = Result<Value, MirrorError>> + Send + 'a>> {
+        Box::pin(async move {
+            let host = place_and_scan(&self.watch, ctx, &self.staging_root);
+            self.provider
+                .run(&payload, Some(host))
+                .await
+                .map_err(youtube_error)
+        })
+    }
+
+    fn stop<'a>(&'a self) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
+        Box::pin(self.provider.stop())
+    }
+
+    fn info(&self) -> Value {
+        self.provider.info()
+    }
+
+    fn provider(&self) -> Option<&dyn MirrorProvider<N>> {
+        Some(self)
+    }
+}
+
+impl<N: Node + 'static> MirrorProvider<N> for RumblePlugin
+where
+    N::Error: From<AcquireError>,
+{
+    fn search<'a>(&'a self, payload: Value, _ctx: &'a Ctx<N>) -> ProviderFuture<'a> {
+        Box::pin(async move { self.provider.search(&payload).await.map_err(youtube_error) })
+    }
+
+    fn browse<'a>(&'a self, _payload: Value, _ctx: &'a Ctx<N>) -> ProviderFuture<'a> {
+        Box::pin(async { Err(unknown_provider(rumble::NAME)) })
+    }
+
+    fn mirror<'a>(&'a self, payload: Value, ctx: &'a Ctx<N>) -> ProviderFuture<'a> {
+        Box::pin(async move {
+            let host = place_and_scan(&self.watch, ctx, &self.staging_root);
+            self.provider
+                .mirror(&payload, Some(host))
+                .await
+                .map_err(youtube_error)
+        })
+    }
+
+    fn list_jobs(&self) -> Vec<Value> {
+        self.provider.list_jobs()
+    }
+
+    fn get_job(&self, job_id: &str) -> Option<Value> {
+        self.provider.get_job(job_id)
+    }
+
+    fn cancel_job(&self, job_id: &str) -> Option<Value> {
+        self.provider.cancel_job(job_id)
+    }
+
+    fn thumbnail<'a>(
+        &'a self,
+        id: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Option<youtube::Picture>> + Send + 'a>> {
+        Box::pin(self.provider.thumbnail(id))
+    }
+}
+
 /// What `configure` may change while the host runs; `None` leaves a value as it is.
 #[derive(Debug, Clone, Default)]
 pub struct MirrorConfig {
@@ -1486,6 +1684,30 @@ where
                 opts.now_ms.clone(),
             )
         });
+        let soundcloud = soundcloud::Provider::new(soundcloud::Options {
+            staging_root: Some(staging_root.clone()),
+            staging_label: staging_label.to_owned(),
+            onchange: opts.onchange.clone(),
+            ..soundcloud::Options::new(
+                opts.storage.clone(),
+                opts.youtube.backend.clone(),
+                Some(opts.youtube.fetch.clone()),
+                opts.youtube.random.clone(),
+                opts.now_ms.clone(),
+            )
+        });
+        let rumble = rumble::Provider::new(rumble::Options {
+            staging_root: Some(staging_root.clone()),
+            staging_label: staging_label.to_owned(),
+            onchange: opts.onchange.clone(),
+            ..rumble::Options::new(
+                opts.storage.clone(),
+                opts.youtube.backend.clone(),
+                Some(opts.youtube.fetch.clone()),
+                opts.youtube.random.clone(),
+                opts.now_ms.clone(),
+            )
+        });
         let feeds = Arc::new(Mutex::new(opts.feeds.clone()));
         let rechunk_progress = Arc::new(Mutex::new(json!({
             "running": false,
@@ -1560,6 +1782,16 @@ where
         }));
         host.register(Arc::new(YoutubePlugin {
             provider: youtube,
+            watch: host.watch_state.clone(),
+            staging_root: staging_root.clone(),
+        }));
+        host.register(Arc::new(SoundcloudPlugin {
+            provider: soundcloud,
+            watch: host.watch_state.clone(),
+            staging_root: staging_root.clone(),
+        }));
+        host.register(Arc::new(RumblePlugin {
+            provider: rumble,
             watch: host.watch_state.clone(),
             staging_root,
         }));

@@ -1239,6 +1239,7 @@ impl<N: Node> Api<N> {
                 "source": body.get("source").cloned().unwrap_or(Value::Null),
                 "channel": body.get("channel").cloned().unwrap_or(Value::Null),
                 "private": body.get("private").cloned().unwrap_or(Value::Bool(false)),
+                "music": body.get("music").cloned().unwrap_or(Value::Null),
             });
             return acquirer.add(request).await.map(Some);
         }
