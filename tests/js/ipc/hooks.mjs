@@ -17,6 +17,7 @@ const shared = {
 const fromWorklet = {
   '../src/index.js': './stubs/index.mjs',
   '../src/http.js': './stubs/http.mjs',
+  '../src/peer-api.js': './stubs/peer-api.mjs',
   '../src/lan.js': './stubs/lan.mjs',
   '../src/cast.js': './stubs/cast.mjs'
 }
