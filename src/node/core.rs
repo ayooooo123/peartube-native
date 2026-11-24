@@ -1564,6 +1564,24 @@ impl crate::search::SearchHost for SearchOps {
             shared.changed();
         }
     }
+    fn join_lan_topic(&self, id: &str, topic: [u8; 32]) {
+        if let Some(net) = self
+            .shared
+            .upgrade()
+            .and_then(|shared| shared.net.get().cloned())
+        {
+            net.join_lan_topic(id, topic);
+        }
+    }
+    fn release_lan_topic(&self, id: &str) {
+        if let Some(net) = self
+            .shared
+            .upgrade()
+            .and_then(|shared| shared.net.get().cloned())
+        {
+            net.release_lan_topic(id);
+        }
+    }
     fn swarm(&self) -> peeroxide::SwarmHandle {
         self.swarm.clone()
     }

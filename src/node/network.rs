@@ -614,6 +614,22 @@ impl ConnectionHandle {
             (self.0.close)();
         }
     }
+
+    #[cfg(test)]
+    pub(crate) fn for_test(peer: [u8; 32], mux: Mux, lan: bool, topics: Vec<[u8; 32]>) -> Self {
+        Self(Arc::new(ConnectionState {
+            peer,
+            mux,
+            closed: AtomicBool::new(false),
+            close: Box::new(|| {}),
+            lan,
+            private: false,
+            transport: None,
+            bytes: None,
+            topics,
+            _keepalive: Vec::new(),
+        }))
+    }
 }
 
 /// The relay's upload sharing (`traffic.js`) sees connections through this.
@@ -1209,6 +1225,9 @@ impl Network {
     /// `joinLanTopic(id, topic)`: a topic only this LAN hears. The peers on it connect to each
     /// other here, and it is never announced on the DHT.
     pub fn join_lan_topic(&self, id: &str, topic: [u8; 32]) {
+        if !self.can_announce() {
+            return;
+        }
         if lock(&self.lan_topics)
             .insert(id.to_owned(), topic)
             .is_some()
@@ -1217,6 +1236,22 @@ impl Network {
         }
         if let Some(lan) = lock(&self.lan).as_ref().map(|state| state.binding.clone()) {
             lan.join(topic);
+        }
+    }
+
+    /// `leaveLanTopic(id)`: drops one hold on a LAN-only topic; the LAN leaves it once its last
+    /// hold goes.
+    pub fn release_lan_topic(&self, id: &str) {
+        let removed = {
+            let mut topics = lock(&self.lan_topics);
+            let Some(topic) = topics.remove(id) else {
+                return;
+            };
+            let still_held = topics.values().any(|held| held == &topic);
+            (!still_held).then_some(topic)
+        };
+        if let Some(topic) = removed {
+            self.leave_lan_topic(topic);
         }
     }
 
