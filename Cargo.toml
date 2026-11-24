@@ -51,7 +51,7 @@ icu_collator = "2"
 # library has no test for them: `char::is_alphanumeric` also accepts vowel signs, which are marks.
 icu_properties = { version = "2", features = ["compiled_data"] }
 # The Soulseek client the app's `peartube-soulseek-bare` addon wraps, at the commit that gates its C ABI behind `c-api`.
-peartube-soulseek = { git = "https://github.com/ayooooo123/peartube-soulseek", rev = "5271be7a4d5cdc7c8e229f8e86d0c5912b27b601", default-features = false, optional = true }
+peartube-soulseek = { git = "https://github.com/ayooooo123/peartube-soulseek", rev = "4a06f70729d478e8ed2fa0803fee8f78fbf70d09", default-features = false, optional = true }
 # The relay's HTTPS listener (hyper-rustls already builds it for the client).
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
 unicode-normalization = "0.1"
