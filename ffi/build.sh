@@ -66,9 +66,9 @@ case "$target" in
     export "CC_$name=$bin/$cc" "CXX_$name=$bin/$cc++" "AR_$name=$bin/llvm-ar"
     # bindgen (rocksdb) parses headers with its own clang: without the NDK sysroot it reads the host's /usr/include.
     export "BINDGEN_EXTRA_CLANG_ARGS_$name=--sysroot=$ndk/toolchains/llvm/prebuilt/$host/sysroot --target=aarch64-linux-android29"
-    # Android 15 devices use 16 KiB pages; Rust's Android std links libc++_shared.so
-    # dynamically, so that NDK copy must ship beside this file (see ffi/README.md).
-    rustflags="-Clink-arg=-Wl,-z,max-page-size=16384"
+    # Android 15 devices use 16 KiB pages; fold identical drop glue/stubs and pack relocs
+    # (matching android/app/build.gradle.kts).
+    rustflags="-Clink-arg=-Wl,-z,max-page-size=16384,--icf=all,--gc-sections,--pack-dyn-relocs=relr"
     strip=$bin/llvm-strip
     built=$repo/target/$triple/$dir/libpeartube_native_ffi.so
     ;;
@@ -76,7 +76,7 @@ case "$target" in
     triple=aarch64-apple-darwin
     asset=peartube_native_ffi-darwin-arm64.dylib
     # The host loads it from the app bundle as lib<name>.dylib, under @rpath.
-    rustflags="-Clink-arg=-Wl,-install_name,@rpath/libpeartube_native_ffi.dylib"
+    rustflags="-Clink-arg=-Wl,-install_name,@rpath/libpeartube_native_ffi.dylib,-dead_strip"
     built=$repo/target/$triple/$dir/libpeartube_native_ffi.dylib
     ;;
   *)

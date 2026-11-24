@@ -26,7 +26,7 @@ mdns-sd = { path = "../mdns-sd" }
 simple-dns = "0.13"
 socket2 = { version = "0.6", features = ["all"] }
 mio = { version = "1", features = ["net", "os-poll"] }
-if-addrs = "0.13"
+if-addrs = "0.15"
 rand = "0.8"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
@@ -106,7 +106,7 @@ soulseek = ["dep:peartube-soulseek"]
 inherits = "release"
 lto = "fat"
 codegen-units = 1
-opt-level = "s"
+opt-level = "z"
 
 # The crates that run once per byte stay at 3. The hashes and the MAC then cost the same as in
 # an all-3 build (profile of a 1 GiB transfer, where no other crate reached 2 %); signatures

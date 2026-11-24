@@ -115,16 +115,18 @@ impl Backend {
             .and_then(Value::as_u64)
             .and_then(|port| u16::try_from(port).ok())
             .unwrap_or(crate::protocol::API_PORT);
-        if config.get("bonjour").and_then(Value::as_str) == Some("host") {
-            let sink = Arc::new(Mutex::new(on_line));
-            let lan = Arc::new(crate::lan::HostFactory::new({
-                let sink = Arc::clone(&sink);
-                move |value: Value| write(&sink, value.to_string())
-            }));
-            let adapters = adapters(api_port, lan);
-            return Self::spawn_with(config, adapters, move |line| write(&sink, line));
-        }
-        Self::spawn_with(config, native_adapters(api_port), on_line)
+        let sink = Arc::new(Mutex::new(on_line));
+        let lan = if config.get("bonjour").and_then(Value::as_str) == Some("host") {
+            let sink = Arc::clone(&sink);
+            crate::lan::Choice::Host(crate::lan::HostFactory::new(move |value: Value| {
+                write(&sink, value.to_string())
+            }))
+        } else {
+            crate::lan::Choice::Native(crate::lan::Factory)
+        };
+        Self::spawn_with(config, adapters(api_port, Arc::new(lan)), move |line| {
+            write(&sink, line)
+        })
     }
 
     pub fn spawn_with<F, C, L, A, K>(

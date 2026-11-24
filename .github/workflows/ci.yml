@@ -74,6 +74,11 @@ jobs:
           path: hypercore-storage-rs
       - uses: actions/checkout@v4
         with:
+          repository: ${{ github.repository_owner }}/tinyrocks-rs
+          ref: ${{ steps.stack.outputs['tinyrocks-rs'] }}
+          path: tinyrocks-rs
+      - uses: actions/checkout@v4
+        with:
           repository: ${{ github.repository_owner }}/hypercore-rs
           ref: ${{ steps.stack.outputs['hypercore-rs'] }}
           path: hypercore-rs
