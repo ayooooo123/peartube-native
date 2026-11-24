@@ -131,6 +131,13 @@ If a match is correct code, put a comment on the line before it: `// ast-grep-ig
 - **Fault:** none yet. Two cycles exist now. `node` uses types from `acquire`, `search`, `mirror`, `backend` and `cast`, and those modules use `node`. `protocol` uses `ipc::well_formed`, `ipc` uses `app_settings::js_truthy`, and `app_settings` uses `protocol`.
 - **Check:** none. A rule would write the current cycles into CI. First move the shared types into `node`, and move `js_truthy` out of `app_settings` into a module that uses no other module of the crate. Then a rule can check the boundary.
 
+### Storage cache and open-file budgets
+
+- **The one way:** separate mobile (`android`/`ios`) storage budgets from desktop and Linux relay budgets in `hypercore-storage-rs` (`src/db.rs`) and `tinyrocks-rs`. Keep mobile tight (`8 MiB` block cache / `48` open files), and give non-mobile hosts enough table readers (`>= 512` open files) and filter/index cache (`>= 256 MiB` macOS, `>= 512 MiB` Linux, with L0 filters and indexes pinned) to keep every active SST's monolithic Bloom filter and index block resident in RAM.
+- **Why:** multi-hundred-GB and multi-TB relays accumulate 50–150+ L6 SST files whose monolithic Bloom filter and index blocks are 1.8–3.8 MiB each. When a cache or file-descriptor limit holds only a few SSTs, almost every point lookup evicts a filter block, calls `pread64` for 2–4 MiB from the OS page cache, and re-runs XXH3 over the whole block, burning 45–118% CPU and gigabytes per second of `rchar` even while network-idle.
+- **Fault:** [hypercore-storage-rs pull request 2](https://github.com/ayooooo123/hypercore-storage-rs/pull/2). Hardcoded `8 MiB` `BLOCK_CACHE` and `max_open_files(48)` caused live 920 GB and 4.56 TB relays to thrash up to 2.25 GB/s of cached `pread64` reads on `.sst` filter blocks.
+- **Check:** `db::tests::rocksdb_cache_and_fd_budget_scales_for_non_mobile` and `db::tests::multi_sst_forward_and_reverse_lookups_return_exact_values` in `hypercore-storage-rs` flush 60 distinct SSTs (> old 48-file cap) and assert zero `BlockCacheFilterMiss` and zero `BlockCacheIndexMiss` on a reverse lookup pass across all 60 SSTs.
+
 ### Engine safety and complexity rules
 
 - `no-prod-unwrap` (`src/**/*.rs`): avoid `.unwrap()` and `panic!()` in production engine code; return `Err` to match JS error recovery.
