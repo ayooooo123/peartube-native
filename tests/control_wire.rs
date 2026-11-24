@@ -9,9 +9,9 @@ fn check<T: Codec + PartialEq + Debug>(row: &Value, name: &str, expected: &T) {
     assert_eq!(row["name"], name);
     let hex = row["hex"].as_str().unwrap();
     let bytes = Bytes::from(
-        (0..hex.len())
-            .step_by(2)
-            .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap())
+        hex.as_bytes()
+            .chunks_exact(2)
+            .map(|pair| u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).unwrap())
             .collect::<Vec<_>>(),
     );
     assert_eq!(

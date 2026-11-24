@@ -72,7 +72,7 @@ fn cut(s: &str, max: usize) -> (usize, bool) {
 pub(super) fn bounded(s: &str, max: usize) -> String {
     let (end, split) = cut(s, max);
     let mut result = String::with_capacity(end + if split { 3 } else { 0 });
-    result.push_str(&s[..end]);
+    result.push_str(s.get(..end).unwrap_or_default());
     if split {
         result.push('\u{fffd}');
     }

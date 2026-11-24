@@ -408,7 +408,10 @@ async fn bidirectional_calls_share_an_id_and_bad_local_encodes_send_nothing() {
     let ac = open_channel(&a, &GUARD_SPEC, guard_handlers(calls.clone()), WAIT)
         .await
         .unwrap();
-    let bc = rx.recv().await.unwrap();
+    let bc = tokio::time::timeout(WAIT, rx.recv())
+        .await
+        .unwrap()
+        .unwrap();
     let (x, y) = tokio::join!(
         ac.call(0, hello().into(), WAIT),
         bc.call(0, hello().into(), WAIT)
