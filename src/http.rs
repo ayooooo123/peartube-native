@@ -213,6 +213,14 @@ pub trait Mirror: Send + Sync {
     fn provider_job(&self, id: &str) -> Option<Value>;
     /// `cancelProviderJob(id)`.
     fn cancel_provider_job(&self, id: &str) -> Option<Value>;
+    /// `retryProviderJob(id)`: restart a failed durable provider job keeping partial progress.
+    fn retry_provider_job(&self, _id: &str) -> Option<Value> {
+        None
+    }
+    /// `wakeProviderJobs()`: wake backing-off or transient-failed provider jobs immediately.
+    fn wake_provider_jobs(&self) -> usize {
+        0
+    }
     /// `forgetImported(gone)`: after announces were removed, what became of the file each
     /// `(id, sha256)` was imported from, as `id/sha256` with `deleted` or `kept`.
     fn forget_imported<'a>(
@@ -1390,6 +1398,25 @@ impl<N: Node> Api<N> {
                 false => mirror.cancel_provider_job(&id),
             }));
         }
+        if *method == Method::POST && path == "/v1/jobs/resume" {
+            let resumed = self
+                .options
+                .mirror
+                .as_ref()
+                .map(|mirror| mirror.wake_provider_jobs())
+                .unwrap_or(0);
+            return Ok(Some(json!({ "resumed": resumed })));
+        }
+        if *method == Method::POST
+            && let Some(id) = job_retry_id(path)
+        {
+            let job = self
+                .options
+                .mirror
+                .as_ref()
+                .and_then(|mirror| mirror.retry_provider_job(&id));
+            return Ok(job);
+        }
         if *method == Method::GET && path == "/v1/plugins" {
             let plugins = self
                 .options
@@ -2397,11 +2424,19 @@ fn rest(path: &str, prefix: &str) -> Option<String> {
 
 fn job_id(path: &str) -> Option<String> {
     let tail = path.strip_prefix("/v1/jobs/")?;
-    (tail.len() == 36
+    is_job_uuid(tail).then(|| tail.to_owned())
+}
+
+fn job_retry_id(path: &str) -> Option<String> {
+    let tail = path.strip_prefix("/v1/jobs/")?.strip_suffix("/retry")?;
+    is_job_uuid(tail).then(|| tail.to_owned())
+}
+
+fn is_job_uuid(tail: &str) -> bool {
+    tail.len() == 36
         && tail
             .bytes()
-            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f' | b'-')))
-    .then(|| tail.to_owned())
+            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f' | b'-'))
 }
 
 fn plugin_name(path: &str) -> Option<String> {

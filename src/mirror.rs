@@ -305,6 +305,13 @@ pub trait MirrorProvider<N: Node>: Send + Sync {
     fn list_jobs(&self) -> Vec<Value>;
     fn get_job(&self, job_id: &str) -> Option<Value>;
     fn cancel_job(&self, job_id: &str) -> Option<Value>;
+    fn retry_job(&self, _job_id: &str, _ctx: &Ctx<N>) -> Option<Value> {
+        None
+    }
+    fn wake_jobs(&self, _ctx: &Ctx<N>) -> usize {
+        0
+    }
+    fn resume_persisted(&self, _ctx: &Ctx<N>) {}
     /// A result's picture, served by the relay (`thumbnail(id)`). A provider without pictures has
     /// none.
     fn thumbnail<'a>(
@@ -599,6 +606,8 @@ pub struct SoulseekSettings {
     pub listen_port: u16,
     pub share: bool,
     pub share_max_files: u32,
+    /// Persist jobs and `.part` work dirs across restarts and retry transient peer/network failures.
+    pub durable: bool,
     /// `None` on a host with no Soulseek client: the plugin then reports `unavailable`.
     pub backend: Option<Arc<dyn Backend>>,
     pub random: Arc<dyn RandomSource>,
@@ -613,6 +622,7 @@ impl Default for SoulseekSettings {
             listen_port: soulseek::DEFAULT_LISTEN_PORT,
             share: false,
             share_max_files: soulseek::DEFAULT_SHARE_MAX_FILES,
+            durable: false,
             backend: None,
             random: Arc::new(OsRandom),
         }
@@ -1281,6 +1291,21 @@ where
     fn cancel_job(&self, job_id: &str) -> Option<Value> {
         self.provider.cancel_job(job_id)
     }
+
+    fn retry_job(&self, job_id: &str, ctx: &Ctx<N>) -> Option<Value> {
+        let host = place_and_scan(&self.watch, ctx, &self.staging_root);
+        self.provider.retry_job(job_id, Some(host))
+    }
+
+    fn wake_jobs(&self, ctx: &Ctx<N>) -> usize {
+        let host = place_and_scan(&self.watch, ctx, &self.staging_root);
+        self.provider.wake_jobs(Some(host))
+    }
+
+    fn resume_persisted(&self, ctx: &Ctx<N>) {
+        let host = place_and_scan(&self.watch, ctx, &self.staging_root);
+        self.provider.resume_persisted(Some(host));
+    }
 }
 
 /// The `youtube` plugin: the provider behind the host's plugin and provider calls. Its saves land
@@ -1664,6 +1689,7 @@ where
             listen_port: opts.soulseek.listen_port,
             share: opts.soulseek.share,
             share_max_files: opts.soulseek.share_max_files,
+            durable: opts.soulseek.durable,
             onchange: opts.onchange.clone(),
             ..soulseek::Options::new(
                 opts.storage.clone(),
@@ -1860,6 +1886,14 @@ where
         for name in &startup.start_runs {
             if !self.is_closed() {
                 self.spawn_run(name, Value::Null);
+            }
+        }
+        if !self.is_closed() {
+            let plugins = self.plugins.lock().expect("mirror plugins").clone();
+            for (_, plugin) in plugins {
+                if let Some(provider) = plugin.provider() {
+                    provider.resume_persisted(&self.ctx);
+                }
             }
         }
         self.start_poll_timer(startup.poll_interval_ms);
@@ -2185,6 +2219,25 @@ where
             .iter()
             .filter_map(|(_, plugin)| plugin.provider())
             .find_map(|provider| provider.cancel_job(job_id))
+    }
+
+    /// `retryProviderJob(jobId)`: restarts a failed durable provider job from its saved work dir.
+    pub fn retry_provider_job(&self, job_id: &str) -> Option<Value> {
+        let plugins = self.plugins.lock().expect("mirror plugins").clone();
+        plugins
+            .iter()
+            .filter_map(|(_, plugin)| plugin.provider())
+            .find_map(|provider| provider.retry_job(job_id, &self.ctx))
+    }
+
+    /// `wakeProviderJobs()`: interrupts retry backoff and resumes transient-failed durable jobs.
+    pub fn wake_provider_jobs(&self) -> usize {
+        let plugins = self.plugins.lock().expect("mirror plugins").clone();
+        plugins
+            .iter()
+            .filter_map(|(_, plugin)| plugin.provider())
+            .map(|provider| provider.wake_jobs(&self.ctx))
+            .sum()
     }
 
     /// `forgetImported(gone)`: after the owner removed announces, the files this relay mirrored for

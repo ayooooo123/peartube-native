@@ -147,6 +147,14 @@ impl http::Mirror for PeerMirror {
         self.0.cancel_provider_job(id)
     }
 
+    fn retry_provider_job(&self, id: &str) -> Option<Value> {
+        self.0.retry_provider_job(id)
+    }
+
+    fn wake_provider_jobs(&self) -> usize {
+        self.0.wake_provider_jobs()
+    }
+
     fn forget_imported<'a>(
         &'a self,
         gone: Vec<(String, String)>,
@@ -280,6 +288,7 @@ impl ApiServerTrait<CoreNode> for LoopbackApi {
                     listen_port: 0,
                     share: slsk_share,
                     share_max_files: slsk_share_max,
+                    durable: true,
                     backend: soulseek::client::network(),
                     ..SoulseekSettings::default()
                 },
@@ -409,6 +418,17 @@ impl ApiServerTrait<CoreNode> for LoopbackApi {
                 .as_ref()
         {
             server.notify(event);
+        }
+    }
+
+    fn resume(&self) {
+        if let Some(running) = self
+            .running
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .as_ref()
+        {
+            running.mirror.wake_provider_jobs();
         }
     }
 

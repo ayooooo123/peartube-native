@@ -31,7 +31,9 @@ use std::time::Duration;
 
 use futures_util::FutureExt;
 use futures_util::future::Shared;
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
+use tokio::sync::Notify;
 
 use self::client::{Backend, Client, ClientSetup, Phase, Progress, ProgressFn};
 use self::place::{LoneTrack, peer_folder_hint, place_single_track};
@@ -61,6 +63,14 @@ const BROWSE_CACHE_MAX: usize = 16;
 // the file connection is failed with the reason; a peer that reported a queue place is waited on.
 const NO_ANSWER_MS: u64 = 3 * 60_000;
 const NO_CONNECT_MS: u64 = 90_000;
+/// Backoff delays (ms) between automatic retries of transient transfer/network failures in durable
+/// mode: 5s -> 15s -> 45s -> 2m -> 5m (interruptible immediately by `wake_jobs()`).
+const DURABLE_RETRY_BACKOFF_MS: [u64; 5] = [5_000, 15_000, 45_000, 120_000, 300_000];
+/// Maximum automatic wake-driven retries of transient-failed jobs (manual `retry_job` is unlimited).
+const MAX_AUTO_WAKE_RESUMES: u32 = 3;
+/// Failed or finished durable jobs older than 7 days have their work directories purged on startup.
+const STALE_JOB_TTL_MS: u64 = 7 * 24 * 60 * 60 * 1000;
+const JOBS_FILENAME: &str = "soulseek-jobs.json";
 
 /// A request the provider refuses or could not finish. `status` is the HTTP status the app's error
 /// carries, when it carries one; `reason` tags a peer failure so `info` can flag the listen port.
@@ -118,6 +128,9 @@ pub struct Options {
     pub browse_timeout_ms: u64,
     pub no_answer_ms: u64,
     pub no_connect_ms: u64,
+    /// Persist jobs to `<storage>/soulseek-jobs.json`, retain `.part` and completed tracks across
+    /// failures and restarts, and retry transient network/peer errors with backoff.
+    pub durable: bool,
     pub onchange: Option<Arc<dyn Fn() + Send + Sync>>,
     /// What makes clients; `None` is a relay with no Soulseek client, which reports `unavailable`.
     pub backend: Option<Arc<dyn Backend>>,
@@ -147,6 +160,7 @@ impl Options {
             browse_timeout_ms: BROWSE_TIMEOUT_MS,
             no_answer_ms: NO_ANSWER_MS,
             no_connect_ms: NO_CONNECT_MS,
+            durable: false,
             onchange: None,
             backend,
             random,
@@ -225,6 +239,9 @@ struct State {
 
 struct Job {
     id: String,
+    request: Request,
+    items: Mutex<Vec<Item>>,
+    work_dir: PathBuf,
     record: Mutex<JobRecord>,
 }
 
@@ -252,6 +269,16 @@ struct JobRecord {
     done: Option<(u64, Vec<Value>)>,
     cancelled: bool,
     progress_at: u64,
+    /// Completed file names saved inside `work_dir` (for skipping finished tracks on resume).
+    completed_files: Vec<String>,
+    /// True while an async runner task owns this job (prevents duplicate runners on wake/retry).
+    active_runner: bool,
+    /// True when the last failure was transient (network/stall/disconnect) vs hard refusal.
+    transient_failure: bool,
+    /// Number of automatic wake-triggered resumes already attempted after a transient failure.
+    auto_resumes: u32,
+    /// Whether durable retry is enabled for this job.
+    durable: bool,
 }
 
 impl Job {
@@ -287,6 +314,9 @@ impl Job {
             out.insert("size".into(), json!(size));
             out.insert("sha256s".into(), json!(sha256s));
         }
+        if record.durable && record.status == "failed" {
+            out.insert("retryable".into(), json!(true));
+        }
         let waiting = record.status == "queued" || record.status == "transferring";
         let idle = waiting.then(|| now.saturating_sub(record.progress_at));
         out.insert("idleMs".into(), json!(idle));
@@ -303,6 +333,7 @@ impl Job {
 }
 
 /// One file of a mirror request.
+#[derive(Clone, Serialize, Deserialize)]
 struct Item {
     /// The peer's path.
     filename: String,
@@ -313,6 +344,7 @@ struct Item {
 }
 
 /// What a mirror was asked for, read from its payload.
+#[derive(Clone, Serialize, Deserialize)]
 struct Request {
     username: String,
     /// The caller's id, lowercased, or empty.
@@ -322,6 +354,34 @@ struct Request {
     title: String,
     /// The track number in the caller's id (`mb:<release>:s01e05`).
     track: Option<u32>,
+}
+
+/// On-disk snapshot of durable Soulseek jobs (`<storage>/soulseek-jobs.json`).
+#[derive(Serialize, Deserialize)]
+struct PersistedJobs {
+    version: u8,
+    jobs: Vec<PersistedJob>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct PersistedJob {
+    id: String,
+    request: Request,
+    items: Vec<Item>,
+    completed_files: Vec<String>,
+    status: String,
+    created: u64,
+    updated: u64,
+    bytes: u64,
+    total: Option<u64>,
+    file: String,
+    file_index: usize,
+    error: Option<String>,
+    note: Option<String>,
+    #[serde(default)]
+    transient_failure: bool,
+    #[serde(default)]
+    auto_resumes: u32,
 }
 
 /// What a download run keeps between progress reports.
@@ -346,10 +406,13 @@ struct Inner {
     browse_timeout_ms: u64,
     no_answer_ms: u64,
     no_connect_ms: u64,
+    durable: bool,
     onchange: Option<Arc<dyn Fn() + Send + Sync>>,
     backend: Option<Arc<dyn Backend>>,
     random: Arc<dyn RandomSource>,
     now_ms: Arc<dyn Fn() -> u64 + Send + Sync>,
+    wake: Arc<Notify>,
+    place_and_scan: Mutex<Option<PlaceAndScan>>,
     state: Mutex<State>,
 }
 
@@ -375,6 +438,14 @@ impl Provider {
             .to_owned(),
         };
         let configured = creds.configured();
+        let durable = options.durable;
+        let storage_for_load = options.storage.clone();
+        let now_for_load = (options.now_ms)();
+        let restored = if durable {
+            load_persisted_jobs(&storage_for_load, now_for_load)
+        } else {
+            Vec::new()
+        };
         let provider = Self(Arc::new(Inner {
             staging_root: options
                 .staging_root
@@ -388,10 +459,13 @@ impl Provider {
             browse_timeout_ms: options.browse_timeout_ms,
             no_answer_ms: options.no_answer_ms,
             no_connect_ms: options.no_connect_ms,
+            durable,
             onchange: options.onchange,
             backend: options.backend,
             random: options.random,
             now_ms: options.now_ms,
+            wake: Arc::new(Notify::new()),
+            place_and_scan: Mutex::new(None),
             state: Mutex::new(State {
                 creds,
                 availability: Availability::Unknown,
@@ -399,7 +473,7 @@ impl Provider {
                 client_key: String::new(),
                 login: None,
                 closed: false,
-                jobs: Vec::new(),
+                jobs: restored,
                 browse_cache: Vec::new(),
                 seen_files: HashMap::new(),
                 inbound_failures: 0,
@@ -407,6 +481,9 @@ impl Provider {
                 transfers_ok: 0,
             }),
         }));
+        if durable && !provider.state().jobs.is_empty() {
+            provider.save_jobs();
+        }
         // Whether a client can be made is asked only once credentials are set, so `/v1/plugins`
         // stays inert without them and reports `unavailable` with them on a relay that has none.
         if configured {
@@ -716,7 +793,7 @@ impl Provider {
         Ok((answer.await?, false))
     }
 
-    fn trim_jobs(state: &mut State) {
+    fn trim_jobs(state: &mut State, durable: bool) {
         if state.jobs.len() <= 48 {
             return;
         }
@@ -725,6 +802,9 @@ impl Provider {
             let over = left > 32 && matches!(job.status(), "done" | "failed" | "cancelled");
             if over {
                 left -= 1;
+                if durable {
+                    let _ = std::fs::remove_dir_all(&job.work_dir);
+                }
             }
             !over
         });
@@ -814,8 +894,20 @@ impl Provider {
 
         let now = self.now();
         let listen_port = self.advertised_port();
+        let job_id = self.0.random.uuid_v4();
+        let work_dir = if self.0.durable {
+            Path::new(&self.0.storage).join(format!(".slsk-job-{job_id}"))
+        } else {
+            Path::new(&self.0.storage).join(format!(".slsk-tmp-{job_id}"))
+        };
+        if let Some(host) = &place_and_scan {
+            *self.0.place_and_scan.lock().expect("soulseek host") = Some(host.clone());
+        }
         let job = Arc::new(Job {
-            id: self.0.random.uuid_v4(),
+            id: job_id,
+            request: request.clone(),
+            items: Mutex::new(items.clone()),
+            work_dir: work_dir.clone(),
             record: Mutex::new(JobRecord {
                 release: if is_id(&request.caller_id) {
                     Some(request.caller_id.clone())
@@ -847,27 +939,27 @@ impl Provider {
                 done: None,
                 cancelled: false,
                 progress_at: now,
+                completed_files: Vec::new(),
+                active_runner: true,
+                transient_failure: false,
+                auto_resumes: 0,
+                durable: self.0.durable,
             }),
         });
         {
             let mut state = self.state();
-            Self::trim_jobs(&mut state);
+            Self::trim_jobs(&mut state, self.0.durable);
             state.jobs.push(job.clone());
         }
+        self.save_jobs();
         self.changed();
 
-        let work_dir = Path::new(&self.0.storage).join(format!(".slsk-tmp-{}", job.id));
         make_private_dir(&work_dir).map_err(|error| SoulseekError::plain(error.to_string()))?;
 
         let wait = payload.get("wait") == Some(&Value::Bool(true));
-        let run = self.clone().run_download(
-            client,
-            job.clone(),
-            request,
-            items,
-            work_dir,
-            place_and_scan,
-        );
+        let run = self
+            .clone()
+            .run_download(Some(client), job.clone(), place_and_scan);
         if wait {
             return run.await;
         }
@@ -878,21 +970,49 @@ impl Provider {
     /// Downloads every file of a mirror, places them and has them imported; the job follows it.
     async fn run_download(
         self,
-        client: Arc<dyn Client>,
+        initial_client: Option<Arc<dyn Client>>,
         job: Arc<Job>,
-        request: Request,
-        items: Vec<Item>,
-        work_dir: PathBuf,
         place_and_scan: Option<PlaceAndScan>,
     ) -> Result<Value, SoulseekError> {
-        let outcome = self
-            .download_and_place(&client, &job, &request, items, &work_dir, place_and_scan)
-            .await;
+        let _ = make_private_dir(&job.work_dir);
+        let client = match initial_client {
+            Some(client) => Ok(client),
+            None => self.login_with_backoff(&job).await,
+        };
+        let outcome = match client {
+            Ok(client) => self.download_and_place(&client, &job, place_and_scan).await,
+            Err(error) => Err(error),
+        };
+        {
+            let mut record = job.record.lock().expect("soulseek job");
+            record.active_runner = false;
+        }
         let failure = match outcome {
-            Ok(done) => return Ok(done),
+            Ok(done) => {
+                self.save_jobs();
+                return Ok(done);
+            }
             Err(failure) => failure,
         };
-        let _ = std::fs::remove_dir_all(&work_dir);
+        let closing = self.state().closed;
+        let cancelled = job.cancelled();
+        if self.0.durable && closing && !cancelled {
+            // App/relay is shutting down cleanly: preserve partial progress and keep job queued
+            // so the next startup automatically resumes from the exact track and `.part` offset.
+            {
+                let mut record = job.record.lock().expect("soulseek job");
+                record.status = "queued";
+                record.phase = Phase::Queued.as_str();
+                record.speed = 0;
+                record.queue_place = None;
+            }
+            self.save_jobs();
+            return Err(SoulseekError::plain("Cancelled"));
+        }
+        if !self.0.durable || cancelled {
+            let _ = std::fs::remove_dir_all(&job.work_dir);
+        }
+        let transient = is_transient_error(&failure);
         let message = {
             let secrets = self.state().creds.secrets();
             let mut record = job.record.lock().expect("soulseek job");
@@ -900,13 +1020,18 @@ impl Provider {
                 record.status = "failed";
                 record.phase = Phase::Failed.as_str();
                 record.error = Some(scrub(&failure.message, &secrets));
+                record.transient_failure = transient;
+                if self.0.durable {
+                    record.note = Some("Progress saved — tap Retry to continue.".to_owned());
+                }
             }
             record.speed = 0;
             record.error.clone()
         };
-        if !job.cancelled() {
+        if !cancelled {
             self.note_peer_failure(&failure);
         }
+        self.save_jobs();
         self.changed();
         Err(SoulseekError::status(
             failure.status.unwrap_or(502),
@@ -918,17 +1043,90 @@ impl Provider {
         self.state().closed || job.cancelled()
     }
 
+    /// Signs in for a resumed/retried durable job, retrying transient offline/network failures
+    /// with backoff and waking immediately on `wake_jobs()`.
+    async fn login_with_backoff(&self, job: &Arc<Job>) -> Result<Arc<dyn Client>, SoulseekError> {
+        let max_attempts = if self.0.durable {
+            DURABLE_RETRY_BACKOFF_MS.len()
+        } else {
+            0
+        };
+        for attempt in 0..=max_attempts {
+            if self.stopped(job) {
+                return Err(SoulseekError::plain("Cancelled"));
+            }
+            match self.logged_in().await {
+                Ok(client) => return Ok(client),
+                Err(err) => {
+                    if attempt == max_attempts || self.stopped(job) || !is_transient_error(&err) {
+                        return Err(err);
+                    }
+                    let wait_ms = DURABLE_RETRY_BACKOFF_MS[attempt];
+                    {
+                        let mut record = job.record.lock().expect("soulseek job");
+                        record.status = "queued";
+                        record.phase = "retrying";
+                        record.speed = 0;
+                        record.queue_place = None;
+                        record.note = Some(format!(
+                            "Waiting for Soulseek connection — retrying in {}s ({}/{})…",
+                            wait_ms / 1000,
+                            attempt + 1,
+                            max_attempts
+                        ));
+                        record.progress_at = self.now();
+                    }
+                    self.save_jobs();
+                    self.changed();
+                    self.wait_backoff(job, wait_ms).await?;
+                }
+            }
+        }
+        Err(SoulseekError::status(502, "Soulseek login failed"))
+    }
+
+    /// Waits up to `wait_ms` milliseconds, returning early if woken by `wake_jobs()` or erroring
+    /// immediately if stopped/cancelled.
+    async fn wait_backoff(&self, job: &Arc<Job>, wait_ms: u64) -> Result<(), SoulseekError> {
+        let sleep = tokio::time::sleep(Duration::from_millis(wait_ms));
+        tokio::pin!(sleep);
+        let mut poll = tokio::time::interval(Duration::from_millis(200));
+        poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        let notified = self.0.wake.notified();
+        tokio::pin!(notified);
+        loop {
+            if self.stopped(job) {
+                return Err(SoulseekError::plain("Cancelled"));
+            }
+            tokio::select! {
+                () = &mut sleep => return Ok(()),
+                () = &mut notified => {
+                    if self.stopped(job) {
+                        return Err(SoulseekError::plain("Cancelled"));
+                    }
+                    return Ok(());
+                }
+                _ = poll.tick() => {
+                    if self.stopped(job) {
+                        return Err(SoulseekError::plain("Cancelled"));
+                    }
+                }
+            }
+        }
+    }
+
     async fn download_and_place(
         &self,
         client: &Arc<dyn Client>,
         job: &Arc<Job>,
-        request: &Request,
-        items: Vec<Item>,
-        work_dir: &Path,
         place_and_scan: Option<PlaceAndScan>,
     ) -> Result<Value, SoulseekError> {
         let cancelled = || SoulseekError::plain("Cancelled");
-        let items = Arc::new(Mutex::new(items));
+        let request = &job.request;
+        let work_dir = &job.work_dir;
+        let items = Arc::new(Mutex::new(
+            job.items.lock().expect("soulseek items").clone(),
+        ));
         let run = Arc::new(Mutex::new(Run {
             completed: 0,
             last_notify: 0,
@@ -939,13 +1137,18 @@ impl Provider {
         // The name each file was saved under in the work folder, and its size.
         let mut downloaded: Vec<(String, PathBuf, u64)> = Vec::new();
         let count = items.lock().expect("soulseek items").len();
+        let mut active_client = client.clone();
         for index in 0..count {
             if self.stopped(job) {
                 return Err(cancelled());
             }
-            let (filename, base) = {
+            let (filename, base, expected_size) = {
                 let items = items.lock().expect("soulseek items");
-                (items[index].filename.clone(), items[index].base.clone())
+                (
+                    items[index].filename.clone(),
+                    items[index].base.clone(),
+                    items[index].size,
+                )
             };
             let taken = downloaded
                 .iter()
@@ -957,12 +1160,57 @@ impl Provider {
                 base
             };
             let tmp_dest = work_dir.join(&dest_name);
+
+            // Durable resume: skip tracks that already completed and sit intact inside `work_dir`.
+            if self.0.durable
+                && let Ok(meta) = std::fs::metadata(&tmp_dest)
+                && meta.is_file()
             {
+                let recorded_done = job
+                    .record
+                    .lock()
+                    .expect("soulseek job")
+                    .completed_files
+                    .iter()
+                    .any(|name| name == &dest_name);
+                let size_matches = expected_size > 0 && meta.len() == expected_size;
+                if (recorded_done && meta.len() > 0) || size_matches {
+                    let size = meta.len();
+                    let completed = {
+                        let mut run = run.lock().expect("soulseek run");
+                        run.completed += size;
+                        run.completed
+                    };
+                    {
+                        let mut record = job.record.lock().expect("soulseek job");
+                        record.bytes = completed;
+                        record.file = basename(&filename.replace('\\', "/")).to_owned();
+                        record.file_index = index + 1;
+                        if record.total.is_some_and(|total| completed > total) {
+                            record.total = Some(completed);
+                        }
+                    }
+                    downloaded.push((dest_name, tmp_dest, size));
+                    continue;
+                }
+            }
+
+            let existing_part = if self.0.durable {
+                part_len(&tmp_dest)
+            } else {
+                0
+            };
+            {
+                let completed_so_far = run.lock().expect("soulseek run").completed;
                 let mut record = job.record.lock().expect("soulseek job");
                 record.status = "queued";
                 record.phase = Phase::Queued.as_str();
                 record.queue_place = None;
                 record.speed = 0;
+                if self.0.durable {
+                    record.bytes = completed_so_far + existing_part;
+                    record.note = None;
+                }
                 record.progress_at = self.now();
                 record.file = basename(&filename.replace('\\', "/")).to_owned();
                 record.file_index = index + 1;
@@ -976,9 +1224,17 @@ impl Provider {
             }
             self.changed();
             let report = self.reporter(job.clone(), items.clone(), run.clone());
-            let size = self
-                .download_one(client, job, &request.username, &filename, &tmp_dest, report)
+            let (size, next_client) = self
+                .download_one(
+                    &active_client,
+                    job,
+                    &request.username,
+                    &filename,
+                    &tmp_dest,
+                    report,
+                )
                 .await?;
+            active_client = next_client;
             let size = if size > 0 {
                 size
             } else {
@@ -986,6 +1242,12 @@ impl Provider {
                     .map_err(|error| SoulseekError::plain(error.to_string()))?
                     .len()
             };
+            {
+                let mut stored = job.items.lock().expect("soulseek items");
+                if size > stored[index].size {
+                    stored[index].size = size;
+                }
+            }
             let completed = {
                 let mut run = run.lock().expect("soulseek run");
                 run.completed += size;
@@ -998,11 +1260,16 @@ impl Provider {
                 let mut record = job.record.lock().expect("soulseek job");
                 record.bytes = completed;
                 record.speed = 0;
+                record.note = None;
                 if record.total.is_some_and(|total| completed > total) {
                     record.total = Some(completed);
                 }
+                if !record.completed_files.iter().any(|name| name == &dest_name) {
+                    record.completed_files.push(dest_name.clone());
+                }
             }
             downloaded.push((dest_name, tmp_dest, size));
+            self.save_jobs();
             self.changed();
         }
 
@@ -1315,8 +1582,8 @@ impl Provider {
         })
     }
 
-    /// One file through the client, retrying transient `"server session disconnected"` drops while
-    /// preserving `.part` resume and respecting cancellation and the peer watchdog.
+    /// One file through the client, retrying transient drops while preserving `.part` resume and
+    /// respecting cancellation, wake signals, and the peer watchdog.
     async fn download_one(
         &self,
         client: &Arc<dyn Client>,
@@ -1325,10 +1592,14 @@ impl Provider {
         filename: &str,
         dest: &Path,
         report: Arc<dyn Fn(Progress) + Send + Sync>,
-    ) -> Result<u64, SoulseekError> {
-        const MAX_SESSION_RETRIES: u32 = 3;
+    ) -> Result<(u64, Arc<dyn Client>), SoulseekError> {
+        let max_retries = if self.0.durable {
+            DURABLE_RETRY_BACKOFF_MS.len()
+        } else {
+            3
+        };
         let mut active_client = client.clone();
-        for attempt in 0..=MAX_SESSION_RETRIES {
+        for attempt in 0..=max_retries {
             let outcome = self
                 .download_attempt(
                     &active_client,
@@ -1340,35 +1611,44 @@ impl Provider {
                 )
                 .await;
             let Err(err) = outcome else {
-                return outcome;
+                return outcome.map(|size| (size, active_client));
             };
-            if attempt == MAX_SESSION_RETRIES
-                || self.stopped(job)
-                || !contains_ignore_case(&err.message, "server session disconnected")
-            {
+            let retryable = if self.0.durable {
+                is_transient_error(&err)
+            } else {
+                contains_ignore_case(&err.message, "server session disconnected")
+            };
+            if attempt == max_retries || self.stopped(job) || !retryable {
                 return Err(err);
             }
+            let wait_ms = if self.0.durable {
+                DURABLE_RETRY_BACKOFF_MS[attempt]
+            } else {
+                2_000u64 * (attempt as u64 + 1)
+            };
             {
                 let mut record = job.record.lock().expect("soulseek job");
                 record.status = "queued";
-                record.phase = Phase::Queued.as_str();
+                record.phase = if self.0.durable {
+                    "retrying"
+                } else {
+                    Phase::Queued.as_str()
+                };
+                record.queue_place = None;
                 record.speed = 0;
+                if self.0.durable {
+                    record.note = Some(format!(
+                        "Connection paused — retrying in {}s ({}/{})…",
+                        wait_ms / 1000,
+                        attempt + 1,
+                        max_retries
+                    ));
+                }
                 record.progress_at = self.now();
             }
+            self.save_jobs();
             self.changed();
-            let wait_ms = 2_000u64 * u64::from(attempt + 1);
-            let mut waited = 0u64;
-            while waited < wait_ms {
-                if self.stopped(job) {
-                    return Err(SoulseekError::plain("Cancelled"));
-                }
-                let step = (wait_ms - waited).min(200);
-                tokio::time::sleep(Duration::from_millis(step)).await;
-                waited += step;
-            }
-            if self.stopped(job) {
-                return Err(SoulseekError::plain("Cancelled"));
-            }
+            self.wait_backoff(job, wait_ms).await?;
             if let Ok(reconnected) = self.logged_in().await {
                 active_client = reconnected;
             }
@@ -1543,17 +1823,217 @@ impl Provider {
         };
         match status {
             None => {
+                self.0.wake.notify_waiters();
+                // If no runner is currently alive (e.g. restored queued job before startup), clean
+                // up work_dir directly so cancelled bytes never linger on disk.
+                let has_runner = job.record.lock().expect("soulseek job").active_runner;
+                if !has_runner && self.0.durable {
+                    let _ = std::fs::remove_dir_all(&job.work_dir);
+                }
+                self.save_jobs();
                 self.changed();
                 Some(Value::Object(job.view(self.now())))
             }
             Some("announcing") => Some(Value::Object(job.view(self.now()))),
             Some(_) => {
+                if self.0.durable {
+                    let _ = std::fs::remove_dir_all(&job.work_dir);
+                }
                 self.state().jobs.retain(|other| other.id != job_id);
+                self.save_jobs();
                 self.changed();
                 let mut view = job.view(self.now());
                 view.insert("status".into(), json!("removed"));
                 Some(Value::Object(view))
             }
+        }
+    }
+
+    /// Manually retries a failed durable job, reusing its completed tracks and `.part` files.
+    pub fn retry_job(&self, job_id: &str, place_and_scan: Option<PlaceAndScan>) -> Option<Value> {
+        if !self.0.durable {
+            return None;
+        }
+        if let Some(host) = &place_and_scan {
+            *self.0.place_and_scan.lock().expect("soulseek host") = Some(host.clone());
+        }
+        let job = self.job(job_id)?;
+        let should_spawn = {
+            let state = self.state();
+            if state.closed {
+                return Some(Value::Object(job.view(self.now())));
+            }
+            let mut record = job.record.lock().expect("soulseek job");
+            if record.status != "failed" || record.active_runner {
+                false
+            } else {
+                record.status = "queued";
+                record.phase = Phase::Queued.as_str();
+                record.error = None;
+                record.note = None;
+                record.cancelled = false;
+                record.transient_failure = false;
+                record.auto_resumes = 0;
+                record.speed = 0;
+                record.queue_place = None;
+                record.progress_at = self.now();
+                record.active_runner = true;
+                true
+            }
+        };
+        if should_spawn {
+            let host = place_and_scan
+                .or_else(|| self.0.place_and_scan.lock().expect("soulseek host").clone());
+            self.save_jobs();
+            self.changed();
+            tokio::spawn(self.clone().run_download(None, job.clone(), host));
+        }
+        Some(Value::Object(job.view(self.now())))
+    }
+
+    /// Resumes durable jobs persisted across a restart once the host's `place_and_scan` is ready.
+    pub fn resume_persisted(&self, place_and_scan: Option<PlaceAndScan>) {
+        if let Some(host) = &place_and_scan {
+            *self.0.place_and_scan.lock().expect("soulseek host") = Some(host.clone());
+        }
+        if !self.0.durable {
+            return;
+        }
+        let to_spawn: Vec<Arc<Job>> = {
+            let state = self.state();
+            if state.closed || !state.creds.configured() {
+                return;
+            }
+            state
+                .jobs
+                .iter()
+                .filter(|job| {
+                    let mut record = job.record.lock().expect("soulseek job");
+                    if record.status == "queued" && !record.active_runner && !record.cancelled {
+                        record.active_runner = true;
+                        record.progress_at = self.now();
+                        true
+                    } else {
+                        false
+                    }
+                })
+                .cloned()
+                .collect()
+        };
+        if to_spawn.is_empty() {
+            return;
+        }
+        let host =
+            place_and_scan.or_else(|| self.0.place_and_scan.lock().expect("soulseek host").clone());
+        for job in to_spawn {
+            tokio::spawn(self.clone().run_download(None, job, host.clone()));
+        }
+        self.changed();
+    }
+
+    /// Wakes all backing-off jobs immediately and auto-resumes transient-failed durable jobs
+    /// (called on app foreground and network reconnect).
+    pub fn wake_jobs(&self, place_and_scan: Option<PlaceAndScan>) -> usize {
+        if let Some(host) = &place_and_scan {
+            *self.0.place_and_scan.lock().expect("soulseek host") = Some(host.clone());
+        }
+        self.0.wake.notify_waiters();
+        if !self.0.durable {
+            return 0;
+        }
+        let (to_spawn, active_count) = {
+            let state = self.state();
+            if state.closed || !state.creds.configured() {
+                return 0;
+            }
+            let mut spawn = Vec::new();
+            let mut active = 0usize;
+            for job in &state.jobs {
+                let mut record = job.record.lock().expect("soulseek job");
+                if record.cancelled {
+                    continue;
+                }
+                if record.active_runner {
+                    active += 1;
+                    continue;
+                }
+                let resume_queued = record.status == "queued";
+                let resume_transient = record.status == "failed"
+                    && record.transient_failure
+                    && record.auto_resumes < MAX_AUTO_WAKE_RESUMES;
+                if resume_queued || resume_transient {
+                    if resume_transient {
+                        record.auto_resumes += 1;
+                    }
+                    record.status = "queued";
+                    record.phase = Phase::Queued.as_str();
+                    record.error = None;
+                    record.note = None;
+                    record.speed = 0;
+                    record.queue_place = None;
+                    record.progress_at = self.now();
+                    record.active_runner = true;
+                    active += 1;
+                    spawn.push(job.clone());
+                }
+            }
+            (spawn, active)
+        };
+        if !to_spawn.is_empty() {
+            let host = place_and_scan
+                .or_else(|| self.0.place_and_scan.lock().expect("soulseek host").clone());
+            self.save_jobs();
+            for job in to_spawn {
+                tokio::spawn(self.clone().run_download(None, job, host.clone()));
+            }
+            self.changed();
+        }
+        active_count
+    }
+
+    fn save_jobs(&self) {
+        if !self.0.durable {
+            return;
+        }
+        let now = self.now();
+        let snapshot: Vec<PersistedJob> = {
+            let state = self.state();
+            state
+                .jobs
+                .iter()
+                .filter_map(|job| {
+                    let record = job.record.lock().expect("soulseek job");
+                    if record.cancelled || record.status == "cancelled" {
+                        return None;
+                    }
+                    let items = job.items.lock().expect("soulseek items").clone();
+                    Some(PersistedJob {
+                        id: job.id.clone(),
+                        request: job.request.clone(),
+                        items,
+                        completed_files: record.completed_files.clone(),
+                        status: record.status.to_owned(),
+                        created: record.created,
+                        updated: now,
+                        bytes: record.bytes,
+                        total: record.total,
+                        file: record.file.clone(),
+                        file_index: record.file_index,
+                        error: record.error.clone(),
+                        note: record.note.clone(),
+                        transient_failure: record.transient_failure,
+                        auto_resumes: record.auto_resumes,
+                    })
+                })
+                .collect()
+        };
+        let path = Path::new(&self.0.storage).join(JOBS_FILENAME);
+        let payload = PersistedJobs {
+            version: 1,
+            jobs: snapshot,
+        };
+        if let Ok(bytes) = serde_json::to_vec(&payload) {
+            let _ = write_private_atomic(&path, &bytes);
         }
     }
 
@@ -1596,6 +2076,9 @@ impl Provider {
         if probe {
             self.probe();
             self.changed();
+        }
+        if self.0.durable {
+            self.wake_jobs(None);
         }
     }
 
@@ -1651,22 +2134,39 @@ impl Provider {
 
     /// Ends the provider: running mirrors are told to stop and the client signs out.
     pub fn stop(&self) {
-        let mut state = self.state();
-        state.closed = true;
-        for job in &state.jobs {
-            let mut record = job.record.lock().expect("soulseek job");
-            if matches!(record.status, "queued" | "transferring") {
-                record.cancelled = true;
+        {
+            let mut state = self.state();
+            state.closed = true;
+            for job in &state.jobs {
+                let mut record = job.record.lock().expect("soulseek job");
+                if self.0.durable {
+                    // Durable jobs pause on shutdown rather than cancelling so the next startup
+                    // resumes from the completed tracks and `.part` offset on disk.
+                    if matches!(record.status, "queued" | "transferring")
+                        || (record.status == "announcing" && record.phase == "waiting")
+                    {
+                        record.status = "queued";
+                        record.phase = Phase::Queued.as_str();
+                        record.speed = 0;
+                        record.queue_place = None;
+                    }
+                } else {
+                    if matches!(record.status, "queued" | "transferring") {
+                        record.cancelled = true;
+                    }
+                    // A mirror waiting for another import has placed nothing: closing ends it as a
+                    // cancel, not as a failure.
+                    if record.status == "announcing" && record.phase == "waiting" {
+                        record.cancelled = true;
+                        record.status = "cancelled";
+                    }
+                }
             }
-            // A mirror waiting for another import has placed nothing: closing ends it as a
-            // cancel, not as a failure.
-            if record.status == "announcing" && record.phase == "waiting" {
-                record.cancelled = true;
-                record.status = "cancelled";
-            }
+            state.browse_cache.clear();
+            Self::close_client(&mut state);
         }
-        state.browse_cache.clear();
-        Self::close_client(&mut state);
+        self.0.wake.notify_waiters();
+        self.save_jobs();
     }
 
     /// The plugin's `run`: a browse, a search or a mirror by what the payload holds, else a
@@ -1918,6 +2418,165 @@ fn make_private_dir(dir: &Path) -> std::io::Result<()> {
     builder.create(dir)
 }
 
+fn write_private_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let tmp = path.with_extension("json.tmp");
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    let mut file = opts.open(&tmp)?;
+    file.write_all(bytes)?;
+    file.sync_all()?;
+    drop(file);
+    std::fs::rename(&tmp, path)
+}
+
+fn part_len(dest: &Path) -> u64 {
+    let mut os = dest.as_os_str().to_os_string();
+    os.push(".part");
+    std::fs::metadata(PathBuf::from(os)).map_or(0, |meta| meta.len())
+}
+
+fn is_transient_error(error: &SoulseekError) -> bool {
+    if error.message == "Cancelled"
+        || error.reason == Some("unplaced")
+        || matches!(error.status, Some(400 | 422))
+        || error.message.contains("refused the file:")
+        || contains_ignore_case(&error.message, "upload denied")
+    {
+        return false;
+    }
+    true
+}
+
+fn load_persisted_jobs(storage: &str, now: u64) -> Vec<Arc<Job>> {
+    let path = Path::new(storage).join(JOBS_FILENAME);
+    let Ok(bytes) = std::fs::read(&path) else {
+        return Vec::new();
+    };
+    let Ok(persisted) = serde_json::from_slice::<PersistedJobs>(&bytes) else {
+        return Vec::new();
+    };
+    let mut jobs = Vec::new();
+    for entry in persisted.jobs {
+        if entry.items.is_empty() {
+            continue;
+        }
+        let work_dir = Path::new(storage).join(format!(".slsk-job-{}", entry.id));
+        let stale = now.saturating_sub(entry.updated.max(entry.created)) > STALE_JOB_TTL_MS;
+        if stale && matches!(entry.status.as_str(), "done" | "failed") {
+            let _ = std::fs::remove_dir_all(&work_dir);
+            continue;
+        }
+        let status: &'static str = match entry.status.as_str() {
+            "done" => "done",
+            "failed" => "failed",
+            "queued" | "transferring" | "announcing" => "queued",
+            _ => continue,
+        };
+        // Recompute on-disk progress (completed tracks + any `.part` bytes) so the UI reflects
+        // real bytes saved before the transfer reconnects.
+        let mut disk_bytes = 0u64;
+        if status != "done" && work_dir.is_dir() {
+            let mut seen_names: Vec<String> = Vec::new();
+            for (index, item) in entry.items.iter().enumerate() {
+                let taken = seen_names
+                    .iter()
+                    .any(|name| name.to_lowercase() == item.base.to_lowercase());
+                let dest_name = if taken {
+                    let (stem, ext) = split_ext(&item.base);
+                    format!("{:02} - {stem}{ext}", index + 1)
+                } else {
+                    item.base.clone()
+                };
+                seen_names.push(dest_name.clone());
+                let dest = work_dir.join(&dest_name);
+                if let Ok(meta) = std::fs::metadata(&dest)
+                    && meta.is_file()
+                {
+                    disk_bytes += meta.len();
+                } else {
+                    disk_bytes += part_len(&dest);
+                }
+            }
+        }
+        let bytes = if status == "done" {
+            entry.bytes
+        } else {
+            disk_bytes.max(entry.bytes)
+        };
+        let release = if is_id(&entry.request.caller_id) {
+            Some(entry.request.caller_id.clone())
+        } else {
+            entry.request.release.clone()
+        };
+        let title = if !entry.request.title.is_empty() {
+            entry.request.title.clone()
+        } else {
+            peer_folder_hint(&entry.items[0].filename)
+                .map(|hint| hint.album)
+                .filter(|album| !album.is_empty())
+                .unwrap_or_else(|| "Album download".to_owned())
+        };
+        let file = if !entry.file.is_empty() {
+            entry.file
+        } else {
+            basename(&entry.items[0].filename.replace('\\', "/")).to_owned()
+        };
+        let file_count = entry.items.len();
+        let file_index = entry.file_index.clamp(1, file_count);
+        let peer = entry.request.username.clone();
+        let total = entry.total.or_else(|| album_total(&entry.items));
+        let done = (status == "done").then(|| (bytes, Vec::new()));
+        jobs.push(Arc::new(Job {
+            id: entry.id,
+            request: entry.request,
+            items: Mutex::new(entry.items),
+            work_dir,
+            record: Mutex::new(JobRecord {
+                release,
+                title,
+                status,
+                created: entry.created,
+                peer,
+                file,
+                file_index,
+                file_count,
+                phase: if status == "failed" {
+                    Phase::Failed.as_str()
+                } else if status == "done" {
+                    Phase::Completed.as_str()
+                } else {
+                    Phase::Queued.as_str()
+                },
+                queue_place: None,
+                speed: 0,
+                listen_port: 0,
+                bytes,
+                total,
+                error: entry.error,
+                note: entry.note,
+                done,
+                cancelled: false,
+                progress_at: now,
+                completed_files: entry.completed_files,
+                active_runner: false,
+                transient_failure: entry.transient_failure,
+                auto_resumes: entry.auto_resumes,
+                durable: true,
+            }),
+        }));
+    }
+    jobs
+}
+
 /// The tags in the first megabyte of a file, when it has any.
 fn read_head_tags(path: &Path) -> Option<Tags> {
     use std::io::Read;
@@ -2047,7 +2706,7 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn mirror_retries_transient_server_session_disconnect() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = tempfile::tempdir().expect("temp dir");
         let attempts = Arc::new(AtomicU32::new(0));
         let mut opts = Options::new(
             dir.path().to_string_lossy(),
@@ -2076,5 +2735,255 @@ mod tests {
         assert_eq!(res["files"], 2);
         assert_eq!(res["bytes"], 18);
         assert_eq!(attempts.load(Ordering::SeqCst), 3);
+    }
+
+    struct ScriptedDurableClient {
+        calls: Arc<Mutex<Vec<String>>>,
+        script: Arc<Mutex<HashMap<String, Vec<Result<Vec<u8>, String>>>>>,
+    }
+
+    impl Client for ScriptedDurableClient {
+        fn state(&self) -> ClientState {
+            ClientState {
+                connected: true,
+                logged_in: true,
+                listen_port: 0,
+            }
+        }
+
+        fn login<'a>(
+            &'a self,
+            _host: &'a str,
+            _port: u16,
+            _user: &'a str,
+            _pass: &'a str,
+        ) -> ClientFuture<'a, bool> {
+            Box::pin(async { Ok(true) })
+        }
+
+        fn search<'a>(&'a self, _query: &'a str, _wait_ms: u64) -> ClientFuture<'a, Vec<PeerFile>> {
+            Box::pin(async { Ok(Vec::new()) })
+        }
+
+        fn browse<'a>(
+            &'a self,
+            _user: &'a str,
+            _timeout_ms: u64,
+        ) -> ClientFuture<'a, Vec<PeerFile>> {
+            Box::pin(async { Ok(Vec::new()) })
+        }
+
+        fn download<'a>(
+            &'a self,
+            _user: &'a str,
+            filename: &'a str,
+            dest: &'a Path,
+            _cancel: Arc<AtomicBool>,
+            _progress: ProgressFn,
+        ) -> ClientFuture<'a, u64> {
+            let filename = filename.to_owned();
+            let dest = dest.to_path_buf();
+            self.calls.lock().expect("calls").push(filename.clone());
+            let next = self
+                .script
+                .lock()
+                .expect("script")
+                .get_mut(&filename)
+                .and_then(|queue| (!queue.is_empty()).then(|| queue.remove(0)));
+            Box::pin(async move {
+                match next {
+                    Some(Ok(bytes)) => {
+                        std::fs::write(&dest, &bytes).map_err(|e| e.to_string())?;
+                        Ok(bytes.len() as u64)
+                    }
+                    Some(Err(err)) => Err(err),
+                    None => Err("unexpected download call".to_owned()),
+                }
+            })
+        }
+
+        fn close(&self) {}
+    }
+
+    struct ScriptedDurableBackend {
+        calls: Arc<Mutex<Vec<String>>>,
+        script: Arc<Mutex<HashMap<String, Vec<Result<Vec<u8>, String>>>>>,
+    }
+
+    impl Backend for ScriptedDurableBackend {
+        fn client(&self, _setup: ClientSetup) -> Arc<dyn Client> {
+            Arc::new(ScriptedDurableClient {
+                calls: self.calls.clone(),
+                script: self.script.clone(),
+            })
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn durable_job_keeps_progress_on_failure_and_resumes_across_restart_and_retry() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let mut plan = HashMap::new();
+        plan.insert(
+            "Music\\Album\\01 - First.flac".to_owned(),
+            vec![Ok(b"track-one-bytes".to_vec())],
+        );
+        plan.insert(
+            "Music\\Album\\02 - Second.flac".to_owned(),
+            vec![
+                Err("upload denied by peer: temporarily unavailable".to_owned()),
+                Ok(b"track-two-bytes!".to_vec()),
+            ],
+        );
+        let script = Arc::new(Mutex::new(plan));
+
+        let make_provider =
+            |calls: Arc<Mutex<Vec<String>>>,
+             script: Arc<Mutex<HashMap<String, Vec<Result<Vec<u8>, String>>>>>| {
+                let mut opts = Options::new(
+                    dir.path().to_string_lossy(),
+                    Some(Arc::new(ScriptedDurableBackend { calls, script })),
+                    Arc::new(OsRandom),
+                    Arc::new(|| 1_700_000_000_000),
+                );
+                opts.user = "tester".into();
+                opts.pass = "secret".into();
+                opts.durable = true;
+                Provider::new(opts)
+            };
+
+        let first = make_provider(calls.clone(), script.clone());
+        let err = first
+            .mirror(
+                &json!({
+                    "username": "peer1",
+                    "title": "Test Artist - Test Album (2024)",
+                    "files": [
+                        { "filename": "Music\\Album\\01 - First.flac", "size": 15 },
+                        { "filename": "Music\\Album\\02 - Second.flac", "size": 16 }
+                    ],
+                    "wait": true
+                }),
+                None,
+            )
+            .await
+            .expect_err("hard denial on track 2 should fail without wiping track 1");
+        assert!(err.message.contains("refused the file"));
+
+        let jobs = first.list_jobs();
+        assert_eq!(jobs.len(), 1);
+        let job_id = jobs[0]["jobId"].as_str().expect("jobId").to_owned();
+        assert_eq!(jobs[0]["status"], "failed");
+        assert_eq!(jobs[0]["retryable"], true);
+        assert!(dir.path().join(format!(".slsk-job-{job_id}")).exists());
+        assert!(dir.path().join(JOBS_FILENAME).exists());
+        first.stop();
+
+        // Simulate full app restart on the same storage directory.
+        let second = make_provider(calls.clone(), script.clone());
+        let restored = second.list_jobs();
+        assert_eq!(restored.len(), 1);
+        assert_eq!(restored[0]["jobId"], job_id);
+        assert_eq!(restored[0]["status"], "failed");
+        assert_eq!(restored[0]["bytes"], 15);
+
+        let retried = second
+            .retry_job(&job_id, None)
+            .expect("retry_job should restart failed durable job");
+        assert_eq!(retried["status"], "queued");
+
+        for _ in 0..20 {
+            tokio::task::yield_now().await;
+            if second
+                .get_job(&job_id)
+                .is_some_and(|j| j["status"] == "done")
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        let finished = second.get_job(&job_id).expect("finished job");
+        assert_eq!(finished["status"], "done");
+        assert_eq!(finished["bytes"], 31);
+        assert!(!dir.path().join(format!(".slsk-job-{job_id}")).exists());
+
+        // Track 1 must NOT have been re-downloaded on retry!
+        let recorded_calls = calls.lock().expect("calls").clone();
+        assert_eq!(
+            recorded_calls,
+            vec![
+                "Music\\Album\\01 - First.flac",
+                "Music\\Album\\02 - Second.flac",
+                "Music\\Album\\02 - Second.flac",
+            ]
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn durable_job_retries_transient_error_and_wakes_immediately() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let mut plan = HashMap::new();
+        plan.insert(
+            "Music\\Single\\01 - Wake.flac".to_owned(),
+            vec![
+                Err("peer stopped sending: stalled".to_owned()),
+                Ok(b"resumed-audio".to_vec()),
+            ],
+        );
+        let script = Arc::new(Mutex::new(plan));
+        let mut opts = Options::new(
+            dir.path().to_string_lossy(),
+            Some(Arc::new(ScriptedDurableBackend {
+                calls: calls.clone(),
+                script,
+            })),
+            Arc::new(OsRandom),
+            Arc::new(|| 1_700_000_000_000),
+        );
+        opts.user = "tester".into();
+        opts.pass = "secret".into();
+        opts.durable = true;
+        let provider = Provider::new(opts);
+
+        let queued = provider
+            .mirror(
+                &json!({
+                    "username": "peer2",
+                    "title": "Wake Artist - Wake Album (2024)",
+                    "files": [{ "filename": "Music\\Single\\01 - Wake.flac", "size": 13 }]
+                }),
+                None,
+            )
+            .await
+            .expect("queued");
+        let job_id = queued["job"]["jobId"].as_str().expect("jobId").to_owned();
+
+        for _ in 0..20 {
+            tokio::task::yield_now().await;
+            if provider
+                .get_job(&job_id)
+                .is_some_and(|j| j["phase"] == "retrying")
+            {
+                break;
+            }
+        }
+        assert_eq!(provider.get_job(&job_id).expect("job")["phase"], "retrying");
+
+        // Wake immediately without waiting for the 5-second backoff timer.
+        let active = provider.wake_jobs(None);
+        assert_eq!(active, 1);
+        for _ in 0..20 {
+            tokio::task::yield_now().await;
+            if provider
+                .get_job(&job_id)
+                .is_some_and(|j| j["status"] == "done")
+            {
+                break;
+            }
+        }
+        let finished = provider.get_job(&job_id).expect("done");
+        assert_eq!(finished["status"], "done");
+        assert_eq!(calls.lock().expect("calls").len(), 2);
     }
 }

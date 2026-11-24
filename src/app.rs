@@ -489,6 +489,9 @@ where
         {
             self.fatal(error);
         }
+        if let Some(api) = self.api() {
+            api.resume();
+        }
         self.move_lan().await;
     }
 
