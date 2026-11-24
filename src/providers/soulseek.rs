@@ -1315,10 +1315,68 @@ impl Provider {
         })
     }
 
-    /// One file through the client, failed by a watchdog when the peer never answers or never
-    /// connects back (the client itself waits for as long as it takes), and when the job is
-    /// cancelled. A peer that reported a queue place is waited on.
+    /// One file through the client, retrying transient `"server session disconnected"` drops while
+    /// preserving `.part` resume and respecting cancellation and the peer watchdog.
     async fn download_one(
+        &self,
+        client: &Arc<dyn Client>,
+        job: &Arc<Job>,
+        username: &str,
+        filename: &str,
+        dest: &Path,
+        report: Arc<dyn Fn(Progress) + Send + Sync>,
+    ) -> Result<u64, SoulseekError> {
+        const MAX_SESSION_RETRIES: u32 = 3;
+        let mut active_client = client.clone();
+        for attempt in 0..=MAX_SESSION_RETRIES {
+            let outcome = self
+                .download_attempt(
+                    &active_client,
+                    job,
+                    username,
+                    filename,
+                    dest,
+                    report.clone(),
+                )
+                .await;
+            let Err(err) = outcome else {
+                return outcome;
+            };
+            if attempt == MAX_SESSION_RETRIES
+                || self.stopped(job)
+                || !contains_ignore_case(&err.message, "server session disconnected")
+            {
+                return Err(err);
+            }
+            {
+                let mut record = job.record.lock().expect("soulseek job");
+                record.status = "queued";
+                record.phase = Phase::Queued.as_str();
+                record.speed = 0;
+                record.progress_at = self.now();
+            }
+            self.changed();
+            let wait_ms = 2_000u64 * u64::from(attempt + 1);
+            let mut waited = 0u64;
+            while waited < wait_ms {
+                if self.stopped(job) {
+                    return Err(SoulseekError::plain("Cancelled"));
+                }
+                let step = (wait_ms - waited).min(200);
+                tokio::time::sleep(Duration::from_millis(step)).await;
+                waited += step;
+            }
+            if self.stopped(job) {
+                return Err(SoulseekError::plain("Cancelled"));
+            }
+            if let Ok(reconnected) = self.logged_in().await {
+                active_client = reconnected;
+            }
+        }
+        unreachable!()
+    }
+
+    async fn download_attempt(
         &self,
         client: &Arc<dyn Client>,
         job: &Arc<Job>,
@@ -1909,4 +1967,114 @@ fn natural_order(a: &str, b: &str) -> std::cmp::Ordering {
         }
     }
     a.len().cmp(&b.len())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::AtomicU32;
+
+    use super::*;
+    use crate::acquire::OsRandom;
+    use crate::providers::soulseek::client::{ClientFuture, ClientSetup, ClientState};
+    use crate::providers::soulseek::rank::PeerFile;
+
+    struct FlakySessionClient {
+        attempts: Arc<AtomicU32>,
+    }
+
+    impl Client for FlakySessionClient {
+        fn state(&self) -> ClientState {
+            ClientState {
+                connected: true,
+                logged_in: true,
+                listen_port: 55_000,
+            }
+        }
+
+        fn login<'a>(
+            &'a self,
+            _host: &'a str,
+            _port: u16,
+            _user: &'a str,
+            _pass: &'a str,
+        ) -> ClientFuture<'a, bool> {
+            Box::pin(async { Ok(true) })
+        }
+
+        fn search<'a>(&'a self, _query: &'a str, _wait_ms: u64) -> ClientFuture<'a, Vec<PeerFile>> {
+            Box::pin(async { Ok(Vec::new()) })
+        }
+
+        fn browse<'a>(
+            &'a self,
+            _user: &'a str,
+            _timeout_ms: u64,
+        ) -> ClientFuture<'a, Vec<PeerFile>> {
+            Box::pin(async { Ok(Vec::new()) })
+        }
+
+        fn download<'a>(
+            &'a self,
+            _user: &'a str,
+            _filename: &'a str,
+            dest: &'a Path,
+            _cancel: Arc<AtomicBool>,
+            _progress: ProgressFn,
+        ) -> ClientFuture<'a, u64> {
+            let attempt = self.attempts.fetch_add(1, Ordering::SeqCst);
+            let dest = dest.to_path_buf();
+            Box::pin(async move {
+                if attempt == 0 {
+                    return Err("disconnected: server session disconnected".to_owned());
+                }
+                std::fs::write(&dest, b"flac-data").map_err(|e| e.to_string())?;
+                Ok(9)
+            })
+        }
+
+        fn close(&self) {}
+    }
+
+    struct FlakyBackend(Arc<AtomicU32>);
+
+    impl Backend for FlakyBackend {
+        fn client(&self, _setup: ClientSetup) -> Arc<dyn Client> {
+            Arc::new(FlakySessionClient {
+                attempts: self.0.clone(),
+            })
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn mirror_retries_transient_server_session_disconnect() {
+        let dir = tempfile::tempdir().unwrap();
+        let attempts = Arc::new(AtomicU32::new(0));
+        let mut opts = Options::new(
+            dir.path().to_string_lossy(),
+            Some(Arc::new(FlakyBackend(attempts.clone()))),
+            Arc::new(OsRandom),
+            Arc::new(|| 1_700_000_000_000),
+        );
+        opts.user = "tester".into();
+        opts.pass = "secret".into();
+        let provider = Provider::new(opts);
+        let res = provider
+            .mirror(
+                &json!({
+                    "username": "cameras",
+                    "title": "Hypnotize (2005)",
+                    "files": [
+                        { "filename": "Music\\Hypnotize\\01 - Attack.flac", "size": 9 },
+                        { "filename": "Music\\Hypnotize\\02 - Dreaming.flac", "size": 9 }
+                    ],
+                    "wait": true
+                }),
+                None,
+            )
+            .await
+            .expect("transient server session disconnect should retry and succeed");
+        assert_eq!(res["files"], 2);
+        assert_eq!(res["bytes"], 18);
+        assert_eq!(attempts.load(Ordering::SeqCst), 3);
+    }
 }
