@@ -24,7 +24,7 @@ pub fn service_type() -> String {
 /// What `advertise` publishes.
 #[derive(Debug, Clone)]
 pub struct AdvertiseInfo {
-    /// Instance name, `<name> (<deviceId[0..6]>)` as the app builds it.
+    /// Instance name, `<name, cut> (<deviceId[0..6]>-<nonce>)` as the app builds it.
     pub name: String,
     pub host: IpAddr,
     pub port: u16,
@@ -84,10 +84,30 @@ pub fn advertisement_txt(
     ]
 }
 
-/// The instance name the app registers.
-pub fn instance_name(name: &str, device_id: &str) -> String {
+/// A DNS label holds at most 63 bytes; a packet with a longer one cannot be decoded.
+const MAX_LABEL_BYTES: usize = 63;
+/// The app keeps `identity.name.slice(0, 16)`: 16 UTF-16 units, which are 48 bytes at most.
+const NAME_UTF16_UNITS: usize = 16;
+
+/// The instance name of one advertisement, as the app builds it: the start of the display name,
+/// then ` (<deviceId[0..6]>-<nonce>)`. The nonce (`lan::ad_nonce`) gives every advertisement a
+/// name that none had before, so a receiver that restarts is not taken for its old record. The
+/// name part is cut at a character boundary to 16 UTF-16 units and to the bytes that the label
+/// has left. Senders show the full name from the TXT record.
+pub fn instance_name(name: &str, device_id: &str, nonce: &str) -> String {
     let short: String = device_id.chars().take(6).collect();
-    format!("{name} ({short})")
+    let suffix = format!(" ({short}-{nonce})");
+    let max_bytes = MAX_LABEL_BYTES.saturating_sub(suffix.len());
+    let mut prefix = String::new();
+    let mut units = 0;
+    for character in name.chars() {
+        units += character.len_utf16();
+        if units > NAME_UTF16_UNITS || prefix.len() + character.len_utf8() > max_bytes {
+            break;
+        }
+        prefix.push(character);
+    }
+    format!("{prefix}{suffix}")
 }
 
 /// `refreshMdns`: publish the receiver, replacing any previous advertisement.
@@ -124,7 +144,7 @@ pub fn advertise(info: AdvertiseInfo) -> Result<AdvertiseHandle, String> {
 /// One resolved service, as the browse sink sees it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BrowsedService {
-    /// Instance name as advertised (`<name> (<deviceId[0..6]>)`).
+    /// Instance name as advertised (`<name, cut> (<deviceId[0..6]>-<nonce>)`).
     pub name: String,
     /// Full mDNS name, the only key `ServiceRemoved` carries.
     pub fullname: String,
@@ -397,5 +417,30 @@ mod tests {
             vec!["10.0.0.4".parse().unwrap()],
         );
         assert_eq!(s.to_discovered().unwrap().name, "TV (dev123)");
+    }
+
+    #[test]
+    fn the_label_keeps_sixteen_utf16_units_of_whole_characters() {
+        let id = "0123456789abcdef";
+        let nonce = "k3x";
+        assert_eq!(
+            instance_name("Kitchen TV", id, nonce),
+            "Kitchen TV (012345-k3x)"
+        );
+        assert_eq!(
+            instance_name("The Very Long Living Room Television", id, nonce),
+            "The Very Long Li (012345-k3x)"
+        );
+        assert_eq!(
+            instance_name(&"📺".repeat(16), id, nonce),
+            format!("{} (012345-k3x)", "📺".repeat(8))
+        );
+        assert_eq!(
+            instance_name("ABCDEFGHIJKLMNO😀", id, nonce),
+            "ABCDEFGHIJKLMNO (012345-k3x)"
+        );
+        let han = instance_name(&"漢".repeat(20), id, nonce);
+        assert_eq!(han, format!("{} (012345-k3x)", "漢".repeat(16)));
+        assert_eq!(han.len(), 61);
     }
 }
