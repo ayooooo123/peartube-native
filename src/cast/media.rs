@@ -55,8 +55,11 @@ struct DownloadWindow {
     /// polled, so holding it keeps the range open.
     #[allow(dead_code)]
     range: Pin<Box<dyn Future<Output = ()> + Send>>,
-    #[allow(dead_code)]
+    /// The window's share of the memory budget; `steer_window` counts it as free when it re-plans.
     permit: Option<tokio::sync::OwnedSemaphorePermit>,
+    /// The budget, not the plan, set this window's size: a newer stream that is short makes the
+    /// older windows let go (see [`steer_newest_first`]).
+    short: bool,
 }
 
 /// One load's media, as `activeMedia` / `streams` hold it.
@@ -292,14 +295,18 @@ impl Media {
             self.clear_window();
             return false;
         };
-        if blob.block_length == 0 {
+        // A playhead at the end has no unread block left, so the window lets go of its range and
+        // permits; the next title gets the whole budget. Clamping it back onto the last block kept
+        // one block of permits for a title that had nothing more to read.
+        if blob.block_length == 0 || playhead_byte >= blob.byte_length {
             self.clear_window();
             return false;
         }
-        // `bs = Math.ceil(blob.byteLength / blob.blockLength)`: the blob's mean block size.
+        // `bs = Math.ceil(blob.byteLength / blob.blockLength)`: the blob's mean block size, so
+        // `bs * blockLength >= byteLength` and `first` is always a block of the blob.
         let bs = blob.byte_length.div_ceil(blob.block_length).max(1);
         let last = blob.block_offset + blob.block_length;
-        let first = (blob.block_offset + playhead_byte / bs).min(last - 1);
+        let first = blob.block_offset + playhead_byte / bs;
         let ahead_blocks = ((rate * READ_AHEAD_SECONDS as f64) / bs as f64).ceil() as u64;
         let full_end = (first + ahead_blocks).min(last);
         let cached_ahead = core.count_local(first, full_end) * bs;
@@ -310,24 +317,62 @@ impl Media {
             .as_ref()
             .and_then(|peer| peer.memory_cache_bytes())
             .map_or(u64::MAX, |limit| limit * 3 / 4);
-        let (bytes, permit) = reserve_window(
-            self.peer
-                .as_ref()
-                .and_then(|peer| peer.memory_window_budget()),
-            wanted.min(cache_cap),
-        );
-        let end = (first + bytes.div_ceil(bs).max(1)).min(last);
+        let budget = self
+            .peer
+            .as_ref()
+            .and_then(|peer| peer.memory_window_budget());
+        // Never plan past the blob's end: a stream near it would hold permits for blocks it has no
+        // range for, and the next stream would get none.
+        let target = wanted.min(cache_cap).min((last - first).saturating_mul(bs));
+        // The window's own permits are free for its next plan: it hands them back when it moves.
+        // Counting them as taken made a window that held the whole pool see it empty on the next
+        // tick, shrink to one block, then grow back on the tick after. When the budget is what
+        // limits the plan, the plan is whole blocks (a window with no permits at all still gets
+        // its one block); when the plan fits, it is the plan's own bytes, so a short clip still
+        // covers its last block.
+        let (planned, short) = match &budget {
+            Some(budget) => {
+                let held = self
+                    .window
+                    .lock()
+                    .expect("cast window")
+                    .as_ref()
+                    .and_then(|window| window.permit.as_ref())
+                    .map_or(0, |permit| permit.num_permits() as u64);
+                let funds = budget.available_permits() as u64 + held;
+                if funds < target {
+                    (funds / bs * bs, true)
+                } else {
+                    (target, false)
+                }
+            }
+            None => (target, false),
+        };
+        let end = (first + planned.div_ceil(bs).max(1)).min(last);
         let step = ((end - first) / 8).max(4);
         {
-            let window = self.window.lock().expect("cast window");
-            if let Some(window) = window.as_ref()
+            // The range stays, and so do all its permits: it still asks for every block from its
+            // start, the ones the playhead has passed too, and a reader may seek back to them.
+            let mut window = self.window.lock().expect("cast window");
+            if let Some(window) = window.as_mut()
                 && first.abs_diff(window.start) < step
                 && end.abs_diff(window.end) < step
             {
+                window.short = short;
                 return false;
             }
         }
-        // Register the new range before the old one is dropped, so no block request falls between.
+        // Moving: give the old window's permits back, then take the new ones. Its range stays
+        // registered until the new one is, so no block request falls between.
+        let old_permit = self
+            .window
+            .lock()
+            .expect("cast window")
+            .as_mut()
+            .and_then(|window| window.permit.take());
+        drop(old_permit);
+        let (bytes, permit) = reserve_window(budget, planned);
+        let end = (first + bytes.div_ceil(bs).max(1)).min(last);
         let registered = core.download(first, Some(end), true);
         let range: Pin<Box<dyn Future<Output = ()> + Send>> = Box::pin(async move {
             let _ = registered.await;
@@ -337,6 +382,7 @@ impl Media {
             end,
             range,
             permit,
+            short,
         });
         true
     }
@@ -353,6 +399,53 @@ impl Media {
     /// `media.window = null`: nothing on this stream is playing, so the range is cancelled.
     pub fn clear_window(&self) {
         let _ = self.window.lock().expect("cast window").take();
+    }
+
+    /// Whether the budget, not the plan, set this stream's window on its last steer.
+    pub fn window_short(&self) -> bool {
+        self.window
+            .lock()
+            .expect("cast window")
+            .as_ref()
+            .is_some_and(|window| window.short)
+    }
+
+    /// The permits this stream's window holds from the memory budget.
+    fn window_permits(&self) -> usize {
+        self.window
+            .lock()
+            .expect("cast window")
+            .as_ref()
+            .and_then(|window| window.permit.as_ref())
+            .map_or(0, |permit| permit.num_permits())
+    }
+}
+
+/// The receiver's steering pass, newest stream first. The newest has first claim on the shared
+/// budget: once a newer stream's window is short of what it planned, every older window that holds
+/// more permits than that newer one lets go of its range and permits and is not steered this pass,
+/// so the newer one takes them on the next. Without this an old title's reader kept the whole pool
+/// and a new title got one block. An older window that holds less keeps its blocks, so an old
+/// title near its end keeps its last few while the new title takes the rest. `live` runs for every
+/// stream, in order; a stream that is not live loses its window.
+pub async fn steer_newest_first<L, S, F>(streams: &[Arc<Media>], mut live: L, mut steer: S)
+where
+    L: FnMut(&Arc<Media>) -> bool,
+    S: FnMut(Arc<Media>) -> F,
+    F: Future<Output = ()>,
+{
+    // The fewest permits any newer short window holds.
+    let mut short_held: Option<usize> = None;
+    for media in streams {
+        if !live(media) || short_held.is_some_and(|held| media.window_permits() > held) {
+            media.clear_window();
+            continue;
+        }
+        steer(media.clone()).await;
+        if media.window_short() {
+            let held = media.window_permits();
+            short_held = Some(short_held.map_or(held, |least| least.min(held)));
+        }
     }
 }
 
@@ -881,6 +974,324 @@ mod tests {
         // Nothing is playing on the stream: the range is cancelled.
         media.clear_window();
         assert_eq!(media.window_range(), None);
+    }
+
+    /// A peer whose only behaviour is the TV build's memory budget, as `NodePeer` passes it on.
+    struct BudgetPeer {
+        cache_bytes: u64,
+        budget: Arc<tokio::sync::Semaphore>,
+    }
+
+    impl CastPeer for BudgetPeer {
+        fn memory_cache_bytes(&self) -> Option<u64> {
+            Some(self.cache_bytes)
+        }
+        fn memory_window_budget(&self) -> Option<Arc<tokio::sync::Semaphore>> {
+            Some(self.budget.clone())
+        }
+        fn peer_key(&self) -> String {
+            String::new()
+        }
+        fn private_routing(&self) -> bool {
+            false
+        }
+        fn has_lan(&self) -> bool {
+            false
+        }
+        fn lan_endpoint(&self) -> Option<super::super::traits::LanEndpoint> {
+            None
+        }
+        fn status(&self) -> super::super::traits::PeerStatus {
+            unimplemented!("not used by the window")
+        }
+        fn join_lan_topic(&self, _id: &str, _topic: [u8; 32]) {}
+        fn peer_connections(&self) -> Vec<super::super::traits::PeerConn> {
+            Vec::new()
+        }
+        fn on_connection(
+            &self,
+            _callback: Arc<dyn Fn(super::super::traits::PeerConn) + Send + Sync>,
+        ) -> Box<dyn Fn() + Send + Sync> {
+            Box::new(|| {})
+        }
+        fn connect_peer(
+            &self,
+            _key: &str,
+            _lan: Option<super::super::traits::LanAddress>,
+            _timeout: Duration,
+        ) -> futures_util::future::BoxFuture<'_, Result<super::super::traits::PeerConn, CastError>>
+        {
+            unimplemented!("not used by the window")
+        }
+        fn open_uri(
+            &self,
+            _uri: &str,
+            _join_source: bool,
+        ) -> futures_util::future::BoxFuture<
+            '_,
+            Result<Option<super::super::traits::OpenedMedia>, CastError>,
+        > {
+            unimplemented!("not used by the window")
+        }
+        fn blob_core(
+            &self,
+            _blobs_hex: &str,
+        ) -> futures_util::future::BoxFuture<'_, Result<Option<Core>, CastError>> {
+            unimplemented!("not used by the window")
+        }
+        fn clear_cache(
+            &self,
+            _opts: super::super::traits::ClearCacheOptions,
+        ) -> futures_util::future::BoxFuture<'_, ()> {
+            Box::pin(async {})
+        }
+        fn evict_behind(
+            &self,
+            _core_key_hex: &str,
+            _blob: BlobId,
+            _opts: EvictOptions,
+        ) -> futures_util::future::BoxFuture<'_, ()> {
+            Box::pin(async {})
+        }
+        fn find_entry(&self, _key: &str) -> futures_util::future::BoxFuture<'_, Option<Value>> {
+            Box::pin(async { None })
+        }
+        fn search(&self, _id: &str) -> futures_util::future::BoxFuture<'_, Vec<Value>> {
+            Box::pin(async { Vec::new() })
+        }
+        fn warm(&self, _raw: &Value) -> futures_util::future::BoxFuture<'_, ()> {
+            Box::pin(async {})
+        }
+        fn close(&self) -> futures_util::future::BoxFuture<'_, ()> {
+            Box::pin(async {})
+        }
+    }
+
+    /// 100 blocks of memory cache: windows may take 3/4 of it, so the shared pool is 75 blocks.
+    fn budget_peer() -> Arc<BudgetPeer> {
+        let cache_bytes = 100 * BS as u64;
+        Arc::new(BudgetPeer {
+            cache_bytes,
+            budget: Arc::new(tokio::sync::Semaphore::new((cache_bytes * 3 / 4) as usize)),
+        })
+    }
+
+    /// A 400-block film read from `reader`, its window capped by `peer`'s budget.
+    fn budget_media(reader: Core, peer: Arc<BudgetPeer>) -> Media {
+        Media::new(
+            "stream".into(),
+            json!({ "size": 400 * BS as u64 }),
+            "video/mp4".into(),
+            Some(reader),
+            String::new(),
+            Some(BlobId {
+                block_offset: 0,
+                block_length: 400,
+                byte_offset: 0,
+                byte_length: 400 * BS as u64,
+            }),
+            Some(peer),
+        )
+    }
+
+    /// The budget the stream's window holds, in blocks.
+    fn held_blocks(media: &Media) -> usize {
+        media
+            .window
+            .lock()
+            .expect("cast window")
+            .as_ref()
+            .and_then(|window| window.permit.as_ref())
+            .map_or(0, |permit| permit.num_permits())
+            / BS
+    }
+
+    /// The receiver steers every second. With the memory budget on (the TV build), a window that
+    /// holds every permit must not see the pool as empty on the next tick and collapse to one
+    /// block, then grow back on the one after: each swap re-registers the download range.
+    #[tokio::test]
+    async fn a_capped_window_holds_while_the_playhead_holds() {
+        let stream = peers(0).await;
+        let peer = budget_peer();
+        let media = budget_media(stream.reader.clone(), peer.clone());
+        // 120 s at 8 MB/s is far past the cap: the window is the whole permit pool, 75 blocks.
+        assert!(media.steer_window(64 << 30, 8.0e6, 0));
+        assert_eq!(media.window_range(), Some((0, 75)));
+        for tick in 1..=4 {
+            assert!(
+                !media.steer_window(64 << 30, 8.0e6, 0),
+                "tick {tick} registered the range again"
+            );
+            assert_eq!(media.window_range(), Some((0, 75)), "tick {tick}");
+            assert_eq!(held_blocks(&media), 75, "tick {tick}");
+        }
+        // Within the step the range stays, and it keeps paying for every block it still asks for.
+        assert!(!media.steer_window(64 << 30, 8.0e6, 4 * BS as u64));
+        assert_eq!(media.window_range(), Some((0, 75)));
+        assert_eq!(held_blocks(&media), 75);
+        assert_eq!(peer.budget.available_permits(), 0);
+        // Moving on still slides the whole window, and no permits leak across the swaps.
+        assert!(media.steer_window(64 << 30, 8.0e6, 50 * BS as u64));
+        assert_eq!(media.window_range(), Some((50, 125)));
+        assert_eq!(held_blocks(&media), 75);
+        assert_eq!(peer.budget.available_permits(), 0);
+        media.clear_window();
+        assert_eq!(peer.budget.available_permits(), 75 * BS);
+    }
+
+    /// An old title's reader near its end and a new title share the budget, newest steered first
+    /// as the receiver does. The old window holds only the blocks it has left; the rest is the new
+    /// one's, on every tick.
+    #[tokio::test]
+    async fn a_window_near_the_end_leaves_the_rest_of_the_budget() {
+        let old_film = peers(0).await;
+        let new_film = peers(0).await;
+        let peer = budget_peer();
+        let old = Arc::new(budget_media(old_film.reader.clone(), peer.clone()));
+        let new = Arc::new(budget_media(new_film.reader.clone(), peer.clone()));
+        old.steer_window(64 << 30, 8.0e6, 390 * BS as u64);
+        assert_eq!(old.window_range(), Some((390, 400)));
+        assert_eq!(held_blocks(&old), 10);
+        let streams = [new.clone(), old.clone()];
+        for tick in 0..5u64 {
+            steer_newest_first(
+                &streams,
+                |_| true,
+                |media| {
+                    let at = if Arc::ptr_eq(&media, &new) { tick } else { 390 } * BS as u64;
+                    async move {
+                        media.steer_window(64 << 30, 8.0e6, at);
+                    }
+                },
+            )
+            .await;
+            assert_eq!(held_blocks(&old), 10, "tick {tick}");
+            assert_eq!(new.window_range(), Some((0, 65)), "tick {tick}");
+        }
+    }
+
+    /// Each window's permits pay for its whole registered range (or it is the one-block range a
+    /// window gets with no permits), and the ranges together ask for no more than the budget.
+    fn assert_funded(windows: &[&Media], budget_blocks: u64, tick: u64) {
+        let mut funded = 0;
+        for (index, media) in windows.iter().enumerate() {
+            let Some((start, end)) = media.window_range() else {
+                continue;
+            };
+            let held = held_blocks(media) as u64;
+            assert!(
+                end - start <= held || (held == 0 && end - start == 1),
+                "tick {tick}: window {index} asks for {start}..{end} with {held} blocks of permits"
+            );
+            funded += held;
+        }
+        assert!(funded <= budget_blocks, "tick {tick}: {funded} blocks");
+    }
+
+    /// A reader moves forward within its window while a new title starts, then seeks back. The
+    /// old window still asks for every block from its start, so it must still hold permits for
+    /// all of them: the two titles together never ask for more than the 75-block budget.
+    #[tokio::test]
+    async fn a_reader_seeking_back_never_asks_past_the_budget() {
+        let old_film = peers(0).await;
+        let new_film = peers(0).await;
+        let peer = budget_peer();
+        let old = budget_media(old_film.reader.clone(), peer.clone());
+        let new = budget_media(new_film.reader.clone(), peer.clone());
+        assert!(old.steer_window(64 << 30, 8.0e6, 0));
+        assert_eq!(old.window_range(), Some((0, 75)));
+        old.steer_window(64 << 30, 8.0e6, 4 * BS as u64);
+        new.steer_window(64 << 30, 8.0e6, 0);
+        assert_funded(&[&new, &old], 75, 0);
+        for tick in 1..=5u64 {
+            new.steer_window(64 << 30, 8.0e6, 0);
+            old.steer_window(64 << 30, 8.0e6, 0);
+            assert_eq!(old.window_range(), Some((0, 75)), "tick {tick}");
+            assert_funded(&[&new, &old], 75, tick);
+        }
+    }
+
+    /// A title played to its end (`positionMs == durationMs` puts the playhead at the file size)
+    /// has no unread block: its window lets go, a fresh steer there reserves nothing, and the
+    /// next title gets the whole budget.
+    #[tokio::test]
+    async fn a_title_at_its_end_holds_no_permits() {
+        let old_film = peers(0).await;
+        let new_film = peers(0).await;
+        let peer = budget_peer();
+        let old = budget_media(old_film.reader.clone(), peer.clone());
+        let new = budget_media(new_film.reader.clone(), peer.clone());
+        let eof = 400 * BS as u64;
+        assert!(old.steer_window(64 << 30, 8.0e6, eof - BS as u64));
+        assert_eq!(old.window_range(), Some((399, 400)));
+        assert!(!old.steer_window(64 << 30, 8.0e6, eof));
+        assert_eq!((old.window_range(), held_blocks(&old)), (None, 0));
+        assert!(!old.steer_window(64 << 30, 8.0e6, eof));
+        assert_eq!((old.window_range(), held_blocks(&old)), (None, 0));
+        new.steer_window(64 << 30, 8.0e6, 0);
+        assert_eq!((new.window_range(), held_blocks(&new)), (Some((0, 75)), 75));
+    }
+
+    /// An old title's reader is still open when a new title starts, and its window holds more of
+    /// the pool than the new title can get: near its start (0..75), at the last 75 blocks
+    /// (325..400, all of it to the end), and at 360..400 (40 blocks, against 35 left for the new
+    /// title). In the receiver's newest-first pass the old window lets go once the new one is
+    /// short, and the new title then holds the whole pool on every later tick.
+    #[tokio::test]
+    async fn an_old_reader_holding_more_yields_to_a_new_title() {
+        for old_at in [0u64, 325, 360] {
+            let old_film = peers(0).await;
+            let new_film = peers(0).await;
+            let peer = budget_peer();
+            let old = Arc::new(budget_media(old_film.reader.clone(), peer.clone()));
+            let new = Arc::new(budget_media(new_film.reader.clone(), peer.clone()));
+            assert!(old.steer_window(64 << 30, 8.0e6, old_at * BS as u64));
+            let streams = [new.clone(), old.clone()];
+            for tick in 1..=5u64 {
+                steer_newest_first(
+                    &streams,
+                    |_| true,
+                    |media| {
+                        let at = if Arc::ptr_eq(&media, &new) { 0 } else { old_at } * BS as u64;
+                        async move {
+                            media.steer_window(64 << 30, 8.0e6, at);
+                        }
+                    },
+                )
+                .await;
+                assert_funded(&[&new, &old], 75, tick);
+                if tick >= 2 {
+                    let got = (new.window_range(), held_blocks(&new));
+                    assert_eq!(got, (Some((0, 75)), 75), "old at {old_at}, tick {tick}");
+                }
+            }
+        }
+    }
+
+    /// A short clip whose whole length fits the budget: the mean block size of 2 full blocks and
+    /// a short last one is under a full block, and rounding the plan down by it dropped the last
+    /// block. The window must cover all three.
+    #[tokio::test]
+    async fn a_short_clip_that_fits_covers_its_last_block() {
+        let film = peers(0).await;
+        let size = 2 * BS as u64 + 2;
+        let clip = Media::new(
+            "stream".into(),
+            json!({ "size": size }),
+            "video/mp4".into(),
+            Some(film.reader.clone()),
+            String::new(),
+            Some(BlobId {
+                block_offset: 0,
+                block_length: 3,
+                byte_offset: 0,
+                byte_length: size,
+            }),
+            Some(budget_peer()),
+        );
+        // A 120 s clip read at its own average rate: the plan is the whole clip.
+        assert!(clip.steer_window(64 << 30, size as f64 / 120.0, 0));
+        assert_eq!(clip.window_range(), Some((0, 3)));
     }
 
     #[tokio::test]

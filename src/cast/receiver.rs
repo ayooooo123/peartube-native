@@ -652,20 +652,18 @@ impl Inner {
         }
         let streams = lock(&self.streams).clone();
         let active = lock(&self.active).clone();
-        for media in streams {
-            // `steerStreams`' read-rate estimate, taken for every remembered stream.
-            media.refresh_rate();
-            if media.core.is_none() {
-                continue;
-            }
-            let live = lock_media_readers(&media)
-                || active.as_ref().is_some_and(|a| Arc::ptr_eq(a, &media));
-            if !live {
-                media.clear_window();
-                continue;
-            }
-            self.steer_read_ahead(media).await;
-        }
+        super::media::steer_newest_first(
+            &streams,
+            |media| {
+                // `steerStreams`' read-rate estimate, taken for every remembered stream.
+                media.refresh_rate();
+                media.core.is_some()
+                    && (lock_media_readers(media)
+                        || active.as_ref().is_some_and(|a| Arc::ptr_eq(a, media)))
+            },
+            |media| self.steer_read_ahead(media),
+        )
+        .await;
         self.steering.store(false, Ordering::Release);
     }
 
