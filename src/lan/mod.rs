@@ -141,6 +141,39 @@ impl crate::node::api::LanFactory<crate::node::core::CoreNode> for HostFactory {
     }
 }
 
+/// Static dispatch between [`Factory`] and [`HostFactory`] so [`crate::backend::Backend::spawn`]
+/// instantiates `App` and `lifecycle::call` once instead of twice.
+pub enum Choice {
+    Native(Factory),
+    Host(HostFactory),
+}
+
+impl crate::node::api::LanFactory<crate::node::core::CoreNode> for Choice {
+    type Error = LanError;
+
+    async fn interfaces(&self) -> Result<Vec<(String, IpAddr, bool)>, LanError> {
+        interfaces().await
+    }
+
+    async fn create(
+        &self,
+        host: Ipv4Addr,
+        node: &crate::node::core::CoreNode,
+    ) -> Result<Arc<dyn crate::node::network::LanBinding>, LanError> {
+        match self {
+            Self::Native(factory) => factory.create(host, node).await,
+            Self::Host(factory) => factory.create(host, node).await,
+        }
+    }
+
+    async fn host_event(&self, event: serde_json::Value) {
+        match self {
+            Self::Native(factory) => factory.host_event(event).await,
+            Self::Host(factory) => factory.host_event(event).await,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
