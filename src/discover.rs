@@ -22,8 +22,8 @@ use url::Url;
 use crate::art::{SendOptions, send_bytes};
 use crate::http::{DiscoverBridge, HttpError};
 use crate::mirror::MirrorHost;
-use crate::node::SearchOptions;
-use crate::node::core::Node as CoreNode;
+use crate::node::api::SearchOptions;
+use crate::node::core::CoreNode;
 use crate::providers::youtube::Picture;
 use crate::providers::{rumble, soundcloud};
 
