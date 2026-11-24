@@ -255,6 +255,22 @@ pub trait CastBridge: Send + Sync {
     fn cast_stop<'a>(&'a self, params: &'a Value) -> BoxFuture<'a, Result<Value, HttpError>>;
 }
 
+/// Creator discovery and feed bridge for `/v1/discover/*`.
+pub trait DiscoverBridge: Send + Sync {
+    fn list_creators(&self) -> Value;
+    fn follow_creator<'a>(&'a self, payload: Value) -> BoxFuture<'a, Result<Value, HttpError>>;
+    fn unfollow_creator(&self, id: &str) -> Value;
+    fn feed<'a>(
+        &'a self,
+        source: String,
+        creator: String,
+        refresh: bool,
+        limit: usize,
+    ) -> BoxFuture<'a, Result<Value, HttpError>>;
+    fn browse<'a>(&'a self, payload: Value) -> BoxFuture<'a, Result<Value, HttpError>>;
+    fn thumb<'a>(&'a self, token: &'a str) -> BoxFuture<'a, Result<Option<Picture>, HttpError>>;
+}
+
 /// Everything the app reads off `state` besides the node.
 #[derive(Default)]
 pub struct Options {
@@ -292,6 +308,7 @@ pub struct Options {
     pub acquirer: Option<Arc<dyn Acquirer>>,
     pub mirror: Option<Arc<dyn Mirror>>,
     pub cast: Option<Arc<dyn CastBridge>>,
+    pub discover: Option<Arc<dyn DiscoverBridge>>,
 }
 
 /// A running API server: its address, its event subscribers and its accept task.
@@ -655,6 +672,14 @@ impl<N: Node> Api<N> {
             remote,
             body: &mut body,
         };
+        if method == Method::GET
+            && let Some(token) = discover_thumb_path(&path)
+        {
+            return self
+                .discover_thumbnail(&request, token)
+                .await
+                .unwrap_or_else(owner_error);
+        }
         // A source result's picture, through the relay: the owner's browser never asks the source's
         // image host. 204 when there is none, so a missing picture is not a console error.
         if method == Method::GET
@@ -749,6 +774,46 @@ impl<N: Node> Api<N> {
             HeaderValue::from_static("text/event-stream"),
         );
         headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
+        Ok(response)
+    }
+
+    async fn discover_thumbnail(
+        &self,
+        req: &RequestContext<'_>,
+        token: &str,
+    ) -> Result<Response<Body>, HttpError> {
+        self.require_owner(req)?;
+        let picture = match &self.options.discover {
+            Some(discover) => discover.thumb(token).await?,
+            None => None,
+        };
+        let mut response = match picture {
+            Some(Picture {
+                content_type,
+                bytes,
+            }) => {
+                let len = bytes.len();
+                let mut res = full(bytes);
+                let headers = res.headers_mut();
+                headers.insert(
+                    header::CONTENT_TYPE,
+                    HeaderValue::from_str(&content_type)
+                        .map_err(|_| HttpError::new(400, "Invalid picture content type"))?,
+                );
+                headers.insert(header::CONTENT_LENGTH, HeaderValue::from(len));
+                headers.insert(
+                    header::CACHE_CONTROL,
+                    HeaderValue::from_static("private, max-age=86400"),
+                );
+                res
+            }
+            None => {
+                let mut res = Response::new(empty_body());
+                *res.status_mut() = StatusCode::NO_CONTENT;
+                res
+            }
+        };
+        corp(response.headers_mut());
         Ok(response)
     }
 
@@ -919,6 +984,46 @@ impl<N: Node> Api<N> {
                 broadcast(&self.sse, "update");
                 let identity = value(node.identity(false).await.map_err(node_error)?)?;
                 return Ok(Some(merge(claimed, identity)));
+            }
+        }
+        if path.starts_with("/v1/discover") {
+            let discover = self
+                .options
+                .discover
+                .as_ref()
+                .ok_or_else(|| HttpError::new(404, "Discover unavailable on this peer"))?;
+            if *method == Method::GET && path == "/v1/discover/creators" {
+                return Ok(Some(discover.list_creators()));
+            }
+            if *method == Method::POST && path == "/v1/discover/creators" {
+                let body = self.read_body(req.body).await?;
+                let res = discover.follow_creator(body).await?;
+                broadcast(&self.sse, "update");
+                return Ok(Some(res));
+            }
+            if *method == Method::DELETE
+                && let Some(id) = path.strip_prefix("/v1/discover/creators/")
+                && !id.is_empty()
+            {
+                let res = discover.unfollow_creator(id);
+                broadcast(&self.sse, "update");
+                return Ok(Some(res));
+            }
+            if *method == Method::GET && path == "/v1/discover/feed" {
+                let source = query(req.url, "source").unwrap_or_default();
+                let creator = query(req.url, "creator").unwrap_or_default();
+                let refresh = query(req.url, "refresh").as_deref() == Some("1");
+                let limit = query(req.url, "limit")
+                    .and_then(|s| s.parse::<usize>().ok())
+                    .unwrap_or(40);
+                return discover
+                    .feed(source, creator, refresh, limit)
+                    .await
+                    .map(Some);
+            }
+            if *method == Method::POST && path == "/v1/discover/browse" {
+                let body = self.read_body(req.body).await?;
+                return discover.browse(body).await.map(Some);
             }
         }
         if *method == Method::POST
@@ -1974,6 +2079,11 @@ fn owner_error(error: HttpError) -> Response<Body> {
     )
 }
 
+fn discover_thumb_path(path: &str) -> Option<&str> {
+    let token = path.strip_prefix("/v1/discover/thumb/")?;
+    (token.len() == 20 && token.bytes().all(|byte| byte.is_ascii_hexdigit())).then_some(token)
+}
+
 /// `/^\/v1\/providers\/([a-z0-9-]+)\/thumb\/([\w-]{1,64})$/`: the provider's name and the result's
 /// id in the path of a picture.
 fn thumb_path(path: &str) -> Option<(&str, &str)> {
@@ -2028,7 +2138,10 @@ fn cors(headers: &mut HeaderMap) {
 }
 
 fn is_owner_path(path: &str) -> bool {
-    path == "/v1/settings" || path == "/v1/restart" || path.starts_with("/v1/identity")
+    path == "/v1/settings"
+        || path == "/v1/restart"
+        || path.starts_with("/v1/identity")
+        || path.starts_with("/v1/discover")
 }
 
 fn is_write(method: &Method) -> bool {

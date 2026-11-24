@@ -16,6 +16,7 @@ pub mod app;
 pub mod app_settings;
 pub mod art;
 pub mod backend;
+pub mod discover;
 pub mod hiverelay;
 pub mod http;
 pub mod identify;
