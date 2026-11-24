@@ -312,6 +312,18 @@ impl ApiServerTrait<CoreNode> for LoopbackApi {
             ubit: String::new(),
             allow_private: false,
         };
+        let discover = crate::discover::DiscoverHost::open(
+            storage,
+            false,
+            {
+                let node = node.clone();
+                Arc::new(move || Some(node.clone()))
+            },
+            {
+                let mirror = mirror.clone();
+                Arc::new(move || Some(mirror.clone()))
+            },
+        );
         let options = Options {
             blob: Some(BlobAddr::new(blob.ip().to_string(), blob.port())),
             poster: Some(metahub("poster", "small")),
@@ -353,6 +365,7 @@ impl ApiServerTrait<CoreNode> for LoopbackApi {
             })),
             acquirer: Some(Arc::new(PeerAcquirer(acquirer.clone()))),
             mirror: Some(Arc::new(PeerMirror(mirror.clone()))),
+            discover: Some(discover),
             ..Options::default()
         };
 

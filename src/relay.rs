@@ -252,6 +252,26 @@ impl Relay {
                 acquirer: Some(Arc::new(AcquirerBridge(weak.clone()))),
                 mirror: Some(Arc::new(MirrorBridge(weak.clone()))),
                 cast: None,
+                discover: Some(crate::discover::DiscoverHost::open(
+                    &storage,
+                    allow_private_urls,
+                    {
+                        let weak = weak.clone();
+                        Arc::new(move || weak.upgrade().and_then(|inner| inner.api.node()))
+                    },
+                    {
+                        let weak = weak.clone();
+                        Arc::new(move || {
+                            weak.upgrade().and_then(|inner| {
+                                inner
+                                    .mirror
+                                    .lock()
+                                    .unwrap_or_else(|e| e.into_inner())
+                                    .clone()
+                            })
+                        })
+                    },
+                )),
             };
             Inner {
                 env: env.clone(),
