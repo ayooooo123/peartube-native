@@ -136,4 +136,4 @@ If a match is correct code, put a comment on the line before it: `// ast-grep-ig
 - `no-prod-unwrap` (`src/**/*.rs`): avoid `.unwrap()` and `panic!()` in production engine code; return `Err` to match JS error recovery.
 - `no-std-sleep-in-async` (`src/**/*.rs`): use `tokio::time::sleep(...).await` inside `async fn` instead of blocking `std::thread::sleep`.
 - `unsafe-outside-ffi` (`src/**/*.rs`): keep `unsafe` blocks and `unsafe fn` confined to the `ffi/` crate.
-- `clippy.toml` & `[workspace.lints.clippy]`: set complexity thresholds (`cognitive-complexity-threshold = 20`, `too-many-lines-threshold = 120`, `too-many-arguments-threshold = 6`) and deny `todo`, `dbg_macro`, and `await_holding_lock`.
+- `clippy.toml` & `[workspace.lints.clippy]`: set complexity thresholds (`cognitive-complexity-threshold = 20`, `too-many-lines-threshold = 120`, `too-many-arguments-threshold = 7`) and deny `todo`, `dbg_macro`, and `await_holding_lock`.
