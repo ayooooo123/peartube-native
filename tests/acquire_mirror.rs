@@ -1156,12 +1156,14 @@ fn add_film(harness: &Harness, id: &str, title: &str, url: &str, headers: &[(&st
                     .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
                     .collect(),
                 page: false,
+                audio: false,
                 private: false,
             },
             channel: None,
             private: false,
             plugin: None,
             existing: None,
+            music: None,
         })
         .unwrap();
 }
@@ -1285,12 +1287,14 @@ async fn acquirer_matches_the_app() {
                     url: "http://page.test/watch/2".to_owned(),
                     headers: Vec::new(),
                     page: true,
+                    audio: false,
                     private: false,
                 },
                 channel: None,
                 private: false,
                 plugin: None,
                 existing: None,
+                music: None,
             })
             .unwrap();
         settle(&harness).await;
@@ -1580,12 +1584,14 @@ async fn cancelling_a_queued_job_drops_its_core() {
                 url: "http://source.test/waiting.mp4".into(),
                 headers: Vec::new(),
                 page: false,
+                audio: false,
                 private: false,
             },
             channel: None,
             private: false,
             plugin: None,
             existing: None,
+            music: None,
         })
         .expect("add");
     let store = queued["store"].as_str().expect("store").to_owned();
@@ -2657,6 +2663,27 @@ mod library {
                 .unwrap_or_default()
                 .to_owned()
         };
+        struct PlantedFetch404;
+        impl peartube_native::providers::youtube::Fetch for PlantedFetch404 {
+            fn fetch(
+                &self,
+                _url: &str,
+            ) -> std::pin::Pin<
+                Box<
+                    dyn std::future::Future<
+                            Output = Result<peartube_native::providers::youtube::Fetched, String>,
+                        > + Send,
+                >,
+            > {
+                Box::pin(async {
+                    Ok(peartube_native::providers::youtube::Fetched {
+                        status: 404,
+                        content_type: None,
+                        body: Vec::new(),
+                    })
+                })
+            }
+        }
         let host = MirrorHost::start(
             node.clone(),
             None,
@@ -2676,6 +2703,10 @@ mod library {
                     backend: Some(Arc::new(FakeBackend(world.clone()))),
                     random: Arc::new(Labels::default()),
                     ..SoulseekSettings::default()
+                },
+                youtube: peartube_native::mirror::YoutubeSettings {
+                    fetch: Arc::new(PlantedFetch404),
+                    ..peartube_native::mirror::YoutubeSettings::default()
                 },
                 plugins_dir: Some(storage.join("plugins").to_string_lossy().into_owned()),
                 poll_interval_ms: 0,

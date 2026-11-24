@@ -17,6 +17,12 @@
           { "title": "Fast result", "lossy": true, "source": "wrong" },
           { "filename": "other.aac", "lossy": null }
         ] } },
+        { "name": "soundcloud", "delay": 5, "reply": { "candidates": [
+          { "title": "SC Track", "lossy": true }
+        ] } },
+        { "name": "rumble", "delay": 10, "reply": { "candidates": [
+          { "title": "Rumble Talk" }
+        ] } },
         { "name": "unavailable", "error": "Please try again. ", "repeat": 23, "status": 429 }
       ],
       "steps": [

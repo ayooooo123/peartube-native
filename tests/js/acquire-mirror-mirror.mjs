@@ -42,17 +42,21 @@ const acquireRewrites = {
   "'b4a'": stub('acquire-mirror-b4a.mjs'),
   "'streamx'": stub('acquire-mirror-streamx.mjs'),
   "'hypercore-byte-stream'": stub('acquire-mirror-streamx.mjs'),
+  "'./protocol.js'": app_url('src/protocol.js'),
   "'./ssrf.js'": stub('acquire-mirror-plants.mjs'),
   "'./identify.js'": stub('acquire-mirror-identify.mjs')
 }
 
 const mirrorRewrites = {
   "'node:fs'": stub('acquire-mirror-stubs.mjs'),
+  "'b4a'": stub('acquire-mirror-b4a.mjs'),
   "'./protocol.js'": app_url('src/protocol.js'),
   "'./tags.js'": app_url('src/tags.js'),
   "'./providers/soulseek.js'": app_url('src/providers/soulseek.js'),
   "'./providers/staging.js'": app_url('src/providers/staging.js'),
   "'./providers/youtube.js'": app_url('src/providers/youtube.js'),
+  "'./providers/soundcloud.js'": app_url('src/providers/soundcloud.js'),
+  "'./providers/rumble.js'": app_url('src/providers/rumble.js'),
   "'./hiverelay.js'": stub('acquire-mirror-plants.mjs'),
   "'./traffic.js'": stub('acquire-mirror-plants.mjs'),
   "'./art.js'": stub('acquire-mirror-plants.mjs')

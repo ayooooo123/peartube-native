@@ -42,6 +42,8 @@ pub fn is_release_id(text: &str) -> bool {
     if let Some(id) = text
         .strip_prefix("album:")
         .or_else(|| text.strip_prefix("yt:"))
+        .or_else(|| text.strip_prefix("sc:"))
+        .or_else(|| text.strip_prefix("rmb:"))
     {
         return hex(id, 20);
     }

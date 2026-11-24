@@ -295,12 +295,14 @@ fn http_job(id: &str, title: &str, url: &str, headers: &[(&str, &str)]) -> AddJo
                 .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
                 .collect(),
             page: false,
+            audio: false,
             private: false,
         },
         channel: Some(true),
         private: false,
         plugin: None,
         existing: None,
+        music: None,
     }
 }
 

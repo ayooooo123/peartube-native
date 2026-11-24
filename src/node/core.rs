@@ -537,6 +537,11 @@ impl CoreNode {
         self.inner.net.get().cloned().expect("network open")
     }
 
+    /// The node's storage directory (beside `corestore/`).
+    pub fn storage_dir(&self) -> &Path {
+        self.storage().path()
+    }
+
     /// `createTrafficGate({ node, uploadMbps })`: upload sharing over this node's connections,
     /// present and future. Call the returned closure and `TrafficGate::stop` to end it.
     pub fn traffic_gate(

@@ -19,6 +19,7 @@ mkdirSync(gen, { recursive: true })
 
 const source = readFileSync(join(APP, 'src/acquire.js'), 'utf8')
 const stub = name => `"${pathToFileURL(join(here, name)).href}"`
+const appUrl = path => `"${pathToFileURL(join(APP, path)).href}"`
 const rewrites = {
   "'node:fs'": stub('acquire-mirror-stubs.mjs'),
   "'node:crypto'": stub('acquire-mirror-crypto.mjs'),
@@ -27,6 +28,7 @@ const rewrites = {
   "'b4a'": stub('acquire-mirror-b4a.mjs'),
   "'streamx'": stub('acquire-mirror-streamx.mjs'),
   "'hypercore-byte-stream'": stub('acquire-mirror-streamx.mjs'),
+  "'./protocol.js'": appUrl('src/protocol.js'),
   "'./ssrf.js'": stub('acquire-mirror-plants.mjs'),
   "'./identify.js'": stub('acquire-mirror-identify.mjs')
 }

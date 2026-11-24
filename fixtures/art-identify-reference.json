@@ -2652,6 +2652,8 @@
       "out": {
         "kind": "file",
         "name": "Film.2020.1080p.mkv",
+        "site": "127.0.0.1",
+        "audioOnly": false,
         "size": 12345,
         "contentType": "video/x-matroska"
       },
@@ -2683,6 +2685,8 @@
       "out": {
         "kind": "file",
         "name": "Film.mp4",
+        "site": "127.0.0.1",
+        "audioOnly": false,
         "size": null,
         "contentType": "application/octet-stream"
       },
@@ -2751,6 +2755,7 @@
         "kind": "page",
         "name": "The Matrix 1999",
         "site": "YouTube",
+        "audioOnly": false,
         "uploader": "uploader",
         "duration": 136.5,
         "thumbnail": "https://img/t.jpg",
@@ -2795,7 +2800,8 @@
       "out": {
         "kind": "page",
         "name": "Film",
-        "site": "",
+        "site": "127.0.0.1",
+        "audioOnly": false,
         "uploader": "",
         "duration": null,
         "thumbnail": null,
@@ -2840,7 +2846,8 @@
       "out": {
         "kind": "page",
         "name": "",
-        "site": "",
+        "site": "127.0.0.1",
+        "audioOnly": false,
         "uploader": "",
         "duration": null,
         "thumbnail": null,
@@ -2903,6 +2910,7 @@
           "kind": "page",
           "name": "The Matrix 1999",
           "site": "YouTube",
+          "audioOnly": false,
           "uploader": "uploader",
           "duration": 136.5,
           "thumbnail": "https://img/t.jpg",
@@ -2943,7 +2951,10 @@
         "plain": {
           "id": "clip:1cdda0de3a29802c",
           "title": "The Matrix 1999"
-        }
+        },
+        "site": "YouTube",
+        "audioOnly": false,
+        "suggestedAudio": false
       }
     },
     {
@@ -2989,7 +3000,8 @@
         "link": {
           "kind": "page",
           "name": "Some Show S02E05 1080p",
-          "site": "",
+          "site": "vid.example",
+          "audioOnly": false,
           "uploader": "",
           "duration": null,
           "thumbnail": null,
@@ -3021,7 +3033,10 @@
         "plain": {
           "id": "clip:fe592f1b2e5b329e",
           "title": "Some Show S02E05 1080p"
-        }
+        },
+        "site": "vid.example",
+        "audioOnly": false,
+        "suggestedAudio": false
       }
     },
     {
@@ -3054,7 +3069,8 @@
         "link": {
           "kind": "page",
           "name": "My Holiday Vlog",
-          "site": "",
+          "site": "vid.example",
+          "audioOnly": false,
           "uploader": "",
           "duration": null,
           "thumbnail": null,
@@ -3076,7 +3092,10 @@
         "plain": {
           "id": "clip:138610b565dbb589",
           "title": "My Holiday Vlog"
-        }
+        },
+        "site": "vid.example",
+        "audioOnly": false,
+        "suggestedAudio": false
       }
     },
     {
@@ -3118,6 +3137,8 @@
         "link": {
           "kind": "file",
           "name": "The.Matrix.1999.1080p.mkv",
+          "site": "127.0.0.1",
+          "audioOnly": false,
           "size": 99,
           "contentType": "video/mp4"
         },
@@ -3144,9 +3165,12 @@
         ],
         "match": "imdb:tt0133093",
         "plain": {
-          "id": "clip:e2e2914dc89310c1",
+          "id": "clip:8a4065dd955b51e8",
           "title": "The Matrix"
-        }
+        },
+        "site": "127.0.0.1",
+        "audioOnly": false,
+        "suggestedAudio": false
       }
     }
   ]

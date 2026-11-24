@@ -254,6 +254,8 @@ pub struct SourceSpec {
     pub headers: Vec<(String, String)>,
     /// A page link (`ubit get`) rather than a direct media URL.
     pub page: bool,
+    /// Download audio only (`ubit get -a`) for a page link.
+    pub audio: bool,
     pub private: bool,
 }
 
@@ -313,6 +315,7 @@ pub struct Job {
     pub store: Option<String>,
     pub source: Option<SourceSpec>,
     pub existing: Option<Value>,
+    pub music: Option<Value>,
     pub total: Option<Option<u64>>,
     pub bytes: Option<u64>,
     pub etag: Option<Value>,
@@ -342,6 +345,7 @@ impl Job {
             store: Some(spec.store),
             source: Some(spec.source),
             existing: spec.existing,
+            music: spec.music,
             total: None,
             bytes: None,
             etag: None,
@@ -379,6 +383,9 @@ impl Job {
         );
         if let Some(existing) = &self.existing {
             out.insert("existing".into(), existing.clone());
+        }
+        if let Some(music) = &self.music {
+            out.insert("music".into(), music.clone());
         }
         if let Some(total) = self.total {
             out.insert("total".into(), total.map_or(Value::Null, |n| json!(n)));
@@ -469,6 +476,10 @@ impl Job {
                     })
                     .unwrap_or_default(),
                 page: source.get("page").and_then(Value::as_bool).unwrap_or(false),
+                audio: source
+                    .get("audio")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
                 private,
             }),
         };
@@ -489,6 +500,7 @@ impl Job {
             "store",
             "source",
             "existing",
+            "music",
             "total",
             "bytes",
             "etag",
@@ -514,6 +526,10 @@ impl Job {
             store: text("store"),
             source,
             existing: map.get("existing").cloned(),
+            music: map
+                .get("music")
+                .and_then(|v| crate::protocol::clean_music(Some(v)))
+                .and_then(|m| serde_json::to_value(m).ok()),
             total,
             bytes: map.get("bytes").and_then(Value::as_u64),
             etag: map.get("etag").cloned(),
@@ -553,7 +569,7 @@ pub fn source_json(source: &SourceSpec) -> Value {
     for (key, value) in &source.headers {
         headers.insert(key.clone(), json!(value));
     }
-    json!({"url": source.url, "headers": headers, "page": source.page})
+    json!({"url": source.url, "headers": headers, "page": source.page, "audio": source.audio})
 }
 
 struct NewJob {
@@ -567,10 +583,11 @@ struct NewJob {
     store: String,
     source: SourceSpec,
     existing: Option<Value>,
+    music: Option<Value>,
     store_key: Option<String>,
 }
 
-/// What `add` is asked for: `{ id, title, source, channel?, private?, plugin? }`.
+/// What `add` is asked for: `{ id, title, source, channel?, private?, plugin?, music? }`.
 #[derive(Debug, Clone, Default)]
 pub struct AddJob {
     pub id: String,
@@ -580,6 +597,7 @@ pub struct AddJob {
     pub private: bool,
     pub plugin: Option<String>,
     pub existing: Option<Value>,
+    pub music: Option<Value>,
 }
 
 /// The files a job needs. `jobs.json` is always written through a 0600 temp file and renamed.
@@ -1588,6 +1606,7 @@ pub struct PageOptions {
     pub stall_timeout: Duration,
     pub controller: Option<identify::Controller>,
     pub on_progress: Option<Box<dyn FnMut(DownloadProgress) + Send>>,
+    pub audio: bool,
 }
 
 /// The process seam behind `ubit get`.
@@ -1625,7 +1644,7 @@ impl PageDownloader for UbitPages {
                     ubit,
                     controller: opts.controller,
                     on_progress: opts.on_progress,
-                    audio: false,
+                    audio: opts.audio,
                 },
             )
             .await
@@ -1949,7 +1968,7 @@ where
         let Ok(blob) = serde_json::from_value::<crate::node::api::Blob>(blob_val.clone()) else {
             return Ok(None);
         };
-        let op = json!({
+        let mut op = json!({
             "type": "announce",
             "id": loaded.id,
             "title": loaded.title,
@@ -1958,6 +1977,11 @@ where
             "blobs": blobs,
             "blob": blob_val,
         });
+        if let Some(music) = &loaded.music
+            && let Some(map) = op.as_object_mut()
+        {
+            map.insert("music".into(), music.clone());
+        }
         self.with_job(id, |job| {
             job.status = JobStatus::Copying;
             job.total = Some(Some(size));
@@ -2016,6 +2040,9 @@ where
             && let Some(store_key) = &job.store_key
         {
             extra.insert("storeKey".into(), json!(store_key));
+        }
+        if let Some(music) = &job.music {
+            extra.insert("music".into(), music.clone());
         }
         let meta = PutMeta {
             id: job.id.clone(),
@@ -2129,6 +2156,7 @@ where
                     stall_timeout: self.opts.stall_timeout,
                     controller: Some(controller),
                     on_progress: Some(Box::new(progress)),
+                    audio: source.audio,
                 },
             )
             .await;
@@ -2149,6 +2177,10 @@ where
             .or_else(|| self.files.file_size(&downloaded.path))
             .unwrap_or(0);
         self.with_job(id, |job| job.total = Some(Some(total)));
+        let mut extra = Map::new();
+        if let Some(music) = &job.music {
+            extra.insert("music".into(), music.clone());
+        }
         let meta = PutMeta {
             id: job.id.clone(),
             title: job.title.clone(),
@@ -2156,7 +2188,7 @@ where
             epoch: None,
             store: None,
             expected_size: Some(Some(total)),
-            extra: Map::new(),
+            extra,
         };
         let stream =
             JobSource::<N::Error>::reader(self.sink(id), self.files.clone(), downloaded.path);
@@ -2402,6 +2434,11 @@ where
                     "blob": ex.get("blob").cloned().unwrap_or(Value::Null),
                 })
             });
+        let music = spec
+            .music
+            .as_ref()
+            .and_then(|v| crate::protocol::clean_music(Some(v)))
+            .and_then(|m| serde_json::to_value(m).ok());
         let job = Job::new(NewJob {
             job_id: job_id.clone(),
             id: spec.id,
@@ -2413,6 +2450,7 @@ where
             store: inner.new_store(),
             source: spec.source,
             existing,
+            music,
             store_key: private.then(|| hex(&inner.random.bytes(32))),
         });
         inner.jobs.lock().expect("acquirer jobs").push(job);
