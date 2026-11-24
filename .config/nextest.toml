@@ -1,0 +1,72 @@
+[profile.ci]
+test-threads = 3
+
+[test-groups.lan]
+max-threads = 1
+
+# These tests publish or browse real mDNS records on UDP 5353. A different test's
+# announcement can satisfy the peer-count check before the intended peer is ready.
+# The tests that use a fake LAN binding or a private DHT do not share this group.
+[[profile.ci.overrides]]
+filter = '''
+    test(=js_publishes_and_default_backend_streams_over_lan)
+  | test(=rust_publishes_and_js_streams_over_lan)
+  | test(=rust_to_rust_over_lan)
+  | test(=lan_token_gating_and_dial_order)
+  | test(=lan_reconnect_after_close)
+  | test(=a_direct_dial_carries_the_channel)
+  | test(=default_backends_cast_over_the_lan)
+  | test(=default_spawn_opens_the_loopback_api_and_lan)
+  | test(=lan_binding_opens_and_reports)
+  | test(=late_browsers_receive_every_advertisement_shard)
+  | test(=mdns_interop_with_bonjour_service)
+'''
+test-group = "lan"
+
+# The pinned JS receiver advertises on the host LAN even with a private DHT.
+# It allows 3 s to stop. Run it last in the LAN group and verify that its pipes close.
+[[profile.ci.overrides]]
+filter = 'test(=this_controller_casts_to_the_apps_receiver_fixture)'
+test-group = "lan"
+priority = -10
+leak-timeout = { period = "5s", result = "fail" }
+
+# Reserve the runner for observed timing failures. The pause and RPC checks
+# use a 150 ms window. The guard checks have 5 s to disconnect or find the
+# same open stream at both ends. Keep the assertions; do not retry them.
+[[profile.ci.overrides]]
+filter = '''
+    test(=a_paused_connection_receives_no_new_blocks_until_resumed)
+  | test(=rpc_times_out_and_rejects_after_close)
+  | test(=an_unadvertised_hop_is_disconnected)
+  | test(=guards_and_swarms_rendezvous_and_exchange_bytes)
+'''
+threads-required = "num-test-threads"
+
+# On macOS the 16 MiB HTTP request stalled during a transfer. The offline-founder
+# case twice missed the final JS entry after starting beside other peer tests.
+# Reserve the runner from startup through shutdown; keep both original deadlines.
+[[profile.ci.overrides]]
+platform = { host = 'cfg(target_os = "macos")' }
+filter = '''
+    test(=rust_viewer_clear_cache_shrinks_the_disk_immediately)
+  | test(=relays_converge_after_a_js_founder_goes_offline)
+'''
+threads-required = "num-test-threads"
+
+# On Linux the second watch-dir scan twice missed the first while the C host
+# was linking. Keep the original comparison and run this fixture alone.
+[[profile.ci.overrides]]
+platform = { host = 'cfg(target_os = "linux")' }
+filter = 'test(=library::the_library_matches_the_app)'
+threads-required = "num-test-threads"
+
+# Start long transfers and the C link test early. This changes order, not coverage.
+[[profile.ci.overrides]]
+filter = '''
+    test(=http_stream_survives_cache_ceiling)
+  | test(=rust_viewer_evicts_the_spent_prefix_without_stalling_the_tail)
+  | test(=js_viewer_evicts_the_spent_prefix_over_rust_bytes)
+  | test(=c_host_links_staticlib)
+'''
+priority = 10
