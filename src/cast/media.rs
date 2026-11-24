@@ -1099,7 +1099,7 @@ mod tests {
         media
             .window
             .lock()
-            .unwrap()
+            .expect("cast window")
             .as_ref()
             .and_then(|window| window.permit.as_ref())
             .map_or(0, |permit| permit.num_permits())
