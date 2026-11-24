@@ -1,0 +1,14 @@
+id: no-prod-unwrap
+language: rust
+severity: error
+message: Avoid .unwrap() and panic!() in production engine code; return Err instead.
+note: |
+  The JS engine throws recoverable errors; a Rust panic aborts the host app or relay.
+  Return Result with ? or handle None explicitly.
+  See docs/code-rules.md#no-prod-unwrap.
+files:
+  - src/**/*.rs
+rule:
+  any:
+    - pattern: $X.unwrap()
+    - pattern: panic!($$$)

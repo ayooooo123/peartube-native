@@ -1,0 +1,14 @@
+id: unsafe-outside-ffi
+language: rust
+severity: error
+message: Keep unsafe Rust inside the ffi crate, never in peartube-native/src.
+note: |
+  Core engine modules under src/ stay safe Rust; FFI pointer marshalling belongs in ffi/.
+  See docs/code-rules.md#unsafe-outside-ffi.
+files:
+  - src/**/*.rs
+rule:
+  any:
+    - kind: unsafe_block
+    - kind: function_item
+      regex: ^unsafe\s+fn\b

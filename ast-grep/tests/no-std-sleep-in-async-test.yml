@@ -1,0 +1,19 @@
+id: no-std-sleep-in-async
+valid:
+  - |
+    async fn wait() {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+  - |
+    fn blocking_helper() {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+invalid:
+  - |
+    async fn stall() {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+  - |
+    pub async fn stall_short() {
+        thread::sleep(Duration::from_secs(1));
+    }

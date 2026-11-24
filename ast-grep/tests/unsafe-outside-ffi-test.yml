@@ -1,0 +1,15 @@
+id: unsafe-outside-ffi
+valid:
+  - |
+    fn safe_add(a: u32, b: u32) -> u32 {
+        a.saturating_add(b)
+    }
+invalid:
+  - |
+    fn raw_read(p: *const u8) -> u8 {
+        unsafe { *p }
+    }
+  - |
+    unsafe fn raw_ptr(p: *const u8) -> u8 {
+        *p
+    }

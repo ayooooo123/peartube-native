@@ -130,3 +130,10 @@ If a match is correct code, put a comment on the line before it: `// ast-grep-ig
 - **Why:** a cycle between modules makes a change in one module break the other, and an agent must read both to change either.
 - **Fault:** none yet. Two cycles exist now. `node` uses types from `acquire`, `search`, `mirror`, `backend` and `cast`, and those modules use `node`. `protocol` uses `ipc::well_formed`, `ipc` uses `app_settings::js_truthy`, and `app_settings` uses `protocol`.
 - **Check:** none. A rule would write the current cycles into CI. First move the shared types into `node`, and move `js_truthy` out of `app_settings` into a module that uses no other module of the crate. Then a rule can check the boundary.
+
+### Engine safety and complexity rules
+
+- `no-prod-unwrap` (`src/**/*.rs`): avoid `.unwrap()` and `panic!()` in production engine code; return `Err` to match JS error recovery.
+- `no-std-sleep-in-async` (`src/**/*.rs`): use `tokio::time::sleep(...).await` inside `async fn` instead of blocking `std::thread::sleep`.
+- `unsafe-outside-ffi` (`src/**/*.rs`): keep `unsafe` blocks and `unsafe fn` confined to the `ffi/` crate.
+- `clippy.toml` & `[workspace.lints.clippy]`: set complexity thresholds (`cognitive-complexity-threshold = 20`, `too-many-lines-threshold = 120`, `too-many-arguments-threshold = 7`) and deny `todo`, `dbg_macro`, and `await_holding_lock`.
