@@ -21,6 +21,7 @@ use tokio::sync::Notify;
 use futures_util::future::BoxFuture;
 use serde_json::{Map, Value, json};
 use tokio::sync::OnceCell;
+use unicode_normalization::UnicodeNormalization;
 
 use crate::control_channel::{
     Control, ControlHandlers, RequestHandler, ServeHandle, Spec, open_channel, serve_channel,
@@ -100,16 +101,58 @@ pub trait SearchHost: Send + Sync + 'static {
     fn public_entries(&self) -> BoxFuture<'static, Vec<Announce>>;
     /// `ctx.update()`: later answers arrived.
     fn update(&self);
+    /// `joinLanTopic(id, topic)`: announce or look up the search topic on the LAN.
+    fn join_lan_topic(&self, _id: &str, _topic: [u8; 32]) {}
+    /// `leaveLanTopic(id)`: drop one LAN hold on the search topic.
+    fn release_lan_topic(&self, _id: &str) {}
     fn swarm(&self) -> peeroxide::SwarmHandle;
 }
 
 /// `isMedia(key)` for the file at `<blobs>:<blockOffset>`.
 pub type IsMedia = Arc<dyn Fn(&str) -> bool + Send + Sync>;
 
-/// A query as words: lower case, split at spaces and ASCII punctuation, at most 8 words of 2 or
+fn is_accent_base(c: char) -> bool {
+    matches!(
+        c,
+        'A'..='Z'
+            | 'a'..='z'
+            | '\u{00C0}'..='\u{024F}'
+            | '\u{1E00}'..='\u{1EFF}'
+            | '\u{2C60}'..='\u{2C7F}'
+            | '\u{A720}'..='\u{A7FF}'
+            | '\u{0370}'..='\u{03FF}'
+            | '\u{1F00}'..='\u{1FFF}'
+    )
+}
+
+/// A query and a title fold the same way (`fold` in `src/search.js`): case, width and the accents
+/// of Latin and Greek letters go; a mark stays where its script uses it as a letter (Cyrillic й
+/// and ё, Indic, Arabic). Turkish has two i's; both fold to i, and a Greek final sigma folds to σ.
+pub fn fold(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut strip_marks = false;
+    for c in s.to_lowercase().nfkd() {
+        if matches!(c, '\u{0300}'..='\u{036F}') {
+            if strip_marks {
+                continue;
+            }
+            out.push(c);
+            continue;
+        }
+        strip_marks = is_accent_base(c);
+        out.push(match c {
+            'ı' => 'i',
+            'ς' => 'σ',
+            _ => c,
+        });
+    }
+    out
+}
+
+/// A query as words: folded, split at spaces and ASCII punctuation, at most 8 words of 2 or
 /// more characters (`words` in the app).
 pub fn words(q: &str) -> Vec<String> {
-    let cut: String = q.chars().take(MAX_QUERY).collect::<String>().to_lowercase();
+    let cut: String = fold(q).chars().take(MAX_QUERY).collect();
     cut.split(|c: char| c.is_whitespace() || c.is_ascii_punctuation())
         .filter(|w| w.chars().count() >= 2)
         .take(MAX_WORDS)
@@ -204,9 +247,10 @@ struct Run {
     asked: HashSet<String>,
     buckets: HashMap<String, usize>,
     topic_asked: usize,
-    /// Asks that reached a peer and got an answer, even zero rows.
+    /// Asks that reached a peer and got a search reply, even zero rows.
     answered: usize,
-    returned: bool,
+    /// True once at least one `search_global` call returned to the caller, so later hits trigger `update()`.
+    delivered: bool,
     at: std::time::Instant,
     pending: usize,
     wake: Arc<Notify>,
@@ -271,18 +315,19 @@ impl GlobalSearch {
     }
 
     /// The node's connection listener: pair the protocol while answering, and ask a connection
-    /// the search lookup dialed for the newest search.
+    /// the search lookup dialed (or a LAN peer that connected during a search) for the newest search.
     pub fn connected(&self, conn: ConnectionHandle) {
         self.inner.pair(&conn);
-        let current = {
+        let (current, from_topic) = {
             let state = lock(&self.inner.state);
-            if !state.session || !conn.topics().contains(&*SEARCH_TOPIC) {
+            let from_topic = conn.topics().contains(&*SEARCH_TOPIC);
+            if !state.session || (!from_topic && !conn.is_lan()) {
                 return;
             }
-            state.current.clone()
+            (state.current.clone(), from_topic)
         };
         if let Some(run) = current {
-            self.inner.spawn_ask(run, conn, true);
+            self.inner.spawn_ask(run, conn, from_topic);
         }
     }
 
@@ -304,6 +349,7 @@ impl GlobalSearch {
             for conn in inner.host.connections() {
                 inner.pair(&conn);
             }
+            inner.host.join_lan_topic("search:serve", *SEARCH_TOPIC);
             if join {
                 tokio::spawn(async move {
                     let mut opts = peeroxide::JoinOpts::default();
@@ -327,6 +373,7 @@ impl GlobalSearch {
         for (_, control) in served {
             control.close();
         }
+        inner.host.release_lan_topic("search:serve");
         if was {
             tokio::spawn(async move {
                 let _ = swarm.leave(*SEARCH_TOPIC).await;
@@ -380,7 +427,7 @@ impl GlobalSearch {
                     buckets: HashMap::new(),
                     topic_asked: 0,
                     answered: 0,
-                    returned: false,
+                    delivered: false,
                     at: std::time::Instant::now(),
                     pending: 0,
                     wake: Arc::new(Notify::new()),
@@ -412,6 +459,7 @@ impl GlobalSearch {
             (run, join, topic_conns)
         };
         if join {
+            inner.host.join_lan_topic("search:ask", *SEARCH_TOPIC);
             let swarm = inner.host.swarm();
             tokio::spawn(async move {
                 let mut opts = peeroxide::JoinOpts::default();
@@ -429,13 +477,11 @@ impl GlobalSearch {
                 inner.spawn_ask(run.clone(), conn, false);
             }
         }
-        if !lock(&run).returned {
+        if lock(&run).answered == 0 {
             wait_for_asks(&run).await;
         }
         let mut run = lock(&run);
-        if run.answered > 0 {
-            run.returned = true;
-        }
+        run.delivered = true;
         let limit = if limit == 0 {
             MAX_HITS
         } else {
@@ -523,7 +569,7 @@ impl Inner {
             .into_iter()
             .filter(|e| is_media(&format!("{}:{}", e.blobs, e.blob.block_offset)))
             .map(|e| Offer {
-                text: format!("{} {}", e.title, e.id).to_lowercase(),
+                text: fold(&format!("{} {}", e.title, e.id)),
                 entry: e,
             })
             .collect();
@@ -764,7 +810,6 @@ impl Inner {
         let Some(control) = self.control(&conn).await else {
             return;
         };
-        lock(&run).answered += 1;
         let mut payload = Map::new();
         payload.insert("q".to_owned(), json!(q));
         payload.insert("mid".to_owned(), mid.map_or(Value::Null, Value::String));
@@ -782,8 +827,9 @@ impl Inner {
             .cloned()
             .unwrap_or_default();
         let mut added = false;
-        let returned = {
+        let delivered = {
             let mut r = lock(&run);
+            r.answered += 1;
             for hit in hits.iter().take(MAX_HITS) {
                 let Some(entry) = check_hit(hit) else {
                     continue;
@@ -811,9 +857,9 @@ impl Inner {
                     added = true;
                 }
             }
-            r.returned
+            r.delivered
         };
-        if added && returned {
+        if added && delivered {
             self.host.update();
         }
     }
@@ -833,6 +879,7 @@ impl Inner {
         if !session {
             return;
         }
+        self.host.release_lan_topic("search:ask");
         let swarm = self.host.swarm();
         tokio::spawn(async move {
             let _ = swarm.leave(*SEARCH_TOPIC).await;
@@ -870,7 +917,7 @@ mod tests {
             buckets: HashMap::new(),
             topic_asked: 0,
             answered: if asked { 1 } else { 0 },
-            returned: false,
+            delivered: false,
             at: std::time::Instant::now(),
             pending,
             wake: Arc::new(Notify::new()),
@@ -943,5 +990,209 @@ mod tests {
             COLLECT >= Duration::from_millis(1500),
             "the collect window is {COLLECT:?}"
         );
+    }
+
+    struct FakeHost {
+        swarm: peeroxide::SwarmHandle,
+        conns: Mutex<Vec<ConnectionHandle>>,
+        lan_topics: Mutex<HashMap<String, [u8; 32]>>,
+        updates: std::sync::atomic::AtomicUsize,
+    }
+
+    impl FakeHost {
+        async fn new() -> Arc<Self> {
+            let mut config = peeroxide::SwarmConfig::default();
+            config.eager = true;
+            config.dht.dht.host = "127.0.0.1".to_owned();
+            config.dht.dht.port = 0;
+            config.dht.dht.bootstrap = Vec::new();
+            let (_task, swarm, _incoming) = peeroxide::spawn(config).await.expect("spawn swarm");
+            Arc::new(Self {
+                swarm,
+                conns: Mutex::new(Vec::new()),
+                lan_topics: Mutex::new(HashMap::new()),
+                updates: std::sync::atomic::AtomicUsize::new(0),
+            })
+        }
+    }
+
+    impl SearchHost for FakeHost {
+        fn closing(&self) -> bool {
+            false
+        }
+        fn private_routing(&self) -> bool {
+            false
+        }
+        fn connections(&self) -> Vec<ConnectionHandle> {
+            lock(&self.conns).clone()
+        }
+        fn is_source_peer(&self, _key_hex: &str) -> bool {
+            false
+        }
+        fn public_entries(&self) -> BoxFuture<'static, Vec<Announce>> {
+            Box::pin(async { Vec::new() })
+        }
+        fn update(&self) {
+            self.updates
+                .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+        }
+        fn join_lan_topic(&self, id: &str, topic: [u8; 32]) {
+            lock(&self.lan_topics).insert(id.to_owned(), topic);
+        }
+        fn release_lan_topic(&self, id: &str) {
+            lock(&self.lan_topics).remove(id);
+        }
+        fn swarm(&self) -> peeroxide::SwarmHandle {
+            self.swarm.clone()
+        }
+    }
+
+    fn mux_pair() -> (protomux::Mux, protomux::Mux) {
+        let ((ar, aw), (br, bw)) = protomux::memory::duplex(64);
+        let client = protomux::Mux::new(
+            ar,
+            aw,
+            protomux::StreamInfo {
+                is_initiator: true,
+                ..protomux::StreamInfo::default()
+            },
+        );
+        let server = protomux::Mux::new(br, bw, protomux::StreamInfo::default());
+        (client, server)
+    }
+
+    /// A cold search that timed out empty must still trigger `update()` when a LAN relay connects
+    /// later and delivers a hit; and `serve` + `search_global` hold their LAN topics independently.
+    #[tokio::test]
+    async fn a_late_lan_hit_after_an_empty_cold_search_notifies_update() {
+        let host = FakeHost::new().await;
+        let gs = GlobalSearch::new(host.clone());
+
+        let first = gs.search_global("harbour light", None, 20).await.unwrap();
+        assert!(first.is_empty());
+        assert_eq!(
+            lock(&host.lan_topics).get("search:ask"),
+            Some(&*SEARCH_TOPIC),
+            "search_global must join SEARCH_TOPIC on LAN"
+        );
+
+        let (client_mux, server_mux) = mux_pair();
+        let hit_uri = format_watch_uri(
+            &WatchEntry {
+                id: "imdb:tt0000101".to_owned(),
+                title: "Harbour Light".to_owned(),
+                sha256: Some("a".repeat(64)),
+                blobs: "b".repeat(64),
+                blob: Some(BlobPointer {
+                    block_offset: 0,
+                    block_length: 10,
+                    byte_offset: 0,
+                    byte_length: 5000,
+                }),
+            },
+            "",
+            "",
+        );
+        let _server_handle = serve_channel(
+            &server_mux,
+            &SEARCH,
+            ControlHandlers {
+                on_request: Some(Arc::new(move |_msg, _ctl| {
+                    let uri = hit_uri.clone();
+                    Box::pin(async move { Ok(json!({ "hits": [{ "uri": uri }] })) })
+                })),
+                on_event: None,
+                on_open: None,
+                on_close: None,
+            },
+        );
+        server_mux.ready();
+        client_mux.ready();
+
+        let conn = ConnectionHandle::for_test([0x11u8; 32], client_mux, true, Vec::new());
+        lock(&host.conns).push(conn.clone());
+        gs.connected(conn);
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(3);
+        while host.updates.load(std::sync::atomic::Ordering::Acquire) == 0
+            && std::time::Instant::now() < deadline
+        {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert!(
+            host.updates.load(std::sync::atomic::Ordering::Acquire) >= 1,
+            "late LAN hit after an empty cold search must call host.update()"
+        );
+
+        let started = std::time::Instant::now();
+        let second = gs.search_global("harbour light", None, 20).await.unwrap();
+        assert_eq!(second.len(), 1);
+        assert_eq!(second[0]["title"], "Harbour Light");
+        assert!(
+            started.elapsed() < Duration::from_millis(300),
+            "follow-up after answered relay took {:?}",
+            started.elapsed()
+        );
+
+        gs.serve(Some(Arc::new(|_| true)));
+        assert_eq!(
+            lock(&host.lan_topics).get("search:serve"),
+            Some(&*SEARCH_TOPIC)
+        );
+        gs.suspend();
+        assert!(!lock(&host.lan_topics).contains_key("search:ask"));
+        assert!(lock(&host.lan_topics).contains_key("search:serve"));
+        gs.serve(None);
+        assert!(!lock(&host.lan_topics).contains_key("search:serve"));
+        gs.close();
+    }
+
+    /// A relay that opens the search channel but fails the search call must not count as answered
+    /// and must not cut the collect window short.
+    #[tokio::test]
+    async fn a_failed_search_call_does_not_count_as_answered() {
+        let host = FakeHost::new().await;
+        let gs = GlobalSearch::new(host.clone());
+
+        let (client_mux, server_mux) = mux_pair();
+        let _server_handle = serve_channel(
+            &server_mux,
+            &SEARCH,
+            ControlHandlers {
+                on_request: Some(Arc::new(move |_msg, _ctl| {
+                    Box::pin(async move { Err("busy".to_owned()) })
+                })),
+                on_event: None,
+                on_open: None,
+                on_close: None,
+            },
+        );
+        server_mux.ready();
+        client_mux.ready();
+
+        let conn = ConnectionHandle::for_test([0x22u8; 32], client_mux, true, Vec::new());
+        lock(&host.conns).push(conn);
+
+        let started = std::time::Instant::now();
+        let rows = gs.search_global("harbour light", None, 20).await.unwrap();
+        assert!(rows.is_empty());
+        assert!(
+            started.elapsed() >= Duration::from_millis(1900),
+            "a failed search call ended the wait early after {:?}",
+            started.elapsed()
+        );
+        gs.close();
+    }
+
+    /// Script-aware folding matches `src/search.js`: Latin and Greek accents strip, Turkish i's
+    /// fold together, Greek final sigma folds to sigma, and Cyrillic ё stays distinct from е.
+    #[test]
+    fn fold_matches_js_by_script() {
+        assert_eq!(fold("Señal"), "senal");
+        assert_eq!(fold("Οδός (2020)"), "οδοσ (2020)");
+        assert_eq!(fold("IŞIK (2021)"), "isik (2021)");
+        assert_eq!(fold("ışık"), "isik");
+        assert_eq!(words("ёлка"), vec![fold("Ёлка")]);
+        assert_ne!(fold("Ёлка"), fold("елка"));
     }
 }
