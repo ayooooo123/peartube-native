@@ -985,6 +985,7 @@ dependencies = [
 name = "libudx"
 version = "1.7.4"
 dependencies = [
+ "bytes",
  "quinn-udp",
  "rand 0.9.5",
  "socket2",
@@ -1189,7 +1190,7 @@ dependencies = [
 [[package]]
 name = "peartube-soulseek"
 version = "0.1.0"
-source = "git+https://github.com/ayooooo123/peartube-soulseek?rev=cc9b2fb3dbfc4e4e756e1c8e8932a65adf04fe85#cc9b2fb3dbfc4e4e756e1c8e8932a65adf04fe85"
+source = "git+https://github.com/ayooooo123/peartube-soulseek?rev=81b6975a0398f2e0f3404c6184da0b767efc033c#81b6975a0398f2e0f3404c6184da0b767efc033c"
 dependencies = [
  "flate2",
  "md-5",
