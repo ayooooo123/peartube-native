@@ -132,7 +132,7 @@ impl Client for NetworkClient {
         });
         Box::pin(blocking(move || {
             client
-                .download_with_cancel(&user, &filename, dest, None, cancel, Some(report))
+                .download_resumable(&user, &filename, dest, None, cancel, Some(report))
                 .map(|done| done.size)
         }))
     }

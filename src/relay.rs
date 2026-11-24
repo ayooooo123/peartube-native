@@ -698,6 +698,7 @@ impl Relay {
                         .as_u64()
                         .and_then(|files| u32::try_from(files).ok())
                         .unwrap_or(soulseek::DEFAULT_SHARE_MAX_FILES),
+                    durable: true,
                     backend: soulseek::client::network(),
                     ..SoulseekSettings::default()
                 },
@@ -1455,6 +1456,16 @@ impl http::Mirror for MirrorBridge {
 
     fn cancel_provider_job(&self, id: &str) -> Option<Value> {
         self.current()?.cancel_provider_job(id)
+    }
+
+    fn retry_provider_job(&self, id: &str) -> Option<Value> {
+        self.current()?.retry_provider_job(id)
+    }
+
+    fn wake_provider_jobs(&self) -> usize {
+        self.current()
+            .map(|mirror| mirror.wake_provider_jobs())
+            .unwrap_or(0)
     }
 
     fn forget_imported<'a>(

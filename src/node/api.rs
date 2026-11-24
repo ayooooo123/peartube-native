@@ -468,6 +468,8 @@ pub trait ApiServer<N: crate::node::Node>: Send + Sync {
     ) -> impl Future<Output = Result<Option<String>, Self::Error>> + Send;
     /// A notification only queues an event for the API's stream, so it is synchronous.
     fn notify(&self, event: &str);
+    /// Called when the mobile host returns to foreground so paused/backing-off jobs can resume.
+    fn resume(&self) {}
     fn close(&self) -> impl Future<Output = ()> + Send;
 }
 
