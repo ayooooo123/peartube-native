@@ -1258,7 +1258,7 @@ fn detect_source_from_input(raw: &str) -> Option<DetectedInput> {
     })
 }
 
-pub fn parse_youtube_feed_xml(
+fn parse_youtube_feed_xml(
     xml: &str,
     creator: Option<&SavedCreator>,
     mut thumb_out: Option<&mut Vec<(usize, String)>>,
