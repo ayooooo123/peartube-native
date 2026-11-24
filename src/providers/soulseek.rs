@@ -1061,7 +1061,7 @@ impl Provider {
                     if attempt == max_attempts || self.stopped(job) || !is_transient_error(&err) {
                         return Err(err);
                     }
-                    let wait_ms = DURABLE_RETRY_BACKOFF_MS[attempt];
+                    let wait_ms = retry_backoff_ms(true, attempt);
                     {
                         let mut record = job.record.lock().expect("soulseek job");
                         record.status = "queued";
@@ -1621,11 +1621,7 @@ impl Provider {
             if attempt == max_retries || self.stopped(job) || !retryable {
                 return Err(err);
             }
-            let wait_ms = if self.0.durable {
-                DURABLE_RETRY_BACKOFF_MS[attempt]
-            } else {
-                2_000u64 * (attempt as u64 + 1)
-            };
+            let wait_ms = retry_backoff_ms(self.0.durable, attempt);
             {
                 let mut record = job.record.lock().expect("soulseek job");
                 record.status = "queued";
@@ -2444,16 +2440,23 @@ fn part_len(dest: &Path) -> u64 {
     std::fs::metadata(PathBuf::from(os)).map_or(0, |meta| meta.len())
 }
 
+fn retry_backoff_ms(durable: bool, attempt: usize) -> u64 {
+    if durable {
+        DURABLE_RETRY_BACKOFF_MS
+            .get(attempt)
+            .copied()
+            .unwrap_or(300_000)
+    } else {
+        2_000u64 * (attempt as u64 + 1)
+    }
+}
+
 fn is_transient_error(error: &SoulseekError) -> bool {
-    if error.message == "Cancelled"
+    !(error.message == "Cancelled"
         || error.reason == Some("unplaced")
         || matches!(error.status, Some(400 | 422))
         || error.message.contains("refused the file:")
-        || contains_ignore_case(&error.message, "upload denied")
-    {
-        return false;
-    }
-    true
+        || contains_ignore_case(&error.message, "upload denied"))
 }
 
 fn load_persisted_jobs(storage: &str, now: u64) -> Vec<Arc<Job>> {
@@ -2737,9 +2740,11 @@ mod tests {
         assert_eq!(attempts.load(Ordering::SeqCst), 3);
     }
 
+    type ScriptMap = Arc<Mutex<HashMap<String, Vec<Result<Vec<u8>, String>>>>>;
+
     struct ScriptedDurableClient {
         calls: Arc<Mutex<Vec<String>>>,
-        script: Arc<Mutex<HashMap<String, Vec<Result<Vec<u8>, String>>>>>,
+        script: ScriptMap,
     }
 
     impl Client for ScriptedDurableClient {
@@ -2807,7 +2812,7 @@ mod tests {
 
     struct ScriptedDurableBackend {
         calls: Arc<Mutex<Vec<String>>>,
-        script: Arc<Mutex<HashMap<String, Vec<Result<Vec<u8>, String>>>>>,
+        script: ScriptMap,
     }
 
     impl Backend for ScriptedDurableBackend {
@@ -2837,20 +2842,18 @@ mod tests {
         );
         let script = Arc::new(Mutex::new(plan));
 
-        let make_provider =
-            |calls: Arc<Mutex<Vec<String>>>,
-             script: Arc<Mutex<HashMap<String, Vec<Result<Vec<u8>, String>>>>>| {
-                let mut opts = Options::new(
-                    dir.path().to_string_lossy(),
-                    Some(Arc::new(ScriptedDurableBackend { calls, script })),
-                    Arc::new(OsRandom),
-                    Arc::new(|| 1_700_000_000_000),
-                );
-                opts.user = "tester".into();
-                opts.pass = "secret".into();
-                opts.durable = true;
-                Provider::new(opts)
-            };
+        let make_provider = |calls: Arc<Mutex<Vec<String>>>, script: ScriptMap| {
+            let mut opts = Options::new(
+                dir.path().to_string_lossy(),
+                Some(Arc::new(ScriptedDurableBackend { calls, script })),
+                Arc::new(OsRandom),
+                Arc::new(|| 1_700_000_000_000),
+            );
+            opts.user = "tester".into();
+            opts.pass = "secret".into();
+            opts.durable = true;
+            Provider::new(opts)
+        };
 
         let first = make_provider(calls.clone(), script.clone());
         let err = first
