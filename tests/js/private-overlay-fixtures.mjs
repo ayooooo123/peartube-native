@@ -8,8 +8,7 @@
 // taken from the exported `diversityBucketForAddress`, and the module-private encoders, signers and
 // card helpers are lifted out of the source text with brace matching.
 //
-// Everything is deterministic except `sealedBox.sealedHex`, whose nonce is random on every run;
-// the test only requires that the port opens whatever blob this emits.
+// The seal uses the original fixture nonce, so the ciphertext can be compared across changes.
 import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
@@ -17,7 +16,7 @@ import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const here = fileURLToPath(new URL('.', import.meta.url))
-const APP = process.env.PEARTUBE_APP || resolve(here, '../../../../peartube')
+const APP = process.env.PEARTUBE_APP || resolve(here, '../../../peartube')
 const require = createRequire(join(APP, 'package.json'))
 
 const b4a = require('b4a')
@@ -77,11 +76,12 @@ const helpers = new Function('HyperDHT', 'hypercoreCrypto', 'c', 'sodium', 'b4a'
 ${decl('CARD_DOMAIN')}
 ${decl('MAX_CARD_BYTES')}
 ${decl('sha256')}
-${decl('rand')}
-${decl('u32')}
+const rand = n => {
+  const nonce = b4a.from('bcb74704381eafbf6d5d663bce5ff3ead8e7faf206dee9e7', 'hex')
+  if (n !== nonce.length) throw new Error('unexpected nonce size')
+  return nonce
+}
 ${decl('mutSignEnc')}
-${decl('frameEnc')}
-${decl('bufArrEnc')}
 const [, , NS_MUTABLE_PUT] = hypercoreCrypto.namespace('hyperswarm/dht', [4, 5, 6, 0, 1, 10])
 ${fn('signDhtMutable')}
 ${fn('verifyDhtMutable')}
@@ -90,9 +90,7 @@ ${fn('openBox')}
 ${fn('encodeSignedCard')}
 ${fn('decodeAndVerifyCard')}
 return {
-  CARD_DOMAIN, MAX_CARD_BYTES, mutSignEnc, frameEnc, bufArrEnc,
-  signDhtMutable, verifyDhtMutable, sealBox, openBox,
-  encodeSignedCard, decodeAndVerifyCard, sha256, u32
+  NS_MUTABLE_PUT, mutSignEnc, signDhtMutable, sealBox, encodeSignedCard, decodeAndVerifyCard, sha256
 }
 `)(HyperDHT, hypercoreCrypto, c, sodium, b4a, createHash)
 
@@ -108,7 +106,8 @@ const routeToken = b4a.from('33'.repeat(32), 'hex')
 const NOW = 1_700_000_000_000
 const EXPIRES = NOW + 600_000
 
-const guardTopics = [0, 1, 2, 3].map(i => hex(HyperDHT.hash(b4a.from(`peartube/private-guard/v1/${i}`))))
+const topicsDecl = src.match(/^const GUARD_TOPICS = .+$/m)[0]
+const guardTopics = new Function('HyperDHT', 'b4a', topicsDecl + '; return GUARD_TOPICS')(HyperDHT, b4a).map(hex)
 
 const buckets = [
   ['10.1.2.3', 9000, false],
@@ -136,23 +135,6 @@ const buckets = [
   bucket: overlay.diversityBucketForAddress(host, port, allowLoopback)
 }))
 
-const frames = [
-  [1, 0, ''],
-  [19, 7, 'aabbcc'],
-  [8, 4294967295, '00'.repeat(200)]
-].map(([op, id, payloadHex]) => {
-  const payload = b4a.from(payloadHex, 'hex')
-  return { op, id, payloadHex, encodedHex: hex(c.encode(helpers.frameEnc, { op, id, payload })) }
-})
-
-const bufArrs = [
-  [],
-  ['', 'aa', 'bbcc']
-].map(itemsHex => {
-  const items = itemsHex.map(h => b4a.from(h, 'hex'))
-  return { itemsHex, encodedHex: hex(c.encode(helpers.bufArrEnc, items)) }
-})
-
 const card = helpers.encodeSignedCard({
   innerKeyPair: keyPair,
   guardPublicKey: guardKey,
@@ -166,6 +148,8 @@ const sealed = helpers.sealBox(b4a.from('private-route-card-fixture'), sealKey)
 
 const value = b4a.from('signed mutable value')
 const mutableSig = helpers.signDhtMutable(42, value, keyPair.secretKey)
+const signable = b4a.concat([helpers.NS_MUTABLE_PUT, hypercoreCrypto.hash(c.encode(helpers.mutSignEnc, { seq: 42, value }))])
+if (!hypercoreCrypto.verify(signable, mutableSig, keyPair.publicKey)) throw new Error('wrong mutable signable')
 
 const out = {
   guards: {
@@ -177,8 +161,6 @@ const out = {
     rvTopicHex: hex(helpers.sha256('peartube/private-rv/v1/', SOURCE_KEY, EPOCH))
   },
   buckets,
-  frames,
-  bufArrs,
   cards: {
     seed: SEED,
     guardPublicKeyHex: hex(guardKey),
@@ -213,6 +195,7 @@ const out = {
     publicKeyHex: hex(keyPair.publicKey),
     seq: 42,
     valueHex: hex(value),
+    signableHex: hex(signable),
     signatureHex: hex(mutableSig),
     tamperedSignatureHex: hex(Buffer.from(mutableSig).fill(0, 0, 1))
   }

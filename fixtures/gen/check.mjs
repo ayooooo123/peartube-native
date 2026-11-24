@@ -31,6 +31,7 @@ const sources = [
   { file: 'art-identify-reference.json', script: 'fixtures/gen/art-identify.mjs' },
   { file: 'blobs-reference.json', script: 'tests/js/blobs-fixtures.mjs', stdout: true },
   { file: 'cast-reference.json', script: 'tests/js/cast-fixtures.mjs', stdout: true },
+  { file: 'control-wire-reference.json', script: 'fixtures/gen/control-wire.mjs', stdout: true },
   { file: 'hiverelay-reference.json', script: 'fixtures/gen/hiverelay.mjs' },
   { file: 'http-reference.json', script: 'fixtures/gen/http.mjs' },
   { file: 'identity-reference.json', script: 'fixtures/gen/identity.mjs' },
@@ -53,6 +54,14 @@ if (checkout) {
   if (status.status === 0 && status.stdout.trim()) {
     console.log('note: the checkout has uncommitted changes; comparing against its working tree')
   }
+}
+
+// Unlike JSON fixture behavior, the schema itself is the input to the Rust compiler:
+// even a formatting-only change must be absorbed explicitly, never by --write.
+const schema = 'spec/hyperschema/schema.json'
+if (!readFileSync(join(APP, schema)).equals(readFileSync(join(root, schema)))) {
+  console.error(`DIFF ${schema}: Rust schema copy differs from the app`)
+  process.exit(1)
 }
 
 const uncovered = readdirSync(fixtures)
@@ -107,7 +116,7 @@ for (const result of results) {
   }
   if (write) {
     const changed = !same(result.source.file, result.current, result.generated)
-    writeFileSync(result.committed, result.generated)
+    if (changed) writeFileSync(result.committed, result.generated)
     console.log(`${changed ? 'wrote' : 'unchanged'} ${name}`)
     continue
   }

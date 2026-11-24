@@ -3,6 +3,7 @@
 
 pub mod cast;
 pub mod control_channel;
+pub mod control_protocol;
 pub mod lan;
 pub mod mnemonic;
 pub mod protocol;
@@ -35,3 +36,6 @@ pub mod ssrf;
 mod suspend;
 pub mod tags;
 pub mod traffic;
+pub mod wire {
+    include!(concat!(env!("OUT_DIR"), "/peartube_wire.rs"));
+}

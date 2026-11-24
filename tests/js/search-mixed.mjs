@@ -28,6 +28,8 @@ const require = createRequire(resolve(APP, 'package.json'))
 
 const { default: createTestnet } = await import(pathToFileURL(require.resolve('hyperdht/testnet.js')).href)
 const { createNode } = await import(pathToFileURL(resolve(APP, 'src/index.js')).href)
+const { SEARCH_TOPIC } = await import(pathToFileURL(resolve(APP, 'src/search.js')).href)
+if (Buffer.from(SEARCH_TOPIC).toString('hex') !== '4646a5cb08962943aef4a2e9d12a1ed5f150742b9aadf41389c8d4a894fefa6c') throw new Error('app has a different search topic')
 
 const mode = process.argv[2]
 const args = process.argv.slice(3)
