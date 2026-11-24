@@ -22,6 +22,7 @@ use url::Url;
 use crate::art::{SendOptions, send_bytes};
 use crate::http::{DiscoverBridge, HttpError};
 use crate::mirror::MirrorHost;
+use crate::node::Node as _;
 use crate::node::api::SearchOptions;
 use crate::node::core::CoreNode;
 use crate::providers::youtube::Picture;
@@ -689,7 +690,10 @@ impl DiscoverHost {
         let Some(node) = (self.get_node)() else {
             return (ids, titles);
         };
-        let entries = node.catalog().search(None, SearchOptions::default()).await;
+        let entries = node
+            .search(None, SearchOptions::default())
+            .await
+            .unwrap_or_default();
         for e in entries {
             if !e.id.is_empty() {
                 ids.insert(e.id.to_ascii_lowercase());
