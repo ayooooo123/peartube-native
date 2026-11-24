@@ -1,0 +1,20 @@
+id: no-prod-unwrap
+valid:
+  - |
+    fn parse(s: &str) -> Result<u32, ParseIntError> {
+        let n = s.parse()?;
+        Ok(n)
+    }
+  - |
+    fn fallback(opt: Option<u32>) -> u32 {
+        opt.unwrap_or(0)
+    }
+invalid:
+  - |
+    fn parse(s: &str) -> u32 {
+        s.parse().unwrap()
+    }
+  - |
+    fn fail() {
+        panic!("boom");
+    }

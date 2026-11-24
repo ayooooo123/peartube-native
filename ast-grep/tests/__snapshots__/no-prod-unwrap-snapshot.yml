@@ -1,0 +1,20 @@
+id: no-prod-unwrap
+snapshots:
+  ? |
+    fn fail() {
+        panic!("boom");
+    }
+  : labels:
+    - source: panic!("boom")
+      style: primary
+      start: 16
+      end: 30
+  ? |
+    fn parse(s: &str) -> u32 {
+        s.parse().unwrap()
+    }
+  : labels:
+    - source: s.parse().unwrap()
+      style: primary
+      start: 31
+      end: 49

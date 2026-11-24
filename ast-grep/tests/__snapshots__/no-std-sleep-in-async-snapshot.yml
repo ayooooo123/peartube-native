@@ -1,0 +1,34 @@
+id: no-std-sleep-in-async
+snapshots:
+  ? |
+    async fn stall() {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+  : labels:
+    - source: std::thread::sleep(Duration::from_millis(50))
+      style: primary
+      start: 23
+      end: 68
+    - source: |-
+        async fn stall() {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+      style: secondary
+      start: 0
+      end: 71
+  ? |
+    pub async fn stall_short() {
+        thread::sleep(Duration::from_secs(1));
+    }
+  : labels:
+    - source: thread::sleep(Duration::from_secs(1))
+      style: primary
+      start: 33
+      end: 70
+    - source: |-
+        pub async fn stall_short() {
+            thread::sleep(Duration::from_secs(1));
+        }
+      style: secondary
+      start: 0
+      end: 73

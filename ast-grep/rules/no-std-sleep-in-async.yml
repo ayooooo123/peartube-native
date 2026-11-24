@@ -1,0 +1,17 @@
+id: no-std-sleep-in-async
+language: rust
+severity: error
+message: std::thread::sleep blocks a tokio worker thread inside async code.
+note: |
+  Use tokio::time::sleep(duration).await inside async functions so other peers and timers keep running.
+  See docs/code-rules.md#no-std-sleep-in-async.
+files:
+  - src/**/*.rs
+rule:
+  any:
+    - pattern: std::thread::sleep($$$)
+    - pattern: thread::sleep($$$)
+  inside:
+    kind: function_item
+    regex: \basync\s+fn\b
+    stopBy: end

@@ -78,6 +78,14 @@ tokio = { version = "1", features = ["test-util"] }
 [workspace]
 members = ["ffi"]
 
+[workspace.lints.clippy]
+todo = "deny"
+dbg_macro = "deny"
+await_holding_lock = "deny"
+
+[lints]
+workspace = true
+
 [features]
 default = ["peeroxide-dht", "soulseek"]
 peeroxide-dht = []

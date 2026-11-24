@@ -1,0 +1,23 @@
+id: unsafe-outside-ffi
+snapshots:
+  ? |
+    fn raw_read(p: *const u8) -> u8 {
+        unsafe { *p }
+    }
+  : labels:
+    - source: unsafe { *p }
+      style: primary
+      start: 38
+      end: 51
+  ? |
+    unsafe fn raw_ptr(p: *const u8) -> u8 {
+        *p
+    }
+  : labels:
+    - source: |-
+        unsafe fn raw_ptr(p: *const u8) -> u8 {
+            *p
+        }
+      style: primary
+      start: 0
+      end: 48
