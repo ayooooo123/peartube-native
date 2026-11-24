@@ -70,6 +70,11 @@ jobs:
           path: hypercore-storage-rs
       - uses: actions/checkout@v4
         with:
+          repository: ${{ github.repository_owner }}/tinyrocks-rs
+          ref: ${{ steps.stack.outputs['tinyrocks-rs'] }}
+          path: tinyrocks-rs
+      - uses: actions/checkout@v4
+        with:
           repository: ${{ github.repository_owner }}/hypercore-rs
           ref: ${{ steps.stack.outputs['hypercore-rs'] }}
           path: hypercore-rs
@@ -126,7 +131,7 @@ jobs:
           sh ffi/build.sh android-arm64-dev "${{ github.workspace }}/dist"
       # What this library was built from: the release checks it against STACK.lock.
       - name: Stack commits
-        run: for r in compact-encoding-rs protomux-rs protomux-wakeup-rs hyperschema-rs hypercore-id-encoding-rs hypercore-storage-rs hypercore-rs corestore-rs hyperbee-rs hyperblobs-rs byte-stream-rs autobee-rs peeroxide mdns-sd; do printf '%s %s\n' "$r" "$(git -C ../$r rev-parse HEAD)"; done > "${{ github.workspace }}/dist/stack-android-arm64.txt"
+        run: for r in compact-encoding-rs protomux-rs protomux-wakeup-rs hyperschema-rs hypercore-id-encoding-rs hypercore-storage-rs tinyrocks-rs hypercore-rs corestore-rs hyperbee-rs hyperblobs-rs byte-stream-rs autobee-rs peeroxide mdns-sd; do printf '%s %s\n' "$r" "$(git -C ../$r rev-parse HEAD)"; done > "${{ github.workspace }}/dist/stack-android-arm64.txt"
       - uses: actions/upload-artifact@v4
         with:
           name: android-arm64
@@ -183,6 +188,11 @@ jobs:
           path: hypercore-storage-rs
       - uses: actions/checkout@v4
         with:
+          repository: ${{ github.repository_owner }}/tinyrocks-rs
+          ref: ${{ steps.stack.outputs['tinyrocks-rs'] }}
+          path: tinyrocks-rs
+      - uses: actions/checkout@v4
+        with:
           repository: ${{ github.repository_owner }}/hypercore-rs
           ref: ${{ steps.stack.outputs['hypercore-rs'] }}
           path: hypercore-rs
@@ -228,7 +238,7 @@ jobs:
         run: sh ffi/build.sh darwin-arm64 "${{ github.workspace }}/dist"
       # What this library was built from: the release checks it against STACK.lock.
       - name: Stack commits
-        run: for r in compact-encoding-rs protomux-rs protomux-wakeup-rs hyperschema-rs hypercore-id-encoding-rs hypercore-storage-rs hypercore-rs corestore-rs hyperbee-rs hyperblobs-rs byte-stream-rs autobee-rs peeroxide mdns-sd; do printf '%s %s\n' "$r" "$(git -C ../$r rev-parse HEAD)"; done > "${{ github.workspace }}/dist/stack-darwin-arm64.txt"
+        run: for r in compact-encoding-rs protomux-rs protomux-wakeup-rs hyperschema-rs hypercore-id-encoding-rs hypercore-storage-rs tinyrocks-rs hypercore-rs corestore-rs hyperbee-rs hyperblobs-rs byte-stream-rs autobee-rs peeroxide mdns-sd; do printf '%s %s\n' "$r" "$(git -C ../$r rev-parse HEAD)"; done > "${{ github.workspace }}/dist/stack-darwin-arm64.txt"
       - uses: actions/upload-artifact@v4
         with:
           name: darwin-arm64
