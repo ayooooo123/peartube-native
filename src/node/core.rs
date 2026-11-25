@@ -2139,7 +2139,17 @@ impl Node for CoreNode {
     }
 
     async fn focus_source(&self, key: &str) -> Result<bool, Self::Error> {
-        Ok(self.sources().focus(key).await)
+        let lower = key.trim().to_lowercase();
+        let primary = self.channel().primary_key().to_lowercase();
+        if !lower.is_empty() && lower == primary && self.channel().use_primary() {
+            self.net().refresh_overlay_topic(&format!("channel:{lower}"));
+            return Ok(true);
+        }
+        let ok = self.sources().focus(&lower).await;
+        if ok {
+            self.net().refresh_overlay_topic(&format!("channel:{lower}"));
+        }
+        Ok(ok)
     }
 
     async fn set_player_active(&self, active: bool) -> OkResult {

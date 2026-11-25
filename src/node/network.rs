@@ -207,6 +207,9 @@ enum TopicCommand {
         server: bool,
         client: bool,
     },
+    Refresh {
+        topic: [u8; 32],
+    },
     Leave {
         topic: [u8; 32],
     },
@@ -733,6 +736,10 @@ pub struct Network {
     /// A relay's job: announce the complete copies this node caches, not only what it published.
     announce_cache: bool,
     overlay_topics: Mutex<HashMap<String, [u8; 32]>>,
+    /// Rate limit per overlay topic for on-demand playback refreshes (`5_000` ms).
+    last_overlay_refresh: Mutex<HashMap<String, u64>>,
+    /// Rate limit per content lookup topic for repeated playback attempts (`5_000` ms).
+    last_lookup_refresh: Mutex<HashMap<[u8; 32], u64>>,
     /// LAN-only topics (`joinLanTopic`): never announced on the DHT, joined by mDNS peers.
     lan_topics: Mutex<HashMap<String, [u8; 32]>>,
     allowed: Mutex<Option<HashSet<String>>>,
@@ -862,6 +869,8 @@ impl Network {
             content_index: Mutex::new(None),
             announce_cache,
             overlay_topics: Mutex::new(HashMap::new()),
+            last_overlay_refresh: Mutex::new(HashMap::new()),
+            last_lookup_refresh: Mutex::new(HashMap::new()),
             lan_topics: Mutex::new(HashMap::new()),
             allowed: Mutex::new(allowed),
             lan: Mutex::new(None),
@@ -910,6 +919,17 @@ impl Network {
                         opts.server = server;
                         opts.client = client;
                         let _ = worker_swarm.join(topic, opts).await;
+                    }
+                    TopicCommand::Refresh { topic } => {
+                        if worker_closing.load(Ordering::Acquire) {
+                            continue;
+                        }
+                        // Spawn so a 1–3 s DHT refresh does not stall subsequent topic joins/leaves,
+                        // while still ordering after any prior Join sent through this channel.
+                        let swarm = worker_swarm.clone();
+                        tokio::spawn(async move {
+                            let _ = swarm.refresh(topic).await;
+                        });
                     }
                     TopicCommand::Leave { topic } => {
                         let _ = worker_swarm.leave(topic).await;
@@ -1222,6 +1242,38 @@ impl Network {
         });
     }
 
+    /// Trigger an immediate upstream Hyperswarm discovery refresh on a joined overlay topic
+    /// (rate-limited to once every 5 s per topic), matching `src/node/network.js`.
+    pub fn refresh_overlay_topic(&self, id: &str) -> bool {
+        if self.closing.load(Ordering::Acquire) || !self.can_announce() {
+            return false;
+        }
+        let key = { lock(&self.overlay_topics).get(id).copied() };
+        let Some(key) = key else {
+            return false;
+        };
+        let now = now_ms();
+        {
+            let mut last = lock(&self.last_overlay_refresh);
+            if now.saturating_sub(last.get(id).copied().unwrap_or(0)) < 5_000 {
+                return false;
+            }
+            last.insert(id.to_owned(), now);
+        }
+        let topic = hypercore::crypto::discovery_key(&key);
+        if let Some(lan) = lock(&self.lan).as_ref().map(|state| state.binding.clone()) {
+            lan.join(topic);
+        }
+        let _ = self.topic_commands.send(TopicCommand::Refresh { topic });
+        true
+    }
+
+    /// Refresh every joined overlay topic (rate-limited per topic).
+    pub fn refresh_all_overlay_topics(&self) -> usize {
+        let ids: Vec<String> = lock(&self.overlay_topics).keys().cloned().collect();
+        ids.iter().filter(|id| self.refresh_overlay_topic(id)).count()
+    }
+
     /// `joinLanTopic(id, topic)`: a topic only this LAN hears. The peers on it connect to each
     /// other here, and it is never announced on the DHT.
     pub fn join_lan_topic(&self, id: &str, topic: [u8; 32]) {
@@ -1257,6 +1309,7 @@ impl Network {
 
     pub async fn leave_overlay_topic(&self, id: &str) {
         let key = lock(&self.overlay_topics).remove(id);
+        lock(&self.last_overlay_refresh).remove(id);
         if !self.can_announce() {
             let private = { lock(&self.private).clone() };
             if let Some(private) = private {
@@ -1366,16 +1419,38 @@ impl Network {
             return;
         }
         let mut state = lock(&self.content);
-        if state.announced.iter().any(|held| held.key == key)
-            || Self::touch(&mut state.lookups, &key)
-        {
+        if state.announced.iter().any(|held| held.key == key) {
+            return;
+        }
+        if Self::touch(&mut state.lookups, &key) {
+            let topic = state
+                .lookups
+                .last()
+                .map(|held| held.topic)
+                .unwrap_or_else(|| hypercore::crypto::discovery_key(&key));
+            drop(state);
+            let now = now_ms();
+            let should_refresh = {
+                let mut last = lock(&self.last_lookup_refresh);
+                if now.saturating_sub(last.get(&key).copied().unwrap_or(0)) >= 5_000 {
+                    last.insert(key, now);
+                    true
+                } else {
+                    false
+                }
+            };
+            if should_refresh {
+                let _ = self.topic_commands.send(TopicCommand::Refresh { topic });
+            }
             return;
         }
         if state.lookups.len() >= MAX_LOOKUPS {
             let victim = state.lookups.remove(0);
+            lock(&self.last_lookup_refresh).remove(&victim.key);
             self.queue_topic_leave(victim.topic);
             self.leave_lan_topic(victim.topic);
         }
+        lock(&self.last_lookup_refresh).insert(key, now_ms());
         let held = self.join_topic(key, false, true);
         state.lookups.push(held);
     }
@@ -1423,6 +1498,7 @@ impl Network {
         }
         if let Some(position) = state.lookups.iter().position(|held| &held.key == key) {
             let held = state.lookups.remove(position);
+            lock(&self.last_lookup_refresh).remove(key);
             self.queue_topic_leave(held.topic);
             self.leave_lan_topic(held.topic);
         }
@@ -1439,6 +1515,7 @@ impl Network {
             return;
         };
         let held = state.lookups.remove(position);
+        lock(&self.last_lookup_refresh).remove(key);
         self.queue_topic_leave(held.topic);
         self.leave_lan_topic(held.topic);
     }
@@ -1865,6 +1942,15 @@ impl super::blobs::ContentSwarm for Arc<Network> {
     }
     fn inflight_range(&self) -> Option<(u32, u32)> {
         Network::inflight_range(self)
+    }
+    fn refresh_overlay(&self, channel: Option<&str>) {
+        if let Some(ch) = channel {
+            let ch = ch.trim().to_lowercase();
+            if !ch.is_empty() && Network::refresh_overlay_topic(self, &format!("channel:{ch}")) {
+                return;
+            }
+        }
+        let _ = Network::refresh_all_overlay_topics(self);
     }
 }
 

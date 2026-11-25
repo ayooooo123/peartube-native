@@ -1417,3 +1417,128 @@ async fn a_following_guard_leaves_when_its_parent_dies() {
         "the guard left right after its parent: {elapsed:?}"
     );
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn relay_persists_swarm_key_and_focus_source_discovers_late_publisher() {
+    use peartube_native::node::Node;
+    use peartube_native::node::api::{PutMeta, SearchOptions};
+
+    // Start a 3-node local DHT testnet so topic announces and lookups resolve cleanly.
+    let udx = libudx::UdxRuntime::new().expect("udx");
+    let mut bs_cfg = peeroxide_dht::hyperdht::HyperDhtConfig::default();
+    bs_cfg.dht.bootstrap = Vec::new();
+    bs_cfg.dht.host = "127.0.0.1".to_owned();
+    bs_cfg.dht.port = 0;
+    bs_cfg.dht.firewalled = false;
+    bs_cfg.dht.quick_firewall = false;
+    bs_cfg.dht.ephemeral = Some(false);
+    let (_bs_task, bs, _bs_rx) = peeroxide_dht::hyperdht::spawn(&udx, bs_cfg)
+        .await
+        .expect("bootstrap");
+    let bs_addr = format!("127.0.0.1:{}", bs.local_port().await.expect("bs port"));
+    let mut helpers = Vec::new();
+    for _ in 0..3 {
+        let mut cfg = peeroxide_dht::hyperdht::HyperDhtConfig::default();
+        cfg.dht.bootstrap = vec![bs_addr.clone()];
+        cfg.dht.host = "127.0.0.1".to_owned();
+        cfg.dht.port = 0;
+        cfg.dht.firewalled = false;
+        cfg.dht.quick_firewall = false;
+        cfg.dht.ephemeral = Some(false);
+        let (t, h, _rx) = peeroxide_dht::hyperdht::spawn(&udx, cfg)
+            .await
+            .expect("helper");
+        h.bootstrapped().await.expect("helper bootstrap");
+        helpers.push((t, h));
+    }
+
+    // 1. Verify Relay persists the same swarm peer key across restarts via swarm-key.json.
+    let relay_dir = tempfile::tempdir().unwrap();
+    let relay = Relay::listen(env_on(relay_dir.path(), &bs_addr))
+        .await
+        .expect("relay listens");
+    let ready = relay.start().await.expect("relay starts");
+    let channel_key = ready["tracker"].as_str().unwrap().to_owned();
+    let seed_first: Value = serde_json::from_str(
+        &std::fs::read_to_string(relay_dir.path().join("swarm-key.json"))
+            .expect("swarm-key.json written"),
+    )
+    .expect("swarm-key.json valid");
+    relay.shutdown().await;
+
+    // 2. Start a follower while the publisher is offline and let its initial discovery flush.
+    let follower_dir = tempfile::tempdir().unwrap();
+    let follower = create_node(json!({
+        "storage": follower_dir.path().display().to_string(),
+        "bootstrap": [bs_addr],
+        "sources": [{ "key": channel_key, "kind": "channel" }],
+    }))
+    .await
+    .expect("follower opens");
+    let _ = follower.net().flush(Duration::from_secs(5)).await;
+    assert_eq!(follower.status().await.peers, 0);
+
+    // 3. Restart the publisher using the same persisted swarm-key.json seed and publish a title.
+    let seed_hex = seed_first["seed"].as_str().unwrap().to_owned();
+    let publisher = create_node(json!({
+        "storage": relay_dir.path().display().to_string(),
+        "bootstrap": [bs_addr],
+        "tracker": channel_key,
+        "keyPair": seed_hex,
+    }))
+    .await
+    .expect("publisher reopens");
+    let expected_peer_key = publisher.peer_key();
+    let payload = vec![0x5Au8; 64 * 1024 + 13];
+    publisher
+        .publish(
+            PutMeta {
+                id: "imdb:tt0000402".to_owned(),
+                title: "Late Rust Publisher".to_owned(),
+                private_entry: None,
+                epoch: None,
+                store: None,
+                expected_size: None,
+                extra: serde_json::Map::new(),
+            },
+            peartube_native::node::core::NodeSource::bytes(payload),
+        )
+        .await
+        .expect("publish");
+    let _ = publisher.net().flush(Duration::from_secs(5)).await;
+
+    // 4. focus_source on the already-awake follower channel must refresh the DHT topic immediately.
+    assert!(
+        follower
+            .focus_source(&channel_key)
+            .await
+            .expect("focus_source")
+    );
+
+    let deadline = std::time::Instant::now() + Duration::from_secs(20);
+    let mut found = false;
+    while std::time::Instant::now() < deadline {
+        if let Ok(hits) = follower
+            .search(Some("imdb:tt0000402"), SearchOptions::default())
+            .await
+            && !hits.is_empty()
+        {
+            found = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    assert!(found, "follower synced catalog after focus_source refresh");
+    assert_eq!(
+        publisher.peer_key(),
+        expected_peer_key,
+        "restarted relay kept its swarm key"
+    );
+
+    let _ = follower.close().await;
+    let _ = publisher.close().await;
+    for (_, h) in helpers {
+        let _ = h.destroy().await;
+    }
+    let _ = bs.destroy().await;
+}
