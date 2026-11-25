@@ -504,6 +504,7 @@ impl Relay {
         };
         let mut options = json!({
             "storage": self.0.storage.display().to_string(),
+            "keyPair": relay_key_pair_seed(&self.0.storage)?,
             "tracker": non_empty(text(&cfg("channel"))),
             "sources": self.saved_sources(),
             "allowedPeers": list("allowedPeers"),
@@ -1915,6 +1916,29 @@ fn write_private(path: &Path, text: &str) -> std::io::Result<()> {
     std::fs::rename(tmp, path)
 }
 
+/// Persistent swarm key seed for a relay (`<storage>/swarm-key.json`, mode 0600, matching
+/// `relayKeyPair(storage)` in `src/settings.js`). Keeping one peer identity across restarts and
+/// in-process reopens lets followers reconnect to the same key immediately.
+fn relay_key_pair_seed(storage: &Path) -> Result<String, String> {
+    let path = storage.join("swarm-key.json");
+    if let Ok(text) = std::fs::read_to_string(&path)
+        && let Ok(parsed) = serde_json::from_str::<Value>(&text)
+        && let Some(seed) = parsed.get("seed").and_then(Value::as_str)
+    {
+        let lower = seed.to_lowercase();
+        if crate::protocol::is_hex64(&lower) {
+            return Ok(lower);
+        }
+    }
+    let mut bytes = [0u8; 32];
+    rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut bytes);
+    let seed = crate::protocol::hex_encode(&bytes);
+    let text = serde_json::to_string_pretty(&json!({ "seed": seed }))
+        .map_err(|e| format!("swarm-key.json: {e}"))?;
+    write_private(&path, &text).map_err(|e| format!("swarm-key.json: {e}"))?;
+    Ok(seed)
+}
+
 /// One JSON log line, as the JS relay prints (`{ msg, ... }`).
 pub fn log(msg: &str, fields: Value) {
     let mut line = json!({ "msg": msg });
@@ -1993,5 +2017,29 @@ mod tests {
         tokio::time::timeout(std::time::Duration::from_secs(5), shutdown.as_mut())
             .await
             .expect("the shutdown completes");
+    }
+
+    #[test]
+    fn relay_key_pair_seed_persists_with_0600_and_recovers_from_corrupt_file() {
+        let storage = tempfile::tempdir().expect("temp storage");
+        let first = relay_key_pair_seed(storage.path()).expect("first seed");
+        assert!(crate::protocol::is_hex64(&first));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(storage.path().join("swarm-key.json"))
+                .expect("swarm-key.json exists")
+                .permissions()
+                .mode()
+                & 0o777;
+            assert_eq!(mode, 0o600);
+        }
+        let second = relay_key_pair_seed(storage.path()).expect("second seed");
+        assert_eq!(first, second, "seed must persist across restarts");
+
+        std::fs::write(storage.path().join("swarm-key.json"), "{broken").expect("corrupt write");
+        let recovered = relay_key_pair_seed(storage.path()).expect("recovered seed");
+        assert!(crate::protocol::is_hex64(&recovered));
+        assert_ne!(first, recovered);
     }
 }

@@ -285,6 +285,8 @@ pub trait ContentSwarm: Send + Sync {
     fn down_bps(&self) -> f64;
     fn up_bps(&self) -> f64;
     fn inflight_range(&self) -> Option<(u32, u32)>;
+    /// Trigger an immediate channel-topic refresh when a non-owned blob has 0 peers at playback.
+    fn refresh_overlay(&self, _channel: Option<&str>) {}
 }
 
 /// The live HTTP range server's view of streams, for the cache ceiling.
@@ -2991,6 +2993,9 @@ where
         let holds_all = self.holds_all(&key);
         self.inner.swarm.want(key, owned, holds_all);
         let core = self.blob_core(&key).await?;
+        if !owned && !holds_all && core.core().peer_count() == 0 {
+            self.inner.swarm.refresh_overlay(None);
+        }
         let tag = format!("{}:{}", entry.blobs, entry.blob.block_offset);
         {
             let mut warm = lock(&self.inner.warm);
@@ -3152,7 +3157,10 @@ where
         if !owned {
             // `blob_core` keeps the counter, ledger and ceiling side effects; the response gets
             // its own session so the request can close it independently.
-            self.blob_core(&key).await.ok()?;
+            let core = self.blob_core(&key).await.ok()?;
+            if !holds_all && core.core().peer_count() == 0 {
+                self.inner.swarm.refresh_overlay(None);
+            }
             let serve_key = if encryption_key.is_none() {
                 self.pick_copy(key).await.unwrap_or(key)
             } else {
